@@ -92,6 +92,11 @@ async function freshDb(): Promise<PGlite> {
     ${BASELINE.match(/CREATE UNIQUE INDEX idx_paper_positions_pending_source[^\n]*/)![0]}
   `);
   for (const sql of LATER) await db.exec(sql);
+  // Step 15 (20261008000000): the columns the scanners now send. The full
+  // migration needs tables this harness does not build; the test below checks
+  // these three really are added by it.
+  await db.exec(`alter table public.pending_orders add column if not exists signal_id uuid, add column if not exists fill_sizing jsonb;
+                 alter table public.paper_positions add column if not exists signal_id uuid;`);
   return db;
 }
 
@@ -384,6 +389,10 @@ Deno.test("only service_role may execute the function", async () => {
 // ─── the scanners' real key sets against the real schema ────────────────────
 
 Deno.test("every key both scanners send exists as a writable column", async () => {
+  const pr1 = read("../../migrations/20261008000000_step15_attribution_schema.sql");
+  for (const c of ["ALTER TABLE public.pending_orders      ADD COLUMN IF NOT EXISTS signal_id uuid", "ALTER TABLE public.pending_orders      ADD COLUMN IF NOT EXISTS fill_sizing jsonb", "ALTER TABLE public.paper_positions     ADD COLUMN IF NOT EXISTS signal_id uuid"]) {
+    assert(pr1.includes(c), `20261008000000 must add: ${c}`);
+  }
   const db = await freshDb();
   const writable = async (t: string) => new Set((await db.query<{ c: string }>(
     `select column_name as c from information_schema.columns

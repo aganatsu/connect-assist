@@ -709,6 +709,8 @@ Deno.serve(async (req) => {
           symbol: pending.symbol,
           direction: pending.direction,
           size: pending.size.toString(),
+          // Step 15: lifecycle identity (this poller is switched off; kept consistent).
+          signal_id: (pending as any).signal_id ?? null,
           ...zcTelemetry,
           // Inherited from the pending order — the decision was made at
           // placement. See docs/FROZEN_DECISION_RECORD.md.

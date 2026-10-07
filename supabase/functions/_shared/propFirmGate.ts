@@ -30,6 +30,7 @@ import {
 } from "./accountRiskLimits.ts";
 import type { PropFirmComplianceResult, PropFirmEventType, EventSeverity } from "./propFirmRisk.ts";
 import { settlePaperPosition, describeSettlementMiss } from "./paperSettlement.ts";
+import { configHash } from "./route2Forward.ts";
 
 export interface PropFirmGateResult {
   enabled: boolean;
@@ -43,6 +44,8 @@ export interface PropFirmGateResult {
   configId: string | null;
   decision?: RiskDecision;
   tradingDay?: string;
+  /** Step 15: identifies the profile's limits (hash of the threshold columns). */
+  profileVersion?: string | null;
 }
 
 export interface RiskAccount {
@@ -51,7 +54,7 @@ export interface RiskAccount {
   balance: number | string;
 }
 
-const result = (configId: string | null, d: RiskDecision, tradingDay?: string, lockedReason?: string | null): PropFirmGateResult => ({
+const result = (configId: string | null, d: RiskDecision, tradingDay?: string, lockedReason?: string | null, profileVersion?: string | null): PropFirmGateResult => ({
   enabled: true,
   allowed: d.allowEntries && !lockedReason,
   reason: lockedReason && d.severity === "ok" ? `locked for the trading day: ${lockedReason}` : d.reason,
@@ -61,7 +64,15 @@ const result = (configId: string | null, d: RiskDecision, tradingDay?: string, l
   configId,
   decision: d,
   tradingDay,
+  profileVersion: profileVersion ?? null,
 });
+
+/** Step 15: stable id of the limits a decision was judged against. */
+export function riskProfileVersion(p: Record<string, unknown>): string {
+  const keys = ["id", "initial_balance", "max_daily_loss_pct", "max_overall_loss_pct", "daily_entry_stop_pct", "daily_flatten_pct",
+    "overall_entry_stop_equity", "overall_flatten_equity", "day_boundary_tz", "equity_source", "close_on_breach"];
+  return `rp1:${configHash(Object.fromEntries(keys.map((k) => [k, p[k] ?? null])))}`;
+}
 
 /**
  * Returns { enabled: false } when no profile is active. Otherwise the decision
@@ -132,7 +143,7 @@ export async function runPropFirmGate(
       console.warn(`[prop-firm-gate] ${scanCycleId} | ${decision.severity} | ${decision.reason}`);
     }
     console.log(`[prop-firm-gate] ${scanCycleId} | day=${day.tradingDay} start=${dayStart.ok ? dayStart.balance.toFixed(2) : "?"} equity=${eq.ok ? eq.equity.toFixed(2) : "?"} | allowed=${decision.allowEntries && !lockedReason} | ${decision.severity}`);
-    return result(configId, decision, day.tradingDay, lockedReason);
+    return result(configId, decision, day.tradingDay, lockedReason, riskProfileVersion(profile));
   } catch (e: any) {
     return result(configId, dataError(`gate error: ${e?.message ?? e}`));
   }

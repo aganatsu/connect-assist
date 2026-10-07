@@ -30,6 +30,7 @@ import {
   settlePaperPartial,
   settlePaperPosition,
 } from "../../functions/_shared/paperSettlement.ts";
+import { buildAttribution } from "../../functions/_shared/attribution.ts";
 
 const read = (rel: string) => Deno.readTextFileSync(new URL(rel, import.meta.url));
 const BASELINE = read("../../migrations/20260914000000_baseline_schema.sql");
@@ -44,6 +45,15 @@ const MIGRATION_ROLE_FIX = read("../../migrations/20261006060000_fix_jwt_role_de
 const MIGRATION_SNAPSHOT_FN = read("../../migrations/20261006070000_reset_snapshot_function.sql");
 const MIGRATION_DRY_RUN = read("../../migrations/20261007000000_step8_dry_run_orders.sql");
 const MIGRATION_STEP15 = read("../../migrations/20261008000000_step15_attribution_schema.sql");
+const MIGRATION_STEP15_PR2 = read("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql");
+// Route 2 columns the PR 2 lifecycle trigger reads (zone_touch_time,
+// confirmation_*, terminal_reason, …) and route2_claim_and_fill. Applied in
+// date order, as in production.
+const ROUTE2_MIGRATIONS = [
+  "../../migrations/20260929120000_route2_forward_validation.sql",
+  "../../migrations/20260930020000_route2_lifecycle_v2.sql",
+  "../../migrations/20260930140000_route2_atomic_fill.sql",
+].map(read);
 const SCAN_DECISION = read("../../migrations/20260925210000_smc_scan_decision_observability.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
@@ -128,6 +138,10 @@ async function baseDb(opts: { preFix?: boolean } = {}): Promise<PGlite> {
   `);
   if (!opts.preFix) await db.exec(FREEZE_FIX);
   await db.exec(TELEMETRY);
+  for (const m of ROUTE2_MIGRATIONS) await db.exec(m);
+  // Production's one-live-order-per-symbol+direction rule (verbatim), which the
+  // duplicate path of route2_place_order depends on.
+  await db.exec(line(/CREATE UNIQUE INDEX idx_pending_orders_unique_active[^\n]*/));
   return db;
 }
 
@@ -145,9 +159,11 @@ async function applyMigrations(db: PGlite) {
   // the attribution-aware settlement functions — the legacy (signal_id NULL)
   // path is exactly what those tests exercise.
   await db.exec(`create table if not exists auth.users (id uuid primary key)`); // smc_scan_decision FK target
+  await db.query(`insert into auth.users (id) values ($1), ($2) on conflict do nothing`, [USER, OTHER_USER]);
   const sd = SCAN_DECISION.search(/create table if not exists public\.smc_scan_decision \(/i);
   await db.exec(SCAN_DECISION.slice(sd, SCAN_DECISION.indexOf("\n);", sd) + 3));
   await db.exec(MIGRATION_STEP15);
+  await db.exec(MIGRATION_STEP15_PR2);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -834,8 +850,10 @@ Deno.test("step 8 safety net: a dry-run order can never become a position or a r
   await lock(db, false);
   await assertRejects(() => openPosition(db, { source_pending_order_id: dryId }), Error, "dry-run order can never become a position");
   await assertRejects(() => db.query(`update public.pending_orders set dry_run = false where id = $1`, [dryId]), Error, "immutable");
-  // Unlocked, ordinary orders and positions work again.
-  await insertPending(db, pendingRow());
+  // Unlocked, ordinary orders and positions work again. (Another symbol: the
+  // dry-run order above is still live, and production allows one live order
+  // per symbol + direction — idx_pending_orders_unique_active.)
+  await insertPending(db, pendingRow({ symbol: "GBP/USD" }));
   await openPosition(db, { position_id: "real0001" });
   assertEquals(await count(db, "public.paper_positions"), 1);
   await db.close();
@@ -937,7 +955,8 @@ Deno.test("step 15: an attributed settlement writes history + ledger + attributi
   assert(Math.abs(Number(a.realized_r_gross) - 1.1) < 1e-9, `R gross ${a.realized_r_gross}`);
   assert(Math.abs(Number(a.realized_r_net) - (0.275 - 0.01) / 0.25) < 1e-9, `R net ${a.realized_r_net}`);
   assert(a.closed_at);
-  assertEquals((await events(db, sig)).map((e: { event_type: string }) => e.event_type), ["closed"]);
+  // since PR 2 the position insert itself records position_opened
+  assertEquals((await events(db, sig)).map((e: { event_type: string }) => e.event_type), ["position_opened", "closed"]);
   assertEquals(await count(db, `public.paper_positions`), 0);
   await db.close();
 });
@@ -956,7 +975,9 @@ Deno.test("step 15: when the settlement rolls back, the attribution close rolls 
   const a = await attr(db, sig);
   assertEquals([a.closed_at, a.outcome_kind, a.history_id, a.ledger_id], [null, null, null, null]);
   assertEquals(await count(db, `public.paper_trade_history`), 0);
-  assertEquals(await count(db, `public.trade_attribution_events`), 0);
+  // position_opened was written when the position opened (before this
+  // settlement) and correctly survives; nothing from the failed close does.
+  assertEquals(await count(db, `public.trade_attribution_events where event_type <> 'position_opened'`), 0);
   assertEquals(await count(db, `public.paper_positions`), 1, "position kept");
   assertEquals(await balance(db), 100000);
   await db.close();
@@ -969,14 +990,14 @@ Deno.test("step 15: attribution can never block a settlement", async () => {
   const p1 = await openPosition(db, { signal_id: s1 });
   assertEquals((await settle(db, p1, usdJpyClose())).outcome, "settled");
   assertEquals((await attr(db, s1)).closed_at, null);
-  assert((await events(db, s1))[0].detail.note.includes("not written"));
+  assert((await events(db, s1)).find((e) => e.event_type === "closed")!.detail.note.includes("not written"));
   // (b) attribution update itself errors → rolled back to its savepoint, recorded, money still settles
   const s2 = await insertAttribution(db, { symbol: "EUR/USD" });
   const p2 = await openPosition(db, { signal_id: s2, position_id: "pos2", order_id: "ord2", symbol: "EUR/USD" });
   await db.exec(`create function public.ta_boom() returns trigger language plpgsql as $$ begin raise exception 'attribution boom'; end $$;
                  create trigger ta_boom before update on public.trade_attribution for each row execute function public.ta_boom();`);
   assertEquals((await settle(db, p2, usdJpyClose({ pnl: 10 }))).outcome, "settled");
-  const ev = await events(db, s2);
+  const ev = (await events(db, s2)).filter((e) => e.event_type === "closed");
   assertEquals(ev.length, 1);
   assert(ev[0].detail.attribution_error.includes("attribution boom"));
   assertEquals(await count(db, `public.paper_account_ledger where kind = 'close' and signal_id = $1`, [s2]), 1);
@@ -995,7 +1016,7 @@ Deno.test("step 15: duplicate settlement remains impossible for an attributed tr
   assertEquals(await count(db, `public.paper_trade_history where close_reason <> 'partial_tp'`), 1);
   assertEquals(await balance(db), 100000 + 871.19);
   assertEquals(JSON.stringify(await attr(db, sig)), JSON.stringify(before), "attribution untouched by the repeat");
-  assertEquals((await events(db, sig)).length, 1);
+  assertEquals((await events(db, sig)).map((e: { event_type: string }) => e.event_type), ["position_opened", "closed"]);
   await db.close();
 });
 
@@ -1030,7 +1051,7 @@ Deno.test("step 15: an attributed partial TP carries the signal id to its histor
   assertEquals(r.outcome, "settled");
   assertEquals(await count(db, `public.paper_trade_history where close_reason = 'partial_tp' and signal_id = $1`, [sig]), 1);
   assertEquals(await count(db, `public.paper_account_ledger where kind = 'partial' and signal_id = $1`, [sig]), 1);
-  assertEquals((await events(db, sig)).map((e: { event_type: string }) => e.event_type), ["partial_close"]);
+  assertEquals((await events(db, sig)).map((e: { event_type: string }) => e.event_type), ["position_opened", "partial_close"]);
   assertEquals((await attr(db, sig)).closed_at, null, "a partial is not the close");
   await db.close();
 });
@@ -1077,5 +1098,257 @@ Deno.test("step 15: the pre-check refuses to overwrite a settlement function tha
   const def = (await db.query<{ d: string }>(`select pg_get_functiondef('public.settle_paper_partial'::regproc) d`)).rows[0].d;
   await db.exec(def.replace(body, body.replace("BEGIN", "BEGIN\n  -- hand edit")));
   await assertRejects(() => db.exec(MIGRATION_STEP15), Error, "settle_paper_partial differs from the expected source");
+  await db.close();
+});
+
+// ─── Step 15 PR 2: order / position lifecycle + atomic placement ────────────
+
+const CFG32 = "3d5b8fb0d756b3596ed46d133e873a88";
+let orderSeq = 0;
+/** A realistic attribution payload, built by the production builder. */
+function attrPayload(over: Partial<Parameters<typeof buildAttribution>[0]> = {}) {
+  return buildAttribution({
+    signalId: crypto.randomUUID(), decisionId: crypto.randomUUID(), scanCycleId: crypto.randomUUID(), userId: USER, botId: "smc",
+    symbol: "CHF/JPY", direction: "long", dryRun: false, decisionAt: "2026-10-08T10:00:00Z", configVersion: CFG32,
+    strategyVersion: "smc-zone-impulse-control-v1",
+    switches: { sizingMode: "fill_time", riskPercent: 0.5, maxLotsPerTrade: 20, stopAnchor: "limit", unifiedModifiersEnabled: false },
+    legacyRiskPercent: 0.5, management: {}, caps: { mode: "unified", maxOpenPositions: 3, maxPerSymbol: 1 }, impulseSlCapMultiplier: 1.5,
+    riskProfileVersion: "rp1:abc", entrySource: "refinedEntry", izGateMode: "hard", gamePlanEnabled: true,
+    gamePlanContext: { bias: "bearish", biasConfidence: 36, isFocusPair: true },
+    directionVerdict: { verdict: "long", confidence: 75, agreement: 0.5 },
+    impulse: { hasZone: true, selectedTF: "1H", impulse: { high: 190.49909, low: 189.9432, direction: "bullish" },
+      bestZone: { type: "ob", low: 189.99417, high: 190.14972, fibLevel: 0.786, refinedEntry: 190.142885, totalScore: 3.5 } },
+    unifiedDetected: null, gateScore: 61.6, decisionScoreGate: { mode: "log", score: 63.35, threshold: 20, wouldBlock: false },
+    factors: [{ name: "Order Block", present: true, weight: 1, tier: 1 }], tieredScoring: { tier1Count: 2, tier2Count: 5 },
+    gates: [{ gateId: "reaction", passed: true, loggedOnly: true, wouldBlock: true, reason: "[logged only — would block] Reaction" },
+            { passed: true, reason: "0/3 positions" }, { passed: true, reason: "0/1 for CHF/JPY" }],
+    ictFvgGate: { mode: "off", wouldBlock: false }, orderRR: { rawRR: 1.1, effectiveRR: 1.0, costInPrice: 0.025, wouldBlock: false, min: 1, mode: "order_geometry" },
+    loggedOnlyWouldBlock: [{ gateId: "reaction", reason: "Reaction" }],
+    riskGate: { enabled: true, allowed: true, reason: "ok", severity: "ok" },
+    zoneId: "CHF/JPY|1H|long|189.9942|190.1497", entryDepth: 0.55,
+    limitPrice: 190.142885, stopPrice: 189.892885, targetPrice: 190.417885, pipSize: 0.01,
+    route2Stop: { anchor: "limit", floorPips: 25, capPips: 66.71, limit: { source: "floor", riskPips: 25 }, market: { sl: 189.93208 } },
+    plannedSizing: { lots: 3.16, uncappedLots: 3.16, riskPercentTarget: 0.5, riskUsdTarget: 500 }, balance: 100000,
+    expiresAt: "2026-10-08T18:00:00Z", ...over,
+  });
+}
+function orderRow(over: Record<string, unknown> = {}) {
+  orderSeq++;
+  return {
+    user_id: USER, bot_id: "smc", order_id: `o${orderSeq}`, symbol: "CHF/JPY", direction: "long", order_type: "limit",
+    entry_price: 190.142885, current_price: 190.2, stop_loss: 189.892885, take_profit: 190.417885, size: 3.16,
+    status: "pending", placed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 8 * 3600e3).toISOString(),
+    expiry_minutes: 480, dry_run: false, signal_score: 61.6, ...over,
+  };
+}
+async function place(db: Db, attribution: Record<string, unknown> | null, order: Record<string, unknown>, supersede: unknown[] = []) {
+  return (await db.query<{ r: any }>(`select public.route2_place_order($1::jsonb, $2::jsonb, $3::jsonb) r`,
+    [JSON.stringify(attribution), JSON.stringify(order), JSON.stringify(supersede)])).rows[0].r;
+}
+const orderBy = async (db: Db, orderId: string) =>
+  (await db.query<any>(`select * from public.pending_orders where order_id = $1`, [orderId])).rows[0];
+const evTypes = async (db: Db, sig: string) => (await events(db, sig)).map((e: { event_type: string }) => e.event_type);
+/** Every A–D column of an attribution row (the immutable part). */
+async function planOf(db: Db, sig: string) {
+  const a = await attr(db, sig);
+  const keep = ["signal_id", "symbol", "direction", "dry_run", "config_version", "primary_engine", "contributors", "game_plan", "impulse",
+    "unified", "score", "gates", "risk_gate", "legacy_would_admit", "limit_price", "stop_price", "stop_source", "stop_distance_pips",
+    "target_price", "raw_rr", "effective_rr", "intended_risk_pct", "intended_risk_usd", "planned_lots", "supersedes_signal_ids", "created_at"];
+  return JSON.stringify(Object.fromEntries(keep.map((k) => [k, a[k]])));
+}
+
+Deno.test("step 15 PR 2: the lifecycle migration is idempotent", async () => {
+  const db = await freshDb();
+  await db.exec(MIGRATION_STEP15_PR2);
+  const t = await db.query<{ n: string }>(`select string_agg(tgname, ',' order by tgname) n from pg_trigger where tgname in ('pending_orders_attribution','paper_positions_attribution')`);
+  assertEquals(t.rows[0].n, "paper_positions_attribution,pending_orders_attribution");
+  assertEquals((await db.query<{ n: number }>(`select count(*)::int n from pg_proc where proname = 'route2_place_order'`)).rows[0].n, 1);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: one signal_id survives decision → order → touch → reset → confirm → real fill → position → close", async () => {
+  const db = await freshDb();
+  const a = attrPayload();
+  const sig = a.signal_id as string;
+  const r = await place(db, a, orderRow({ order_id: "realA" }));
+  assertEquals([r.outcome, r.attribution, r.signal_id], ["placed", "written", sig]);
+  // the decision row written at the end of the cycle names the same signal
+  await db.query(`insert into public.smc_scan_decision (id, scan_cycle_id, user_id, bot_id, symbol, signal_id) values ($1, $2, $3, 'smc', 'CHF/JPY', $4)`,
+    [a.decision_id, a.scan_cycle_id, USER, sig]);
+  // touch → reset → touch again → confirm
+  await db.query(`update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now() - interval '3 minutes', confirmation_arm_count = 1 where order_id = 'realA'`);
+  await db.query(`update public.pending_orders set status = 'pending', reset_reason = 'zone_exit' where order_id = 'realA'`);
+  await db.query(`update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), confirmation_arm_count = 2 where order_id = 'realA'`);
+  const o = await orderBy(db, "realA");
+  // real fill: the claim RPC updates the order and inserts the position in ONE transaction
+  const claim = (await db.query<{ r: any }>(`select public.route2_claim_and_fill($1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb) r`, [o.id, USER, 2,
+    JSON.stringify({ terminal_reason: "FILLED", confirmation_accepted: true, confirmation_accepted_at: new Date().toISOString(), confirmation_tier: 3,
+      confirmation_type: "bullish_reversal_pattern", confirmation_timeframe: "5m", fill_price: 190.1643, filled_at: new Date().toISOString(),
+      resolved_at: new Date().toISOString(),
+      fill_sizing: { lots: 2.91, uncappedLots: 2.9177, riskUsdActual: 498.67, riskPercentActual: 0.4987, capReason: null, stopDistancePips: 27.14, insideFloor: false } }),
+    JSON.stringify({ user_id: USER, bot_id: "smc", position_id: "posRealA", order_id: "realA", symbol: "CHF/JPY", direction: "long", size: "2.91",
+      entry_price: "190.1643", current_price: "190.1643", stop_loss: "189.892885", take_profit: "190.417885", open_time: new Date().toISOString(),
+      signal_score: "61.6", position_status: "open", signal_id: sig })])).rows[0].r;
+  assertEquals(claim.outcome, "filled");
+  const pos = (await db.query<any>(`select id, signal_id from public.paper_positions where position_id = 'posRealA'`)).rows[0];
+  let at = await attr(db, sig);
+  assertEquals([pos.signal_id, at.order_id, at.terminal_status, at.fill_kind, Number(at.fill_price), Number(at.fill_lots), at.position_row_id, at.fill_inside_floor],
+               [sig, "realA", "filled", "real", 190.1643, 2.91, pos.id, false]);
+  assert(at.touched_at && at.confirmed_at);
+  // close → history + ledger carry the same signal
+  assertEquals((await settle(db, pos.id, { exit_price: 189.892885, pnl: -498.67, close_reason: "sl_hit" }, "paper_trading_auto")).outcome, "settled");
+  at = await attr(db, sig);
+  const h = (await db.query<any>(`select signal_id from public.paper_trade_history where position_id = 'posRealA'`)).rows[0];
+  const l = (await db.query<any>(`select signal_id from public.paper_account_ledger where position_id = 'posRealA' and kind = 'close'`)).rows[0];
+  const d = (await db.query<any>(`select signal_id from public.smc_scan_decision where id = $1`, [a.decision_id])).rows[0];
+  assertEquals([d.signal_id, h.signal_id, l.signal_id, at.exit_reason], [sig, sig, sig, "stop"]);
+  assert(Math.abs(Number(at.realized_r_gross) + 1) < 1e-9);
+  assertEquals(await evTypes(db, sig), ["order_inserted", "touched", "reset", "touched", "confirmed", "filled", "position_opened", "closed"]);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: dry-run fill is hypothetical and can never become a position", async () => {
+  const db = await freshDb();
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  const a = attrPayload({ dryRun: true });
+  const sig = a.signal_id as string;
+  assertEquals((await place(db, a, orderRow({ order_id: "dryA", dry_run: true }))).outcome, "placed");
+  await db.query(`update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now() where order_id = 'dryA'`);
+  await db.query(`update public.pending_orders set status = 'filled', filled_at = now(), fill_price = 190.1643, terminal_reason = 'FILLED',
+     confirmation_accepted_at = now(), fill_sizing = '{"lots":2.91,"riskUsdActual":498.67,"riskPercentActual":0.4987,"stopDistancePips":27.14,"insideFloor":false}'
+     where order_id = 'dryA'`);
+  const at = await attr(db, sig);
+  assertEquals([at.terminal_status, at.fill_kind, Number(at.fill_lots), at.position_row_id], ["hypothetical_fill", "hypothetical", 2.91, null]);
+  // the database refuses any position for it — entries locked AND dry-run
+  const o = await orderBy(db, "dryA");
+  await assertRejects(() => openPosition(db, { position_id: "x", order_id: "dryA", source_pending_order_id: o.id, signal_id: sig }));
+  await db.query(`update public.paper_accounts set entries_locked = false where user_id = $1`, [USER]);
+  await assertRejects(() => openPosition(db, { position_id: "x", order_id: "dryA", source_pending_order_id: o.id, signal_id: sig }), Error, "dry-run");
+  // a real fill kind can never be written onto a dry-run attribution
+  await assertRejects(() => db.query(`update public.trade_attribution set outcome_kind = 'real' where signal_id = $1`, [sig]));
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: a same-price refresh is an event; the attribution plan is untouched", async () => {
+  const db = await freshDb();
+  const a = attrPayload();
+  const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: "refA" }));
+  const before = await planOf(db, sig);
+  await db.query(`update public.pending_orders set stop_loss = 189.88, take_profit = 190.43, size = 3.10, signal_score = 64 where order_id = 'refA'`);
+  assertEquals(await planOf(db, sig), before);
+  const ev = (await events(db, sig)).find((e) => e.event_type === "refreshed_in_place")!;
+  assertEquals([Number(ev.detail.old.stop), Number(ev.detail.new.stop), Number(ev.detail.old.size), Number(ev.detail.new.size)], [189.892885, 189.88, 3.16, 3.1]);
+  // non-geometry updates (polls) add no events
+  await db.query(`update public.pending_orders set last_touch_checked_at = now() where order_id = 'refA'`);
+  assertEquals((await evTypes(db, sig)).filter((t: string) => t === "refreshed_in_place").length, 1);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: supersede links both directions in one transaction", async () => {
+  const db = await freshDb();
+  const a1 = attrPayload(); const s1 = a1.signal_id as string;
+  await place(db, a1, orderRow({ order_id: "supOld" }));
+  const a2 = attrPayload({ limitPrice: 190.2 }); const s2 = a2.signal_id as string;
+  const r = await place(db, a2, orderRow({ order_id: "supNew", entry_price: 190.2 }), [{ order_id: "supOld", cancel_reason: "Superseded by new setup (test)" }]);
+  assertEquals([r.outcome, r.superseded], ["placed", ["supOld"]]);
+  const old = await attr(db, s1); const neu = await attr(db, s2);
+  assertEquals([old.terminal_status, old.superseded_by_signal_id, old.terminal_reason], ["superseded", s2, "CANCELLED_SUPERSEDED"]);
+  assertEquals(neu.supersedes_signal_ids, [s1]);
+  const oo = await orderBy(db, "supOld");
+  assertEquals([oo.status, oo.terminal_reason, oo.cancel_reason, !!oo.resolved_at], ["cancelled", "CANCELLED_SUPERSEDED", "Superseded by new setup (test)", true]);
+  assertEquals((await evTypes(db, s1)).at(-1), "superseded");
+  // a legacy order (no signal_id) is superseded exactly as before; the new row simply links to nothing
+  await db.query(`update public.pending_orders set status = 'cancelled' where order_id = 'supNew'`);
+  await db.query(`insert into public.pending_orders (user_id, bot_id, order_id, symbol, direction, order_type, entry_price, current_price, stop_loss, take_profit, size, status, placed_at, expires_at)
+                  values ($1, 'smc', 'legacyOld', 'CHF/JPY', 'long', 'limit', 190, 190.1, 189.7, 190.3, 1, 'pending', now(), now() + interval '8 hours')`, [USER]);
+  const a3 = attrPayload(); const s3 = a3.signal_id as string;
+  assertEquals((await place(db, a3, orderRow({ order_id: "afterLegacy" }), [{ order_id: "legacyOld", cancel_reason: "Superseded" }])).outcome, "placed");
+  assertEquals((await orderBy(db, "legacyOld")).status, "cancelled");
+  assertEquals((await attr(db, s3)).supersedes_signal_ids, []);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: a re-detection of a live (armed) setup keeps the tracked identity; nothing new is created", async () => {
+  const db = await freshDb();
+  const a1 = attrPayload(); const s1 = a1.signal_id as string;
+  await place(db, a1, orderRow({ order_id: "liveA" }));
+  await db.query(`update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now() where order_id = 'liveA'`);
+  const before = await attr(db, s1);
+  const a2 = attrPayload();
+  const r = await place(db, a2, orderRow({ order_id: "dupB" }));
+  assertEquals([r.outcome, r.existing_order_id, r.existing_signal_id], ["duplicate", "liveA", s1]);
+  assertEquals(await count(db, `public.trade_attribution where signal_id = $1`, [a2.signal_id]), 0, "no orphan attribution");
+  assertEquals(await count(db, `public.pending_orders where order_id = 'dupB'`), 0);
+  assertEquals(JSON.stringify(await attr(db, s1)), JSON.stringify(before), "the tracked setup is untouched");
+  // the decision for the re-detection links to the tracked setup
+  await db.query(`insert into public.smc_scan_decision (scan_cycle_id, user_id, bot_id, symbol, signal_id) values (gen_random_uuid(), $1, 'smc', 'CHF/JPY', $2)`, [USER, r.existing_signal_id]);
+  assertEquals(await count(db, `public.smc_scan_decision where signal_id = $1`, [s1]), 1);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: cancellations and expiry record terminal attribution", async () => {
+  const db = await freshDb();
+  const cases: [string, Record<string, unknown>, string][] = [
+    ["DIRECTION_FLIP", { status: "cancelled", terminal_reason: "CANCELLED_DIRECTION_FLIP", thesis_cancel_reason: "thesis_invalid:direction_flip" }, "invalidated"],
+    ["IMPULSE", { status: "cancelled", terminal_reason: "CANCELLED_IMPULSE_BROKEN" }, "invalidated"],
+    ["EXPIRED", { status: "expired", terminal_reason: "EXPIRED_NEVER_TOUCHED" }, "expired"],
+    ["CAP", { status: "cancelled", terminal_reason: "CANCELLED_POSITION_CAP" }, "blocked_caps"],
+    ["MANUAL", { status: "cancelled", cancel_reason: "user cancelled" }, "cancelled"],
+  ];
+  for (const [name, patch, expected] of cases) {
+    const a = attrPayload({ symbol: `SYM${name}` }); const sig = a.signal_id as string;
+    await place(db, a, orderRow({ order_id: `c${name}`, symbol: `SYM${name}` }));
+    const sets = Object.keys(patch).map((k, i) => `${k} = $${i + 2}`).join(", ");
+    await db.query(`update public.pending_orders set ${sets}, resolved_at = now() where order_id = $1`, [`c${name}`, ...Object.values(patch)]);
+    const at = await attr(db, sig);
+    assertEquals([at.terminal_status, at.fill_kind, at.closed_at], [expected, null, null], name);
+    assert(at.terminal_at, name);
+    // terminal is write-once: a later status change cannot rewrite it
+    await db.query(`update public.pending_orders set status = 'expired' where order_id = $1`, [`c${name}`]);
+    assertEquals((await attr(db, sig)).terminal_status, expected, `${name} stays`);
+  }
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: legacy orders and positions (no signal_id) are untouched by every new path", async () => {
+  const db = await freshDb();
+  const r = await place(db, null, orderRow({ order_id: "legacyR" }));
+  assertEquals([r.outcome, r.signal_id, r.attribution], ["placed", null, "none"]);
+  await db.query(`update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), stop_loss = 189.8 where order_id = 'legacyR'`);
+  await db.query(`update public.pending_orders set status = 'cancelled', terminal_reason = 'CANCELLED_ZONE_EXIT' where order_id = 'legacyR'`);
+  const pid = await openPosition(db, { position_id: "legacyPos", order_id: "legacyPos" });
+  assertEquals((await settle(db, pid, usdJpyClose())).outcome, "settled");
+  assertEquals(await count(db, `public.trade_attribution`), 0);
+  assertEquals(await count(db, `public.trade_attribution_events`), 0);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: a bad attribution row never stops the order; a failing trigger never blocks a write", async () => {
+  const db = await freshDb();
+  const bad = { ...attrPayload(), config_version: "not-a-hash" };
+  const r = await place(db, bad, orderRow({ order_id: "badAttr" }));
+  assertEquals([r.outcome, r.signal_id, r.attribution], ["placed", null, "failed"]);
+  assert(String(r.attribution_error).includes("config_version"));
+  assertEquals((await orderBy(db, "badAttr")).signal_id, null);
+  // attribution UPDATE that errors: order cancel and position insert still go through
+  const a = attrPayload(); const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: "trgA", symbol: "EUR/USD" }));
+  await db.exec(`create function public.ta_boom2() returns trigger language plpgsql as $$ begin raise exception 'boom'; end $$;
+                 create trigger ta_boom2 before update on public.trade_attribution for each row execute function public.ta_boom2();`);
+  await db.query(`update public.pending_orders set status = 'cancelled', terminal_reason = 'CANCELLED_DIRECTION_FLIP' where order_id = 'trgA'`);
+  assertEquals((await orderBy(db, "trgA")).status, "cancelled");
+  const pid = await openPosition(db, { position_id: "trgPos", order_id: "trgPos", signal_id: sig });
+  assert(pid);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2: a position deleted without settlement is recorded, not lost", async () => {
+  const db = await freshDb();
+  const a = attrPayload(); const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: "delA" }));
+  await openPosition(db, { position_id: "delPos", order_id: "delA", signal_id: sig });
+  await db.query(`delete from public.paper_positions where position_id = 'delPos'`);
+  assertEquals((await evTypes(db, sig)).at(-1), "position_deleted_unsettled");
   await db.close();
 });

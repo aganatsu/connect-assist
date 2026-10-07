@@ -113,9 +113,10 @@ Deno.test("the floor decision is recorded on the trade, not only the scan", () =
   // routes instead.
   assert((scanner.match(/slFloor: slFloorTrace,/g) ?? []).length >= 2,
     "both entry routes: the pending order and the market entry");
-  for (const route of ["pending_orders", "paper_positions"]) {
-    assert(scanner.includes(`from("${route}").insert({`), `${route} insert exists`);
-  }
+  // Step 15: the pending order row is built as route2OrderRow and placed via
+  // placeRoute2Order (route2_place_order); the market entry still inserts directly.
+  assert(scanner.includes("const route2OrderRow: Record<string, unknown> = {") && scanner.includes("order: route2OrderRow"), "pending order row exists");
+  assert(scanner.includes(`from("paper_positions").insert({`), "paper_positions insert exists");
   const i = scanner.indexOf("const slFloorTrace = {");
   const block = scanner.slice(i, i + 500);
   for (const f of ["staticMinSlPips", "atrFloorPips", "effectiveMinSlPips", "actualSlPips", "widened"]) {
