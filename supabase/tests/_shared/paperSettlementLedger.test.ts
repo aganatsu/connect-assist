@@ -43,6 +43,8 @@ const MIGRATION_LOCK = read("../../migrations/20261006040000_post_reset_entries_
 const MIGRATION_ROLE_FIX = read("../../migrations/20261006060000_fix_jwt_role_detection.sql");
 const MIGRATION_SNAPSHOT_FN = read("../../migrations/20261006070000_reset_snapshot_function.sql");
 const MIGRATION_DRY_RUN = read("../../migrations/20261007000000_step8_dry_run_orders.sql");
+const MIGRATION_STEP15 = read("../../migrations/20261008000000_step15_attribution_schema.sql");
+const SCAN_DECISION = read("../../migrations/20260925210000_smc_scan_decision_observability.sql");
 
 const USER = "57c79dee-db6b-4fae-b34a-4b64ce33ca34";
 const OTHER_USER = "11111111-1111-4111-8111-111111111111";
@@ -139,6 +141,13 @@ async function applyMigrations(db: PGlite) {
   await db.exec(`${tableDdl("bot_configs")} ${tableDdl("bot_config_change_log")}`);
   await db.exec(MIGRATION_SNAPSHOT_FN);
   await db.exec(MIGRATION_DRY_RUN);
+  // Step 15 PR 1. Every settlement test in this file therefore runs against
+  // the attribution-aware settlement functions — the legacy (signal_id NULL)
+  // path is exactly what those tests exercise.
+  await db.exec(`create table if not exists auth.users (id uuid primary key)`); // smc_scan_decision FK target
+  const sd = SCAN_DECISION.search(/create table if not exists public\.smc_scan_decision \(/i);
+  await db.exec(SCAN_DECISION.slice(sd, SCAN_DECISION.indexOf("\n);", sd) + 3));
+  await db.exec(MIGRATION_STEP15);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -430,7 +439,10 @@ Deno.test("the ledger is append-only", async () => {
   const db = await freshDb();
   await assertRejects(() => db.query(`update public.paper_account_ledger set amount = 0`), Error, "append-only");
   await assertRejects(() => db.query(`delete from public.paper_account_ledger`), Error, "append-only");
-  await assertRejects(() => db.query(`truncate public.paper_account_ledger`), Error, "append-only");
+  // Refused either by the append-only trigger or, since step 15, earlier by
+  // Postgres because trade_attribution.ledger_id references the ledger.
+  const err = await assertRejects(() => db.query(`truncate public.paper_account_ledger`)) as Error;
+  assert(/append-only|referenced in a foreign key/.test(err.message), err.message);
   await db.close();
 });
 
@@ -826,5 +838,244 @@ Deno.test("step 8 safety net: a dry-run order can never become a position or a r
   await insertPending(db, pendingRow());
   await openPosition(db, { position_id: "real0001" });
   assertEquals(await count(db, "public.paper_positions"), 1);
+  await db.close();
+});
+
+// ─── Step 15 PR 1: attribution schema + settlement support ──────────────────
+
+type Db = Awaited<ReturnType<typeof freshDb>>;
+
+/** An attribution row (sections A–D) plus, optionally, a recorded real fill (F). */
+async function insertAttribution(db: Db, over: Record<string, unknown> = {}, fill: Record<string, unknown> | null = {}) {
+  const sig = (over.signal_id as string) ?? crypto.randomUUID();
+  const row: Record<string, unknown> = {
+    signal_id: sig, user_id: USER, bot_id: "smc", symbol: "USD/JPY", direction: "long", dry_run: false,
+    scan_cycle_id: crypto.randomUUID(), decision_id: crypto.randomUUID(), decision_at: "2026-10-08T10:00:00Z",
+    config_version: "3d5b8fb0d756b3596ed46d133e873a88", strategy_version: "smc-zone-impulse-control-v1",
+    sizing_version: "fill_time_v1", stop_version: "route2_limit_anchor_v1", management_version: "none_v1",
+    caps_version: "unified_3_1", route: "route2_pending_confirmation", primary_engine: "impulse_zone",
+    primary_engine_rule: "primary-engine.v1", game_plan: "{}", impulse: "{}", unified: "{}", score: "{}", gates: "[]",
+    legacy_would_admit: false, limit_price: 154.9, stop_price: 154.65, stop_source: "floor", stop_distance_pips: 25,
+    target_price: 155.175, raw_rr: 1.1, effective_rr: 1.06, cost_in_price: 0.01, intended_risk_pct: 0.5, intended_risk_usd: 500,
+    ...over,
+  };
+  if (fill) Object.assign(row, {
+    order_id: "ordAttr1", order_placed_at: "2026-10-08T10:00:00Z", terminal_status: "filled", terminal_reason: "FILLED",
+    terminal_at: "2026-10-08T10:30:00Z", fill_kind: "real", filled_at: "2026-10-08T10:30:00Z",
+    fill_price: 154.9, fill_stop_price: 154.65, fill_target_price: 155.175, fill_lots: 3.16, fill_risk_usd: 499.3, fill_risk_pct: 0.4993, ...fill,
+  });
+  const cols = Object.keys(row);
+  await db.query(`insert into public.trade_attribution (${cols.join(",")}) values (${cols.map((_, i) => `$${i + 1}`).join(",")})`, cols.map((c) => row[c]));
+  return sig;
+}
+const attr = async (db: Db, sig: string) =>
+  (await db.query<Record<string, any>>(`select * from public.trade_attribution where signal_id = $1`, [sig])).rows[0];
+const events = async (db: Db, sig: string): Promise<{ event_type: string; source: string; detail: any }[]> =>
+  (await db.query<{ event_type: string; source: string; detail: any }>(`select event_type, source, detail from public.trade_attribution_events where signal_id = $1 order by id`, [sig])).rows;
+
+Deno.test("step 15: the migration is idempotent (second application changes nothing and does not fail)", async () => {
+  const db = await freshDb();
+  const objects = async () => (await db.query<{ n: string }>(`
+    select string_agg(x, ',' order by x) n from (
+      select 'table:' || tablename x from pg_tables where schemaname = 'public' and tablename like 'trade_attribution%'
+      union all select 'trigger:' || tgname from pg_trigger where not tgisinternal and tgname like any (array['%attribution%', '%signal_id%', 'tae_%'])
+      union all select 'index:' || indexname from pg_indexes where schemaname = 'public' and (indexname like 'ta_%' or indexname like 'tae_%' or indexname like '%_signal%')
+      union all select 'column:' || table_name || '.' || column_name from information_schema.columns where table_schema = 'public' and column_name in ('signal_id', 'config_version', 'fill_sizing')
+      union all select 'function:' || proname || '/' || pronargs from pg_proc where proname in ('_paper_ledger_post', 'ta_event', 'ta_exit_reason', 'trade_attribution_guard', 'signal_id_immutable')
+    ) s`)).rows[0].n;
+  const before = await objects();
+  await db.exec(MIGRATION_STEP15);
+  assertEquals(await objects(), before);
+  assert(before.includes("function:_paper_ledger_post/10") && !before.includes("function:_paper_ledger_post/9"), "only the 10-argument ledger post exists");
+  for (const t of ["smc_scan_decision", "pending_orders", "paper_positions", "paper_trade_history", "paper_account_ledger"]) {
+    assert(before.includes(`column:${t}.signal_id`), t);
+  }
+  await db.close();
+});
+
+Deno.test("step 15: bot_configs.config_version equals the change log's next_hash for the same write", async () => {
+  const db = await freshDb();
+  await db.exec(`${functionDdl("audit_bot_config_change")}
+    ${line(/CREATE TRIGGER audit_bot_config_change [^\n]*/)}`);
+  await db.query(`insert into public.bot_configs (user_id, config_json) values ($1, $2::jsonb)`, [USER, JSON.stringify({ b: 2, a: { z: [1, "x"], y: null } })]);
+  for (const next of [{ tradingStyle: { mode: "scalper" }, simplification: { capsMode: "unified" } }, { "ü": "unicode", n: 1.10, big: 12345678901234567890 }]) {
+    await db.query(`update public.bot_configs set config_json = $1::jsonb where user_id = $2`, [JSON.stringify(next), USER]);
+    const r = (await db.query<{ v: string; h: string }>(`
+      select c.config_version v, (select next_hash from public.bot_config_change_log order by changed_at desc, id desc limit 1) h
+      from public.bot_configs c where user_id = $1`, [USER])).rows[0];
+    assertEquals(r.v, r.h);
+    assert(/^[0-9a-f]{32}$/.test(r.v));
+  }
+  await db.close();
+});
+
+Deno.test("step 15: a legacy settlement (signal_id NULL) is unchanged — no attribution, no events, NULL signal_id downstream", async () => {
+  const db = await freshDb();
+  const rowId = await openPosition(db);
+  const r = await settle(db, rowId, usdJpyClose());
+  assertEquals(r.outcome, "settled");
+  assertEquals(await count(db, `public.paper_trade_history where signal_id is null and position_id = '0e76555c'`), 1);
+  assertEquals(await count(db, `public.paper_account_ledger where kind = 'close' and signal_id is null`), 1);
+  assertEquals(await count(db, `public.trade_attribution`), 0);
+  assertEquals(await count(db, `public.trade_attribution_events`), 0);
+  assertEquals(await balance(db), 100000 + 871.19);
+  await db.close();
+});
+
+Deno.test("step 15: an attributed settlement writes history + ledger + attribution in one transaction", async () => {
+  const db = await freshDb();
+  const sig = await insertAttribution(db);
+  const rowId = await openPosition(db, { signal_id: sig, entry_price: 154.9, stop_loss: 154.65, take_profit: 155.175 });
+  const r = await settle(db, rowId, { exit_price: 155.175, pnl: 547.6, pnl_pips: 27.5, close_reason: "tp_hit" });
+  assertEquals(r.outcome, "settled");
+  const h = (await db.query<any>(`select id, signal_id from public.paper_trade_history where position_id = '0e76555c'`)).rows[0];
+  const l = (await db.query<any>(`select id, signal_id, history_id from public.paper_account_ledger where kind = 'close'`)).rows[0];
+  assertEquals([h.signal_id, l.signal_id, l.history_id], [sig, sig, h.id]);
+  const a = await attr(db, sig);
+  assertEquals([a.outcome_kind, a.exit_reason, a.close_source, a.history_id, a.ledger_id], ["real", "target", "scanner_breach_check", h.id, l.id]);
+  assertEquals(Number(a.realized_pnl_usd), 547.6);
+  assert(Math.abs(Number(a.realized_r_gross) - 1.1) < 1e-9, `R gross ${a.realized_r_gross}`);
+  assert(Math.abs(Number(a.realized_r_net) - (0.275 - 0.01) / 0.25) < 1e-9, `R net ${a.realized_r_net}`);
+  assert(a.closed_at);
+  assertEquals((await events(db, sig)).map((e: { event_type: string }) => e.event_type), ["closed"]);
+  assertEquals(await count(db, `public.paper_positions`), 0);
+  await db.close();
+});
+
+Deno.test("step 15: when the settlement rolls back, the attribution close rolls back with it (atomic)", async () => {
+  const db = await freshDb();
+  const sig = await insertAttribution(db);
+  const rowId = await openPosition(db, { signal_id: sig });
+  // Fail at the LAST statement of the settlement (deleting the position) —
+  // after history, ledger and the attribution close have all been written.
+  await db.exec(`create function public.boom() returns trigger language plpgsql as $$ begin raise exception 'last-step boom'; end $$;
+                 create trigger boom before delete on public.paper_positions for each row execute function public.boom();`);
+  const r = await settle(db, rowId, usdJpyClose());
+  assert(r.outcome !== "settled");
+  assertEquals(await count(db, `public.paper_account_ledger where kind = 'close'`), 0, "ledger rolled back");
+  const a = await attr(db, sig);
+  assertEquals([a.closed_at, a.outcome_kind, a.history_id, a.ledger_id], [null, null, null, null]);
+  assertEquals(await count(db, `public.paper_trade_history`), 0);
+  assertEquals(await count(db, `public.trade_attribution_events`), 0);
+  assertEquals(await count(db, `public.paper_positions`), 1, "position kept");
+  assertEquals(await balance(db), 100000);
+  await db.close();
+});
+
+Deno.test("step 15: attribution can never block a settlement", async () => {
+  const db = await freshDb();
+  // (a) attributed position whose attribution has no fill recorded yet → money settles, G not written, event says why
+  const s1 = await insertAttribution(db, {}, null);
+  const p1 = await openPosition(db, { signal_id: s1 });
+  assertEquals((await settle(db, p1, usdJpyClose())).outcome, "settled");
+  assertEquals((await attr(db, s1)).closed_at, null);
+  assert((await events(db, s1))[0].detail.note.includes("not written"));
+  // (b) attribution update itself errors → rolled back to its savepoint, recorded, money still settles
+  const s2 = await insertAttribution(db, { symbol: "EUR/USD" });
+  const p2 = await openPosition(db, { signal_id: s2, position_id: "pos2", order_id: "ord2", symbol: "EUR/USD" });
+  await db.exec(`create function public.ta_boom() returns trigger language plpgsql as $$ begin raise exception 'attribution boom'; end $$;
+                 create trigger ta_boom before update on public.trade_attribution for each row execute function public.ta_boom();`);
+  assertEquals((await settle(db, p2, usdJpyClose({ pnl: 10 }))).outcome, "settled");
+  const ev = await events(db, s2);
+  assertEquals(ev.length, 1);
+  assert(ev[0].detail.attribution_error.includes("attribution boom"));
+  assertEquals(await count(db, `public.paper_account_ledger where kind = 'close' and signal_id = $1`, [s2]), 1);
+  await db.close();
+});
+
+Deno.test("step 15: duplicate settlement remains impossible for an attributed trade", async () => {
+  const db = await freshDb();
+  const sig = await insertAttribution(db);
+  const rowId = await openPosition(db, { signal_id: sig });
+  assertEquals((await settle(db, rowId, usdJpyClose())).outcome, "settled");
+  const before = await attr(db, sig);
+  const again = await settle(db, rowId, usdJpyClose({ closed_at: "2026-10-08T12:00:01Z" }));
+  assertEquals(again.outcome, "already_settled");
+  assertEquals(await count(db, `public.paper_account_ledger where kind = 'close'`), 1);
+  assertEquals(await count(db, `public.paper_trade_history where close_reason <> 'partial_tp'`), 1);
+  assertEquals(await balance(db), 100000 + 871.19);
+  assertEquals(JSON.stringify(await attr(db, sig)), JSON.stringify(before), "attribution untouched by the repeat");
+  assertEquals((await events(db, sig)).length, 1);
+  await db.close();
+});
+
+Deno.test("step 15: every close source maps to its exit reason and keeps the signal id", async () => {
+  const db = await freshDb();
+  const cases: [string, string, string][] = [
+    ["paper_trading_manual", "manual", "manual"], ["prop_firm_emergency", "prop_firm_emergency", "prop_firm_emergency"],
+    ["kill_switch", "kill_switch", "kill_switch"], ["account_reset_flatten", "account_reset_flatten", "reset_flatten"],
+    ["paper_trading_auto", "sl_hit", "stop"], ["scanner_breach_check", "tp_hit", "target"], ["scanner_reverse_signal", "reverse_signal", "reverse_signal"],
+  ];
+  let i = 0;
+  for (const [source, reason, expected] of cases) {
+    i++;
+    const sig = await insertAttribution(db, { symbol: `SYM${i}` }, { order_id: `ord${i}` });
+    const rowId = await openPosition(db, { signal_id: sig, position_id: `pos${i}`, order_id: `ord${i}`, symbol: `SYM${i}` });
+    const exit = reason === "sl_hit" ? 154.65 : 155.0;
+    assertEquals((await settle(db, rowId, { exit_price: exit, pnl: reason === "sl_hit" ? -499.3 : 100, close_reason: reason }, source)).outcome, "settled", source);
+    const a = await attr(db, sig);
+    assertEquals([a.exit_reason, a.close_source], [expected, source], source);
+    assertEquals(await count(db, `public.paper_account_ledger where signal_id = $1 and source = $2`, [sig, source]), 1);
+    if (reason === "sl_hit") assert(Math.abs(Number(a.realized_r_gross) + 1) < 1e-9, "a stop at the fill stop is exactly −1R");
+  }
+  await db.close();
+});
+
+Deno.test("step 15: an attributed partial TP carries the signal id to its history and ledger rows", async () => {
+  const db = await freshDb();
+  const sig = await insertAttribution(db);
+  const rowId = await openPosition(db, { signal_id: sig });
+  const r = await settlePaperPartial(rpcClient(db), { positionRowId: rowId, userId: USER, botId: "smc", remainingSize: 0.5,
+    positionSignalReason: null, history: { exit_price: 155.2, pnl: 150, size: 0.5, pnl_pips: 30 }, source: "paper_trading_partial_tp" });
+  assertEquals(r.outcome, "settled");
+  assertEquals(await count(db, `public.paper_trade_history where close_reason = 'partial_tp' and signal_id = $1`, [sig]), 1);
+  assertEquals(await count(db, `public.paper_account_ledger where kind = 'partial' and signal_id = $1`, [sig]), 1);
+  assertEquals((await events(db, sig)).map((e: { event_type: string }) => e.event_type), ["partial_close"]);
+  assertEquals((await attr(db, sig)).closed_at, null, "a partial is not the close");
+  await db.close();
+});
+
+Deno.test("step 15: attribution rows cannot be deleted or illegally mutated; events are append-only; signal ids are fixed", async () => {
+  const db = await freshDb();
+  const sig = await insertAttribution(db, {}, null);
+  // immutable (A–D)
+  for (const sql of [`stop_price = 1`, `primary_engine = 'unified'`, `config_version = '00000000000000000000000000000000'`, `gates = '[{"x":1}]'`, `created_at = now()`]) {
+    await assertRejects(() => db.query(`update public.trade_attribution set ${sql} where signal_id = $1`, [sig]), Error, "immutable");
+  }
+  // write-once (E–G): first write ok, same value ok, different value refused
+  await db.query(`update public.trade_attribution set order_id = 'o1' where signal_id = $1`, [sig]);
+  await db.query(`update public.trade_attribution set order_id = 'o1' where signal_id = $1`, [sig]);
+  await assertRejects(() => db.query(`update public.trade_attribution set order_id = 'o2' where signal_id = $1`, [sig]), Error, "write-once");
+  await assertRejects(() => db.query(`update public.trade_attribution set order_id = null where signal_id = $1`, [sig]), Error, "write-once");
+  // constraints
+  await assertRejects(() => db.query(`update public.trade_attribution set superseded_by_signal_id = signal_id where signal_id = $1`, [sig]));
+  await assertRejects(() => db.query(`update public.trade_attribution set closed_at = now() where signal_id = $1`, [sig]), Error, "ta_close_requires_fill");
+  // no delete / truncate
+  await assertRejects(() => db.query(`delete from public.trade_attribution where signal_id = $1`, [sig]), Error, "append-only");
+  const t = await assertRejects(() => db.query(`truncate public.trade_attribution`)) as Error;
+  assert(/append-only|referenced in a foreign key/.test(t.message));
+  // events append-only
+  await db.query(`select public.ta_event($1, 'closed', 'test', '{}'::jsonb, null)`, [sig]);
+  await assertRejects(() => db.query(`update public.trade_attribution_events set source = 'x'`), Error, "append-only");
+  await assertRejects(() => db.query(`delete from public.trade_attribution_events`), Error, "append-only");
+  // signal_id fixed on lifecycle rows; unknown ids refused by FK
+  const rowId = await openPosition(db, { signal_id: sig });
+  const other = await insertAttribution(db, { symbol: "EUR/USD" }, null);
+  await assertRejects(() => db.query(`update public.paper_positions set signal_id = $1 where id = $2`, [other, rowId]), Error, "immutable");
+  await assertRejects(() => openPosition(db, { signal_id: crypto.randomUUID(), position_id: "x2", order_id: "x2" }));
+  // client roles cannot write attribution
+  await db.exec(`set role authenticated`);
+  await assertRejects(() => db.query(`insert into public.trade_attribution (signal_id) values (gen_random_uuid())`));
+  await db.exec(`set role postgres`);
+  await db.close();
+});
+
+Deno.test("step 15: the pre-check refuses to overwrite a settlement function that was changed outside the repo", async () => {
+  const db = await freshDb(); // first application already passed the pre-check against the 20261006010000 bodies
+  const body = (await db.query<{ s: string }>(`select prosrc s from pg_proc where proname = 'settle_paper_partial'`)).rows[0].s;
+  // simulate a hand edit in production: same function, one extra comment line
+  const def = (await db.query<{ d: string }>(`select pg_get_functiondef('public.settle_paper_partial'::regproc) d`)).rows[0].d;
+  await db.exec(def.replace(body, body.replace("BEGIN", "BEGIN\n  -- hand edit")));
+  await assertRejects(() => db.exec(MIGRATION_STEP15), Error, "settle_paper_partial differs from the expected source");
   await db.close();
 });
