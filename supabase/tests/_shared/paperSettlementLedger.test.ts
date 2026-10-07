@@ -46,6 +46,7 @@ const MIGRATION_SNAPSHOT_FN = read("../../migrations/20261006070000_reset_snapsh
 const MIGRATION_DRY_RUN = read("../../migrations/20261007000000_step8_dry_run_orders.sql");
 const MIGRATION_STEP15 = read("../../migrations/20261008000000_step15_attribution_schema.sql");
 const MIGRATION_STEP15_PR2 = read("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql");
+const MIGRATION_STEP15_PR3 = read("../../migrations/20261008020000_step15_pr3_outcome_resolver.sql");
 // Route 2 columns the PR 2 lifecycle trigger reads (zone_touch_time,
 // confirmation_*, terminal_reason, …) and route2_claim_and_fill. Applied in
 // date order, as in production.
@@ -164,6 +165,7 @@ async function applyMigrations(db: PGlite) {
   await db.exec(SCAN_DECISION.slice(sd, SCAN_DECISION.indexOf("\n);", sd) + 3));
   await db.exec(MIGRATION_STEP15);
   await db.exec(MIGRATION_STEP15_PR2);
+  await db.exec(MIGRATION_STEP15_PR3);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -1405,5 +1407,67 @@ Deno.test("step 15 PR 2 (fail open after placement): a real fill and its settlem
   const pid = (await db.query<any>(`select id from public.paper_positions where position_id = 'posOpen'`)).rows[0].id;
   assertEquals((await settle(db, pid, { exit_price: 190.417885, pnl: 267, close_reason: "tp_hit" })).outcome, "settled", "settlement not blocked");
   assertEquals(await count(db, `public.paper_account_ledger where kind = 'close' and signal_id = $1`, [sig]), 1, "money moved, id still carried");
+  await db.close();
+});
+
+// ─── Step 15 PR 3: hypothetical outcome functions ───────────────────────────
+
+async function hypotheticalFill(db: Db, symbol = "GBP/USD") {
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  const a = attrPayload({ dryRun: true, symbol }); const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: `h_${symbol}`, symbol, dry_run: true }));
+  await db.query(`update public.pending_orders set status = 'filled', filled_at = '2026-10-07T18:22:01Z', fill_price = 1.32175, terminal_reason = 'FILLED',
+     fill_sizing = '{"lots":2.49,"riskUsdActual":499.245,"riskPercentActual":0.4992}' where order_id = $1`, [`h_${symbol}`]);
+  return sig;
+}
+const outcome = (over: Record<string, unknown> = {}) => JSON.stringify({ method: "bar_replay_5m.v1", exit_reason: "hypothetical_stop",
+  exit_price: 189.892885, closed_at: "2026-10-07T20:00:00Z", r_gross: -1, r_net: -1.05, pnl_usd: -499.245, pnl_net_usd: -524.2, margin_pips: 2.1, ...over });
+
+Deno.test("step 15 PR 3: the hypothetical close is written exactly once; a second call changes nothing", async () => {
+  const db = await freshDb();
+  const sig = await hypotheticalFill(db);
+  assertEquals((await db.query<{ r: string }>(`select public.attribution_resolve_hypothetical($1, $2::jsonb) r`, [sig, outcome()])).rows[0].r, "resolved");
+  const first = await attr(db, sig);
+  assertEquals([first.outcome_kind, first.exit_reason, Number(first.realized_r_gross), Number(first.realized_pnl_usd), first.close_source],
+               ["hypothetical", "hypothetical_stop", -1, -499.245, "attribution_outcome_resolver"]);
+  const again = (await db.query<{ r: string }>(`select public.attribution_resolve_hypothetical($1, $2::jsonb) r`,
+    [sig, outcome({ exit_reason: "hypothetical_target", r_gross: 1.6 })])).rows[0].r;
+  assertEquals(again, "not_resolved");
+  assertEquals(JSON.stringify(await attr(db, sig)), JSON.stringify(first), "write-once: unchanged");
+  assertEquals((await evTypes(db, sig)).filter((t: string) => t === "outcome_resolved").length, 1);
+  assertEquals(await count(db, `public.paper_positions`), 0, "no position");
+  await db.close();
+});
+
+Deno.test("step 15 PR 3: only hypothetical fills can be resolved; never before the fill; only hypothetical exit reasons", async () => {
+  const db = await freshDb();
+  // a real (non-dry-run) attributed order with a recorded real fill
+  const a = attrPayload(); const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: "realH" }));
+  await db.query(`update public.pending_orders set status = 'filled', filled_at = now(), fill_price = 190.15, terminal_reason = 'FILLED' where order_id = 'realH'`);
+  assertEquals((await db.query<{ r: string }>(`select public.attribution_resolve_hypothetical($1, $2::jsonb) r`, [sig, outcome()])).rows[0].r, "not_resolved");
+  const h = await hypotheticalFill(db, "EUR/USD");
+  assertEquals((await db.query<{ r: string }>(`select public.attribution_resolve_hypothetical($1, $2::jsonb) r`, [h, outcome({ closed_at: "2026-10-07T18:00:00Z" })])).rows[0].r, "not_resolved", "closed before the fill");
+  await assertRejects(() => db.query(`select public.attribution_resolve_hypothetical($1, $2::jsonb)`, [h, outcome({ exit_reason: "manual" })]), Error, "not a hypothetical outcome");
+  await assertRejects(() => db.query(`select public.attribution_resolve_hypothetical($1, $2::jsonb)`, [h, outcome({ r_gross: null })]), Error, "required");
+  await db.close();
+});
+
+Deno.test("step 15 PR 3: a deferral is recorded once per gap and stops once resolved; functions are service-role only", async () => {
+  const db = await freshDb();
+  const sig = await hypotheticalFill(db);
+  for (let k = 0; k < 3; k++) {
+    await db.query(`select public.attribution_defer_hypothetical($1, '2026-10-07T18:40:00Z', '{"reason":"missing 5m bar"}'::jsonb)`, [sig]);
+  }
+  await db.query(`select public.attribution_defer_hypothetical($1, '2026-10-07T19:10:00Z', '{"reason":"missing 5m bar"}'::jsonb)`, [sig]);
+  assertEquals((await evTypes(db, sig)).filter((t: string) => t === "outcome_deferred_data_gap").length, 2, "one event per distinct gap");
+  assertEquals((await attr(db, sig)).closed_at, null, "a deferral never writes an outcome");
+  await db.query(`select public.attribution_resolve_hypothetical($1, $2::jsonb)`, [sig, outcome()]);
+  assertEquals((await db.query<{ r: string }>(`select public.attribution_defer_hypothetical($1, now(), '{}'::jsonb) r`, [sig])).rows[0].r, "not_applicable");
+  for (const role of ["anon", "authenticated"]) {
+    for (const fn of ["public.attribution_resolve_hypothetical(uuid, jsonb)", "public.attribution_defer_hypothetical(uuid, timestamptz, jsonb)"]) {
+      assertEquals((await db.query<{ ok: boolean }>(`select has_function_privilege($1, $2, 'execute') ok`, [role, fn])).rows[0].ok, false, `${role} ${fn}`);
+    }
+  }
   await db.close();
 });
