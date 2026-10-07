@@ -1311,10 +1311,11 @@ Deno.test("step 15 PR 2: cancellations and expiry record terminal attribution", 
   await db.close();
 });
 
-Deno.test("step 15 PR 2: legacy orders and positions (no signal_id) are untouched by every new path", async () => {
+Deno.test("step 15 PR 2: legacy historical rows (no signal_id) still work through every lifecycle path", async () => {
   const db = await freshDb();
-  const r = await place(db, null, orderRow({ order_id: "legacyR" }));
-  assertEquals([r.outcome, r.signal_id, r.attribution], ["placed", null, "none"]);
+  // a pre-step-15 order, as it exists in production today
+  await db.query(`insert into public.pending_orders (user_id, bot_id, order_id, symbol, direction, order_type, entry_price, current_price, stop_loss, take_profit, size, status, placed_at, expires_at)
+                  values ($1, 'smc', 'legacyR', 'CHF/JPY', 'long', 'limit', 190, 190.1, 189.7, 190.3, 1, 'pending', now(), now() + interval '8 hours')`, [USER]);
   await db.query(`update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), stop_loss = 189.8 where order_id = 'legacyR'`);
   await db.query(`update public.pending_orders set status = 'cancelled', terminal_reason = 'CANCELLED_ZONE_EXIT' where order_id = 'legacyR'`);
   const pid = await openPosition(db, { position_id: "legacyPos", order_id: "legacyPos" });
@@ -1324,13 +1325,45 @@ Deno.test("step 15 PR 2: legacy orders and positions (no signal_id) are untouche
   await db.close();
 });
 
-Deno.test("step 15 PR 2: a bad attribution row never stops the order; a failing trigger never blocks a write", async () => {
+Deno.test("step 15 PR 2 (fail closed): invalid attribution → NO new order, NO supersede cancel, nothing written", async () => {
   const db = await freshDb();
+  const a0 = attrPayload(); const s0 = a0.signal_id as string;
+  await place(db, a0, orderRow({ order_id: "liveOld" }));
   const bad = { ...attrPayload(), config_version: "not-a-hash" };
-  const r = await place(db, bad, orderRow({ order_id: "badAttr" }));
-  assertEquals([r.outcome, r.signal_id, r.attribution], ["placed", null, "failed"]);
-  assert(String(r.attribution_error).includes("config_version"));
-  assertEquals((await orderBy(db, "badAttr")).signal_id, null);
+  const r = await place(db, bad, orderRow({ order_id: "badAttr" }), [{ order_id: "liveOld", cancel_reason: "Superseded" }]);
+  assertEquals(r.outcome, "attribution_write_failed");
+  assert(String(r.error).includes("config_version"), r.error);
+  assertEquals(await count(db, `public.pending_orders where order_id = 'badAttr'`), 0, "no order");
+  assertEquals(await count(db, `public.trade_attribution where signal_id = $1`, [bad.signal_id]), 0, "no attribution row");
+  assertEquals((await orderBy(db, "liveOld")).status, "pending", "the order it would have superseded is still live");
+  assertEquals((await attr(db, s0)).superseded_by_signal_id, null);
+  // no attribution at all → refused too, nothing written
+  const m = await place(db, null, orderRow({ order_id: "noAttr", symbol: "EUR/USD" }));
+  assertEquals(m.outcome, "attribution_missing");
+  assertEquals(await count(db, `public.pending_orders where order_id = 'noAttr'`), 0);
+  assertEquals(await count(db, `public.pending_orders where signal_id is null and order_id in ('badAttr','noAttr')`), 0, "never an unattributed new order");
+  await db.close();
+});
+
+Deno.test("step 15 PR 2 (fail closed): an attribution INSERT the database rejects → NO new order", async () => {
+  const db = await freshDb();
+  await db.exec(`create function public.ta_ins_boom() returns trigger language plpgsql as $$ begin raise exception 'attribution store unavailable'; end $$;
+                 create trigger ta_ins_boom before insert on public.trade_attribution for each row execute function public.ta_ins_boom();`);
+  const a = attrPayload();
+  const r = await place(db, a, orderRow({ order_id: "insFail" }));
+  assertEquals(r.outcome, "attribution_write_failed");
+  assert(String(r.error).includes("attribution store unavailable"));
+  assertEquals(await count(db, `public.pending_orders`), 0, "no order");
+  // other errors (e.g. the entries lock) still surface as errors, exactly as an insert failure did
+  await db.exec(`drop trigger ta_ins_boom on public.trade_attribution`);
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  await assertRejects(() => place(db, attrPayload(), orderRow({ order_id: "lockedReal", dry_run: false })), Error, "entries locked");
+  assertEquals(await count(db, `public.pending_orders`), 0);
+  await db.close();
+});
+
+Deno.test("step 15 PR 2 (fail open after placement): a failing attribution write never blocks cancel, fill, position or settlement", async () => {
+  const db = await freshDb();
   // attribution UPDATE that errors: order cancel and position insert still go through
   const a = attrPayload(); const sig = a.signal_id as string;
   await place(db, a, orderRow({ order_id: "trgA", symbol: "EUR/USD" }));
@@ -1350,5 +1383,27 @@ Deno.test("step 15 PR 2: a position deleted without settlement is recorded, not 
   await openPosition(db, { position_id: "delPos", order_id: "delA", signal_id: sig });
   await db.query(`delete from public.paper_positions where position_id = 'delPos'`);
   assertEquals((await evTypes(db, sig)).at(-1), "position_deleted_unsettled");
+  await db.close();
+});
+
+Deno.test("step 15 PR 2 (fail open after placement): a real fill and its settlement go through even if every attribution write fails", async () => {
+  const db = await freshDb();
+  const a = attrPayload(); const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: "fillOpen" }));
+  await db.query(`update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), confirmation_arm_count = 1 where order_id = 'fillOpen'`);
+  // from here on every write to attribution AND its event log fails
+  await db.exec(`create function public.ta_all_boom() returns trigger language plpgsql as $$ begin raise exception 'attribution down'; end $$;
+                 create trigger ta_all_boom before update on public.trade_attribution for each row execute function public.ta_all_boom();
+                 create trigger tae_all_boom before insert on public.trade_attribution_events for each row execute function public.ta_all_boom();`);
+  const o = await orderBy(db, "fillOpen");
+  const claim = (await db.query<{ r: any }>(`select public.route2_claim_and_fill($1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb) r`, [o.id, USER, 1,
+    JSON.stringify({ terminal_reason: "FILLED", fill_price: 190.15, filled_at: new Date().toISOString(), confirmation_accepted_at: new Date().toISOString() }),
+    JSON.stringify({ user_id: USER, bot_id: "smc", position_id: "posOpen", order_id: "fillOpen", symbol: "CHF/JPY", direction: "long", size: "1",
+      entry_price: "190.15", current_price: "190.15", stop_loss: "189.892885", take_profit: "190.417885", open_time: new Date().toISOString(),
+      signal_score: "60", position_status: "open", signal_id: sig })])).rows[0].r;
+  assertEquals(claim.outcome, "filled", "fill not blocked");
+  const pid = (await db.query<any>(`select id from public.paper_positions where position_id = 'posOpen'`)).rows[0].id;
+  assertEquals((await settle(db, pid, { exit_price: 190.417885, pnl: 267, close_reason: "tp_hit" })).outcome, "settled", "settlement not blocked");
+  assertEquals(await count(db, `public.paper_account_ledger where kind = 'close' and signal_id = $1`, [sig]), 1, "money moved, id still carried");
   await db.close();
 });

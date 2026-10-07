@@ -7,24 +7,28 @@
  * reports that order's signal_id, so the re-detection links to the setup that
  * is being tracked instead of minting a new identity.
  *
- * Attribution can never stop an order:
- *   - a bad attribution row → the RPC places the order without signal_id;
- *   - the RPC missing (code deployed before its migration) → the exact legacy
- *     path: cancel the superseded orders, insert the order, no signal_id.
+ * New entries FAIL CLOSED on attribution: no valid attribution row → no order,
+ * no supersede cancel, and an explicit outcome for the decision log
+ * (ATTRIBUTION_INVALID before the call, ATTRIBUTION_WRITE_FAILED from it).
+ * There is no unattributed fallback: the migration is always applied before
+ * this code is merged, and if the function is ever missing the order is not
+ * placed (RPC_UNAVAILABLE) rather than placed without a signal_id.
  */
 
 export interface PlaceRoute2Input {
-  attribution: Record<string, unknown> | null;
+  attribution: Record<string, unknown>;
   order: Record<string, unknown>;
   supersede: { order_id: string; cancel_reason: string }[];
 }
 
+export type PlaceRoute2Outcome = "placed" | "duplicate" | "attribution_write_failed" | "failed";
+
 export interface PlaceRoute2Result {
-  outcome: "placed" | "duplicate" | "failed";
+  outcome: PlaceRoute2Outcome;
+  /** Decision-log code for anything that did not place an order. */
+  code: "ATTRIBUTION_WRITE_FAILED" | "DUPLICATE_LIVE_SETUP" | "RPC_UNAVAILABLE" | "INSERT_FAILED" | null;
   error: string | null;
   signalId: string | null;
-  attribution: "written" | "none" | "failed" | "legacy_fallback";
-  attributionError: string | null;
   existingOrderId: string | null;
   existingSignalId: string | null;
   superseded: string[];
@@ -35,41 +39,24 @@ const isMissingRpc = (e: { code?: string; message?: string } | null) =>
 
 export async function placeRoute2Order(supabase: any, i: PlaceRoute2Input): Promise<PlaceRoute2Result> {
   const base: PlaceRoute2Result = {
-    outcome: "failed", error: null, signalId: null, attribution: "none", attributionError: null,
-    existingOrderId: null, existingSignalId: null, superseded: [],
+    outcome: "failed", code: null, error: null, signalId: null, existingOrderId: null, existingSignalId: null, superseded: [],
   };
   const { data, error } = await supabase.rpc("route2_place_order", {
     p_attribution: i.attribution, p_order: i.order, p_supersede: i.supersede,
   });
-
-  if (error && isMissingRpc(error)) {
-    // Legacy path, byte-for-byte what bot-scanner did before step 15.
-    if (i.supersede.length > 0) {
-      await supabase.from("pending_orders").update({
-        status: "cancelled",
-        terminal_reason: "CANCELLED_SUPERSEDED",
-        resolved_at: new Date().toISOString(),
-        cancel_reason: i.supersede[0].cancel_reason,
-      }).in("order_id", i.supersede.map((s) => s.order_id)).eq("user_id", i.order.user_id);
-    }
-    const { error: insErr } = await supabase.from("pending_orders").insert(i.order);
-    if (insErr) {
-      return { ...base, attribution: "legacy_fallback", superseded: i.supersede.map((s) => s.order_id),
-        outcome: /duplicate key/i.test(insErr.message) ? "duplicate" : "failed", error: insErr.message };
-    }
-    return { ...base, outcome: "placed", attribution: "legacy_fallback", superseded: i.supersede.map((s) => s.order_id) };
+  if (error) {
+    return { ...base, code: isMissingRpc(error) ? "RPC_UNAVAILABLE" : "INSERT_FAILED", error: error.message };
   }
-  if (error) return { ...base, error: error.message };
-
   const d = (data ?? {}) as Record<string, any>;
+  if (d.outcome === "placed") {
+    return { ...base, outcome: "placed", signalId: d.signal_id ?? null, superseded: Array.isArray(d.superseded) ? d.superseded : [] };
+  }
   if (d.outcome === "duplicate") {
-    return { ...base, outcome: "duplicate", error: d.error ?? "duplicate key value violates unique constraint",
+    return { ...base, outcome: "duplicate", code: "DUPLICATE_LIVE_SETUP", error: d.error ?? "duplicate key value violates unique constraint",
       existingOrderId: d.existing_order_id ?? null, existingSignalId: d.existing_signal_id ?? null };
   }
-  if (d.outcome === "placed") {
-    return { ...base, outcome: "placed", signalId: d.signal_id ?? null,
-      attribution: d.attribution ?? "none", attributionError: d.attribution_error ?? null,
-      superseded: Array.isArray(d.superseded) ? d.superseded : [] };
+  if (d.outcome === "attribution_write_failed" || d.outcome === "attribution_missing") {
+    return { ...base, outcome: "attribution_write_failed", code: "ATTRIBUTION_WRITE_FAILED", error: d.error ?? d.outcome };
   }
-  return { ...base, error: `route2_place_order: unrecognised reply ${JSON.stringify(d).slice(0, 200)}` };
+  return { ...base, code: "INSERT_FAILED", error: `route2_place_order: unrecognised reply ${JSON.stringify(d).slice(0, 200)}` };
 }

@@ -115,12 +115,10 @@ Deno.test("the supersede path now records resolved_at", () => {
   // Every other cancel sets it. This one did not, which is why
   // avg_life_minutes came back NULL for the largest bucket in the table and
   // order lifetime could not be measured at all.
-  // Step 15: the supersede cancel runs inside route2_place_order (same
-  // transaction as the new order) and in its legacy fallback; both set it.
+  // Step 15: the supersede cancel runs inside route2_place_order, in the same
+  // transaction as the new order (there is no unattributed fallback path).
   const sql = Deno.readTextFileSync(new URL("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql", import.meta.url));
   assert(/SET status = 'cancelled', terminal_reason = 'CANCELLED_SUPERSEDED', resolved_at = now\(\)/.test(sql), "RPC sets resolved_at");
-  const fallback = Deno.readTextFileSync(new URL("../../functions/_shared/route2Placement.ts", import.meta.url));
-  assert(/status: "cancelled",\s*terminal_reason: "CANCELLED_SUPERSEDED",\s*resolved_at: new Date\(\)\.toISOString\(\)/.test(fallback), "fallback sets resolved_at");
   assert(scanner.includes("placeRoute2Order(supabase, { attribution: route2Attribution, order: route2OrderRow, supersede })"), "superseded orders go through the RPC");
 });
 

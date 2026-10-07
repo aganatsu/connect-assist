@@ -42,6 +42,10 @@ Deno.test("every gate reason recorded at 13:00 UTC 2026-10-07 (CHF/JPY) classifi
     ["Tier 1 gate DISABLED by config (2 core factors present)", "tier1"],
     ["Regime gate: subsumed by Direction Verdict", "regime"],
     ["[Info] Spread wide (indicative): 23.6% of ATR — info only", "spread"],
+    // the Game Plan filter gate (soft mode), as recorded on the 16 dry-run orders since step 8
+    ["GP filter (soft): Game plan: long REJECTED — bias is bearish (36%), signal is long — bias", "game_plan_filter"],
+    ["Game plan: neutral bias — trade allowed but with caution", "game_plan_filter"],
+    ["Game plan: long aligns with bullish bias (55%)", "game_plan_filter"],
   ];
   for (const [reason, id] of recorded) assertEquals(classifyGate({ passed: true, reason }).gate_id, id, reason);
   // tagged gates keep their tag and their logged-only state
@@ -140,20 +144,29 @@ function fakeSupabase(rpcReply: { data?: unknown; error?: { code?: string; messa
 }
 const ORDER = { user_id: "u", symbol: "CHF/JPY", direction: "long", order_id: "o1" };
 
-Deno.test("placement: placed / duplicate replies map through; duplicate exposes the tracked signal", async () => {
+Deno.test("placement: placed / duplicate map through; duplicate exposes the tracked signal", async () => {
   const p = await placeRoute2Order(fakeSupabase({ data: { outcome: "placed", signal_id: "s1", attribution: "written", superseded: ["old1"] } }), { attribution: {}, order: ORDER, supersede: [] });
-  assertEquals([p.outcome, p.signalId, p.attribution, p.superseded], ["placed", "s1", "written", ["old1"]]);
+  assertEquals([p.outcome, p.signalId, p.superseded, p.code], ["placed", "s1", ["old1"], null]);
   const d = await placeRoute2Order(fakeSupabase({ data: { outcome: "duplicate", existing_order_id: "live", existing_signal_id: "sLive", error: "duplicate key" } }), { attribution: {}, order: ORDER, supersede: [] });
-  assertEquals([d.outcome, d.existingOrderId, d.existingSignalId], ["duplicate", "live", "sLive"]);
-  const e = await placeRoute2Order(fakeSupabase({ error: { message: "entries locked: only dry-run orders" } }), { attribution: {}, order: ORDER, supersede: [] });
-  assertEquals([e.outcome, e.error], ["failed", "entries locked: only dry-run orders"]);
+  assertEquals([d.outcome, d.code, d.existingOrderId, d.existingSignalId], ["duplicate", "DUPLICATE_LIVE_SETUP", "live", "sLive"]);
 });
 
-Deno.test("placement: if the RPC is missing (code before migration), the exact legacy path runs — orders are never lost", async () => {
+Deno.test("placement fails closed: attribution refused or missing → ATTRIBUTION_WRITE_FAILED, never an order", async () => {
+  for (const outcome of ["attribution_write_failed", "attribution_missing"]) {
+    const sb = fakeSupabase({ data: { outcome, error: "x" } });
+    const r = await placeRoute2Order(sb, { attribution: {}, order: ORDER, supersede: [] });
+    assertEquals([r.outcome, r.code, r.signalId], ["attribution_write_failed", "ATTRIBUTION_WRITE_FAILED", null], outcome);
+    assertEquals(sb.calls, ["rpc:route2_place_order"], "no direct write");
+  }
+});
+
+Deno.test("placement fails closed when the RPC is missing — no unattributed fallback insert", async () => {
   const sb = fakeSupabase({ error: { code: "PGRST202", message: "Could not find the function public.route2_place_order" } });
-  const p = await placeRoute2Order(sb, { attribution: { signal_id: "x" }, order: ORDER, supersede: [{ order_id: "old1", cancel_reason: "Superseded" }] });
-  assertEquals([p.outcome, p.attribution, p.superseded], ["placed", "legacy_fallback", ["old1"]]);
-  assertEquals(sb.calls, ["rpc:route2_place_order", "update:pending_orders:cancelled:CANCELLED_SUPERSEDED:true:old1", "insert:pending_orders:false"]);
+  const r = await placeRoute2Order(sb, { attribution: { signal_id: "x" }, order: ORDER, supersede: [{ order_id: "old1", cancel_reason: "Superseded" }] });
+  assertEquals([r.outcome, r.code], ["failed", "RPC_UNAVAILABLE"]);
+  assertEquals(sb.calls, ["rpc:route2_place_order"], "no cancel, no insert");
+  const e = await placeRoute2Order(fakeSupabase({ error: { message: "entries locked: only dry-run orders" } }), { attribution: {}, order: ORDER, supersede: [] });
+  assertEquals([e.outcome, e.code, e.error], ["failed", "INSERT_FAILED", "entries locked: only dry-run orders"]);
 });
 
 // ─── scanner wiring (source) ────────────────────────────────────────────────
@@ -178,10 +191,26 @@ Deno.test("wiring: Route 2 orders are placed only through placeRoute2Order; no d
   assert(scanner.includes('.select("order_id, entry_price, signal_score, signal_id")'));
 });
 
+Deno.test("wiring: new orders fail closed on attribution, with an explicit decision-log outcome", () => {
+  const inv = scanner.indexOf('detail.status = "attribution_invalid";');
+  const call = scanner.indexOf("const placement = await placeRoute2Order(");
+  assert(inv > 0 && inv < call, "invalid attribution stops before any placement call");
+  assert(/\(detail as any\)\.attributionOutcome = "ATTRIBUTION_INVALID";[\s\S]{0,300}continue;/.test(scanner));
+  assert(/detail\.status = "attribution_write_failed";[\s\S]{0,300}"ATTRIBUTION_WRITE_FAILED"[\s\S]{0,300}continue;/.test(scanner));
+  assert(scanner.includes('attributionInvalid = `canonical config hash unavailable'), "no config hash → no order");
+  assert(!scanner.includes("placement.attribution"), "no 'placed without signal_id' branch remains");
+  const placementSrc = Deno.readTextFileSync(new URL("../../functions/_shared/route2Placement.ts", import.meta.url));
+  assert(!/from\("pending_orders"\)/.test(placementSrc), "no direct (unattributed) write path in the helper");
+  const sql = Deno.readTextFileSync(new URL("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql", import.meta.url));
+  assert(sql.includes("RETURN jsonb_build_object('outcome', 'attribution_missing'"));
+  assert(sql.includes("RAISE EXCEPTION 'attribution_write_failed: %', SQLERRM USING ERRCODE = 'P0A15';"));
+  assert(sql.includes("v_order := v_order || jsonb_build_object('signal_id', v_sig);"), "every new order carries the signal");
+});
+
 Deno.test("wiring: decisions link to the order they placed or the tracked setup they re-detected", () => {
   assert(scanner.includes("cap.signal_id = samePriceOrders[0]?.signal_id ?? null;"), "same-level refresh → tracked setup");
   assert(scanner.includes('if (placement.outcome === "duplicate") cap.signal_id = placement.existingSignalId ?? null;'), "armed duplicate → tracked setup");
-  assert(scanner.includes('if (placement.attribution === "written") cap.signal_id = placement.signalId;'), "new order → its own signal");
+  assert(scanner.includes("cap.signal_id = placement.signalId;"), "new order → its own signal");
   assert(scanner.includes('"Zone setup already active (see Zone Setups panel)"'), "the decision status text is unchanged");
 });
 

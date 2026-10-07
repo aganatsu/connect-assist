@@ -8274,12 +8274,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           };
 
           // ── Step 15: attribution (A–D), built here — the decision as judged ──
-          // Immutable once written. Skipped (order placed as before, no
-          // signal_id) if the canonical config hash is unavailable.
+          // Immutable once written. New entries FAIL CLOSED: if the record
+          // cannot be built, no order is placed and the decision log says why.
           const route2SignalId = crypto.randomUUID();
           const configVersion = (config as any).__configVersion as string | null;
           let route2Attribution: Record<string, unknown> | null = null;
-          if (typeof configVersion === "string" && /^[0-9a-f]{32}$/.test(configVersion)) {
+          let attributionInvalid: string | null = null;
+          if (!(typeof configVersion === "string" && /^[0-9a-f]{32}$/.test(configVersion))) {
+            attributionInvalid = `canonical config hash unavailable (${configVersion === null ? "null" : "invalid"})`;
+          } else {
             try {
               const pfDecision = propFirmGateResult.decision;
               const attrCaps = resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig);
@@ -8320,20 +8323,41 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 balance, expiresAt,
               });
             } catch (attrErr: any) {
-              console.warn(`[attribution] ${pair}: build failed (order placed without signal_id): ${attrErr?.message}`);
+              attributionInvalid = `build failed: ${attrErr?.message ?? attrErr}`;
               route2Attribution = null;
             }
+          }
+          if (attributionInvalid || !route2Attribution) {
+            const why = attributionInvalid ?? "no attribution record";
+            console.error(`[attribution] ${pair} ${analysis.direction}: ATTRIBUTION_INVALID — order NOT placed: ${why}`);
+            detail.status = "attribution_invalid";
+            (detail as any).attributionOutcome = "ATTRIBUTION_INVALID";
+            detail.error = why;
+            detail.skipReason = `Order not placed: attribution invalid (${why})`;
+            scanDetails.push(detail);
+            continue;
           }
 
           const placement = await placeRoute2Order(supabase, { attribution: route2Attribution, order: route2OrderRow, supersede });
           if (placement.superseded.length > 0) {
             console.log(`[pending] Expired ${placement.superseded.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded, level moved (score ${analysis.score.toFixed(1)})`);
           }
+          if (placement.outcome === "attribution_write_failed") {
+            const msg = placement.error ?? "unknown";
+            console.error(`[attribution] ${pair} ${analysis.direction}: ATTRIBUTION_WRITE_FAILED — order NOT placed: ${msg}`);
+            detail.status = "attribution_write_failed";
+            (detail as any).attributionOutcome = "ATTRIBUTION_WRITE_FAILED";
+            detail.error = msg;
+            detail.skipReason = `Order not placed: attribution write failed (${msg})`;
+            scanDetails.push(detail);
+            continue;
+          }
           if (placement.outcome !== "placed") {
             const msg = placement.error ?? "unknown";
             console.error(`[pending] INSERT failed for ${pair}: ${msg}`);
             detail.status = "zone_setup_insert_failed";
             detail.error = msg;
+            (detail as any).placementCode = placement.code;
             detail.skipReason = placement.outcome === "duplicate"
               ? "Zone setup already active (see Zone Setups panel)"
               : `Zone setup insert failed: ${msg}`;
@@ -8342,11 +8366,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             scanDetails.push(detail);
             continue;
           }
-          if (placement.attribution === "written") cap.signal_id = placement.signalId;
-          else if (placement.attribution === "failed") {
-            console.warn(`[attribution] ${pair} ${pendingOrderId}: attribution not written (order placed without signal_id): ${placement.attributionError}`);
-            (detail as any).attributionError = placement.attributionError;
-          }
+          cap.signal_id = placement.signalId;
           (detail as any).signalId = placement.signalId;
 
           pendingPlaced++;

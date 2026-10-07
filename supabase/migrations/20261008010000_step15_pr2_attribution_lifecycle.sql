@@ -15,13 +15,15 @@
 --    signal_id. A duplicate (unique active order) rolls all of it back and
 --    reports the existing order's signal_id.
 --
--- Attribution can never block trading:
---   * both triggers are exception-safe — a failure is swallowed (RAISE WARNING),
---     the order / position write always proceeds;
---   * route2_place_order inserts the attribution row inside a savepoint; if it
---     fails, the order is placed WITHOUT signal_id (legacy) and the error is
---     returned.
--- Legacy rows (signal_id NULL) are untouched by every path here.
+-- New entries FAIL CLOSED on attribution; everything after placement fails open:
+--   * route2_place_order requires a valid attribution row. No signal_id →
+--     'attribution_missing'; the attribution insert fails → 'attribution_write_failed'.
+--     Either way NOTHING is written: no order, no supersede cancel. Every new
+--     Route 2 order in the frozen experiment is therefore attributable.
+--   * both lifecycle triggers are exception-safe — a failure is swallowed
+--     (RAISE WARNING) so cancel / expiry / fill / position writes always
+--     proceed; settlement already writes its attribution inside a savepoint.
+-- Legacy rows (signal_id NULL) are untouched by every trigger here.
 -- SECURITY DEFINER on the triggers: a cancel issued by a signed-in user (UI)
 -- must still record its terminal state, and client roles cannot write
 -- attribution.
@@ -153,13 +155,13 @@ CREATE TRIGGER paper_positions_attribution AFTER INSERT OR DELETE ON public.pape
   FOR EACH ROW EXECUTE FUNCTION public.paper_positions_attribution();
 
 -- ── 3. atomic Route 2 placement ─────────────────────────────────────────────
--- p_attribution  trade_attribution row (A–D); NULL / no signal_id → legacy order
+-- p_attribution  trade_attribution row (A–D); REQUIRED (no signal_id → nothing placed)
 -- p_order        pending_orders row WITHOUT signal_id (forced here)
 -- p_supersede    [{ "order_id": "...", "cancel_reason": "..." }] — live 'pending'
 --                orders for the same symbol + direction being replaced
--- Returns { outcome: placed | duplicate, order_row_id, signal_id,
---           attribution: written | none | failed, attribution_error,
---           superseded: [order_id…], existing_order_id, existing_signal_id }
+-- Returns { outcome: placed | duplicate | attribution_missing | attribution_write_failed,
+--           order_row_id, signal_id, error, superseded: [order_id…],
+--           existing_order_id, existing_signal_id }
 -- Any other error (entries lock, constraint) raises and rolls back everything,
 -- exactly as a failed insert did before.
 CREATE OR REPLACE FUNCTION public.route2_place_order(p_attribution jsonb, p_order jsonb, p_supersede jsonb DEFAULT '[]'::jsonb)
@@ -168,7 +170,6 @@ DECLARE
   v_sig uuid := NULLIF(p_attribution ->> 'signal_id', '')::uuid;
   v_attr jsonb;
   v_attr_state text := 'none';
-  v_attr_err text;
   v_order jsonb;
   v_cols text;
   v_bad text;
@@ -182,6 +183,10 @@ DECLARE
 BEGIN
   IF v_user IS NULL OR (p_order ->> 'symbol') IS NULL OR (p_order ->> 'direction') IS NULL THEN
     RAISE EXCEPTION 'route2_place_order: order user_id, symbol and direction are required';
+  END IF;
+  -- Fail closed: no attribution, no new order.
+  IF v_sig IS NULL THEN
+    RETURN jsonb_build_object('outcome', 'attribution_missing', 'error', 'trade_attribution signal_id is required for a new Route 2 order');
   END IF;
   v_order := p_order - 'signal_id' - 'id';
   SELECT string_agg(k, ', ') INTO v_bad FROM jsonb_object_keys(v_order) k
@@ -204,18 +209,17 @@ BEGIN
       IF v_old.signal_id IS NOT NULL THEN v_old_sigs := v_old_sigs || v_old.signal_id; END IF;
     END LOOP;
 
-    -- A–D, inside a savepoint: a bad attribution row never stops the order
-    IF v_sig IS NOT NULL THEN
-      v_attr := p_attribution || jsonb_build_object('supersedes_signal_ids', to_jsonb(v_old_sigs));
-      BEGIN
-        SELECT string_agg(format('%I', k), ', ') INTO v_cols FROM jsonb_object_keys(v_attr) k;
-        EXECUTE format('INSERT INTO public.trade_attribution (%1$s) SELECT %1$s FROM jsonb_populate_record(NULL::public.trade_attribution, $1)', v_cols)
-          USING v_attr;
-        v_attr_state := 'written';
-      EXCEPTION WHEN OTHERS THEN
-        v_attr_state := 'failed'; v_attr_err := SQLERRM; v_sig := NULL;
-      END;
-    END IF;
+    -- A–D. A row the database refuses means NO order (fail closed): the error
+    -- is re-raised with a marker and the outer handler rolls back everything.
+    v_attr := p_attribution || jsonb_build_object('supersedes_signal_ids', to_jsonb(v_old_sigs));
+    BEGIN
+      SELECT string_agg(format('%I', k), ', ') INTO v_cols FROM jsonb_object_keys(v_attr) k;
+      EXECUTE format('INSERT INTO public.trade_attribution (%1$s) SELECT %1$s FROM jsonb_populate_record(NULL::public.trade_attribution, $1)', v_cols)
+        USING v_attr;
+      v_attr_state := 'written';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE EXCEPTION 'attribution_write_failed: %', SQLERRM USING ERRCODE = 'P0A15';
+    END;
 
     -- supersede: link both directions, then cancel exactly as before
     FOR v_old IN
@@ -225,7 +229,7 @@ BEGIN
           ON o.order_id = s.value ->> 'order_id' AND o.user_id = v_user AND COALESCE(o.bot_id, 'smc') = v_bot
          AND o.symbol = p_order ->> 'symbol' AND o.direction = p_order ->> 'direction' AND o.status = 'pending'
     LOOP
-      IF v_sig IS NOT NULL AND v_old.signal_id IS NOT NULL THEN
+      IF v_old.signal_id IS NOT NULL THEN
         BEGIN
           UPDATE public.trade_attribution SET superseded_by_signal_id = v_sig
            WHERE signal_id = v_old.signal_id AND superseded_by_signal_id IS NULL;
@@ -239,7 +243,7 @@ BEGIN
     END LOOP;
 
     -- the new order, carrying the same signal_id
-    v_order := v_order || CASE WHEN v_sig IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('signal_id', v_sig) END;
+    v_order := v_order || jsonb_build_object('signal_id', v_sig);
     SELECT string_agg(format('%I', k), ', ') INTO v_cols FROM jsonb_object_keys(v_order) k;
     EXECUTE format('INSERT INTO public.pending_orders (%1$s) SELECT %1$s FROM jsonb_populate_record(NULL::public.pending_orders, $1) RETURNING id', v_cols)
       USING v_order INTO v_row_id;
@@ -252,10 +256,13 @@ BEGIN
      LIMIT 1;
     RETURN jsonb_build_object('outcome', 'duplicate', 'error', SQLERRM,
       'existing_order_id', v_existing.order_id, 'existing_signal_id', v_existing.signal_id);
+  WHEN SQLSTATE 'P0A15' THEN
+    -- attribution refused: nothing above is kept — no order, no supersede cancel
+    RETURN jsonb_build_object('outcome', 'attribution_write_failed', 'error', SQLERRM);
   END;
 
   RETURN jsonb_build_object('outcome', 'placed', 'order_row_id', v_row_id, 'signal_id', v_sig,
-    'attribution', v_attr_state, 'attribution_error', v_attr_err, 'superseded', to_jsonb(v_superseded));
+    'attribution', v_attr_state, 'superseded', to_jsonb(v_superseded));
 END $function$;
 
 REVOKE ALL ON FUNCTION public.route2_place_order(jsonb, jsonb, jsonb) FROM PUBLIC, anon, authenticated;

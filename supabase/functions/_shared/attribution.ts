@@ -35,6 +35,7 @@ export interface GateVerdict { gate_id: string; mode: "gate" | "log"; passed: bo
 // Untagged safety gates, identified by the reason text runSafetyGates writes.
 const GATE_PATTERNS: [RegExp, string][] = [
   [/^Direction (OK|BLOCKED)/, "direction"],
+  [/^GP filter|^Game plan:/, "game_plan_filter"],
   [/^P\/D zone/, "premium_discount"],
   [/^Structural Conviction/, "structural_conviction"],
   [/ not in enabled instruments$| enabled$/, "instrument"],

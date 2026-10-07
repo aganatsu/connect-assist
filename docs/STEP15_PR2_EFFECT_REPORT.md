@@ -14,7 +14,7 @@
 3. **Supersede must share the new order's transaction.** Otherwise the old order is cancelled before the new attribution row exists, and the `superseded ⇔ linked` check would force `cancelled` and lose the link.
    - The cancel now runs inside `route2_place_order`, with the same fields as before.
    - This is behaviour-equivalent: the unique index allows one live order per symbol + direction, so after cancelling the stale `pending` order the new insert cannot collide.
-4. **Deploy-order safety.** If this code ran before its migration, an RPC-only placement would stop orders. `placeRoute2Order` falls back to the exact legacy cancel + insert when the RPC is missing (tested).
+4. **Deploy order (revised, see below).** There is no unattributed fallback. The migration is always applied before merge; if the function is ever missing, the order is not placed (`RPC_UNAVAILABLE`).
 5. **A UI cancel runs as the signed-in user**, and client roles cannot write attribution. The triggers are therefore `SECURITY DEFINER`.
 6. **Test harness gaps found and fixed:**
    - the Route 2 columns the trigger reads come from later migrations; without them the exception-safe trigger would silently no-op;
@@ -26,7 +26,7 @@
 |---|---|
 | `bot-scanner/index.ts` | `loadConfig` selects `config_version` (canonical md5, same read); `cap.id` minted per decision; stale lookup reads `signal_id`; same-level refresh links `cap.signal_id`; **`route2OrderRow` + `buildAttribution` + `placeRoute2Order`** replace the direct insert and the separate supersede cancel; duplicate → link to the tracked setup (decision status text unchanged); fills write `fill_sizing` (stop pips + inside-floor **recorded only**); real-fill position carries `signal_id` |
 | `_shared/attribution.ts` (new) | pure builder of sections A–D; primary-engine rule; gate classifier; Game Plan alignment |
-| `_shared/route2Placement.ts` (new) | the RPC call + legacy fallback |
+| `_shared/route2Placement.ts` (new) | the RPC call; outcome codes; **no direct write path** |
 | `_shared/smcDecisionCapture.ts` | `id` / `signal_id` on the capture and row |
 | `_shared/propFirmGate.ts` | `profileVersion` on the result (hash of the threshold columns), recording only |
 | `zone-confirmation-scanner` (switched off) | position carries `signal_id`, for consistency |
@@ -47,7 +47,7 @@
   - **delete with no ledger close:** event `position_deleted_unsettled`.
 - **`route2_place_order(attribution, order, supersede)`**: `SECURITY INVOKER`, service role only. One transaction:
   1. read the superseded orders' signal ids;
-  2. insert the attribution row with `supersedes_signal_ids`, inside a **savepoint**; a bad row means the order is placed without `signal_id`;
+  2. insert the attribution row with `supersedes_signal_ids`. **Fail closed:** no `signal_id` → `attribution_missing`; a row the database refuses → `attribution_write_failed`. Either way nothing is written (no order, no supersede cancel);
   3. link `superseded_by` and cancel the old orders, as before;
   4. insert the new order with the same `signal_id`;
   5. on `unique_violation`, roll back all of it and return `duplicate` + the live order's `signal_id`.
@@ -66,7 +66,9 @@
 | Dry-run never becomes a position | hypothetical fill → `hypothetical_fill` / `hypothetical`, no position link; a position insert is refused while locked **and** unlocked ("dry-run order can never become a position"); `outcome_kind real` is refused on a dry-run row | pass |
 | Real fill carries the id into the position | first test: `position.signal_id` = the order's; F + position link written in the claim transaction | pass |
 | Legacy rows work | order placed with no attribution → no signal; full lifecycle + a legacy position settle → 0 attribution rows, 0 events. **All 32 pre-step-15 settlement tests + 11 PR 1 tests still pass** | pass |
-| Attribution never blocks trading | bad attribution → order placed, `attribution: failed`; an erroring attribution update → the order cancel and position insert still succeed; RPC missing → legacy path (TS) | pass |
+| **Invalid attribution → no new order** | invalid row (bad config hash) → `attribution_write_failed`: no order, no attribution row, **the order it would have superseded stays live**; no attribution at all → `attribution_missing`, no order | pass |
+| **Attribution insert failure → no new order** | the database rejects the attribution INSERT → `attribution_write_failed`, 0 orders; other errors (entries lock) still surface as errors | pass |
+| **Lifecycle-write failure never blocks cancel / fill / settlement** | every attribution UPDATE and event INSERT failing: the order cancel, the position insert, **a real fill via `route2_claim_and_fill`** and its settlement all succeed, and the ledger still carries the `signal_id` | pass |
 | Migration idempotent | re-run: triggers / RPC unchanged | pass |
 
 **TypeScript tests (`step15Pr2Attribution.test.ts`, 12):**
@@ -90,7 +92,7 @@
 
 ## Full results
 
-- **Deno:** 3,364 passed / 0 failed (supabase/tests 1,795 + supabase/functions 1,569).
+- **Deno:** 3,369 passed / 0 failed (supabase/tests 1,800 + supabase/functions 1,569).
 - **Frontend:** 366 passed.
 - **`deno check`:** clean on every changed file.
 
@@ -111,3 +113,28 @@
 2. Run a rolled-back verification (one `DO` block on a throwaway account) of place → refresh → supersede → duplicate → touch → confirm → real fill → close.
 3. Merge (CI green). This deploys `bot-scanner` + `zone-confirmation-scanner`.
 4. Verify on the next placed dry-run order: its attribution row, `signal_id` on the order and decision, and events.
+
+
+## Revision 2: new entries fail closed on attribution (requested 2026-10-07)
+
+**Rule:** a new Route 2 order is placed only together with its valid `trade_attribution` row. Otherwise no order is placed and the decision log records the reason:
+
+| Outcome | When | Decision log |
+|---|---|---|
+| `ATTRIBUTION_INVALID` | before any write: the canonical config hash is missing / not 32-hex, or the builder throws | `status = attribution_invalid`, `skipReason = "Order not placed: attribution invalid (…)"` |
+| `ATTRIBUTION_WRITE_FAILED` | the database refuses the attribution row (constraint, store error) or it is missing | `status = attribution_write_failed`, `skipReason = "Order not placed: attribution write failed (…)"` |
+| `RPC_UNAVAILABLE` | `route2_place_order` missing | `status = zone_setup_insert_failed`, `placementCode = RPC_UNAVAILABLE`; no order |
+
+- Placement is atomic, so a refused attribution also leaves the order it would have superseded **live**, rather than cancelling it with nothing to replace it.
+- **Fail open, unchanged:** settlement / money movement, cancellation, expiry, fills and position writes, position close, lifecycle events. Triggers and settlement swallow attribution errors.
+- **Deploy-order fallback removed.** It is not needed: the migration is always applied before merge, while the account is paused and locked.
+
+**Measured effect.** Every dry-run order placed since step 8 (**16**, 10-06 22:05 → 10-07 13:10) was replayed on PGlite through the production builder + `route2_place_order`, with inputs rebuilt from each order's stored record, its decision row and the config hash active at placement:
+
+- **16 / 16 placed, 0 would have been blocked** (no invalid, no write failure);
+- all 16 attribute to `primary_engine = impulse_zone`;
+- Game Plan: 1 aligned, 12 below threshold, 3 neutral.
+
+The replay also found **one gate per order classified `unclassified`: the Game Plan filter** ("GP filter (soft): … REJECTED …" / "Game plan: … aligns …"). It is now classified `game_plan_filter`; 0 unclassified across the 16.
+
+**Remaining risk:** a systematic bug in attribution would stop **all** new entries. This is now loud, not silent: the decision-log statuses above, and the funnel report counts them.

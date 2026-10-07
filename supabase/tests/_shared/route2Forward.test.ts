@@ -246,9 +246,8 @@ Deno.test("9 · terminal reasons are typed and classified, not free text", () =>
 
 Deno.test("every terminal write sets a typed reason", () => {
   // cancel_reason is free text for humans; the analysis reads terminal_reason.
-  // Step 15: the supersede cancel moved into route2_place_order (+ its legacy fallback).
+  // Step 15: the supersede cancel moved into route2_place_order.
   const both = SCANNER + ZCS
-    + Deno.readTextFileSync(new URL("../../functions/_shared/route2Placement.ts", import.meta.url))
     + Deno.readTextFileSync(new URL("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql", import.meta.url)).replaceAll("'", '"');
   for (const r of ["CANCELLED_SL_INVALIDATION", "CANCELLED_IMPULSE_BROKEN",
     "CANCELLED_POSITION_CAP", "CANCELLED_SUPERSEDED", "CANCELLED_REFINED_ZONE_FAILURE",
