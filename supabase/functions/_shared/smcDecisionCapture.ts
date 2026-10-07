@@ -29,6 +29,10 @@ export type ReachedStage =
   | "direction" | "confluence" | "zone" | "ict" | "gates" | "portfolio" | "final";
 
 export interface DecisionCapture {
+  /** Step 15: row id chosen by the caller (known before the end-of-cycle flush). */
+  id?: string;
+  /** Step 15: the trade_attribution this decision placed or re-detected. */
+  signal_id?: string | null;
   scan_cycle_id: string;
   user_id: string;
   bot_id: string;
@@ -167,6 +171,8 @@ export function sanitizeConfigForCapture(cfg: unknown): Record<string, unknown> 
 /** The row written to `smc_scan_decision`, digests included. */
 export function toRow(c: DecisionCapture): Record<string, unknown> {
   return {
+    ...(c.id ? { id: c.id } : {}),
+    signal_id: c.signal_id ?? null,
     scan_cycle_id: c.scan_cycle_id,
     user_id: c.user_id,
     bot_id: c.bot_id,

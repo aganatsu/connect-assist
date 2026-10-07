@@ -100,7 +100,9 @@ Deno.test("hunt: size computed at the actual fill, before the position row; refu
 
 Deno.test("dry-run fills record their fill-time sizing", () => {
   const d = scanner.indexOf("if ((pending as any).dry_run === true) {");
-  assert(/dry_run_context: \{ \.\.\.\(\(pending as any\)\.dry_run_context \?\? \{\}\), fillSizing, fillPrice: actualFillPrice \}/.test(scanner.slice(d, d + 1500)));
+  // Step 15: the same sizing, plus stop distance in pips / inside-floor (recorded only).
+  assert(/dry_run_context: \{ \.\.\.\(\(pending as any\)\.dry_run_context \?\? \{\}\), fillSizing: fillSizingRecord \?\? fillSizing, fillPrice: actualFillPrice \}/.test(scanner.slice(d, d + 1500)));
+  assert(/const fillSizingRecord = fillSizing \? \{\s*\.\.\.fillSizing,/.test(scanner), "the record IS the fill-time sizing, extended");
 });
 
 Deno.test("placement: planned size under the same rule, no 0.5× cut; the record says planned", () => {

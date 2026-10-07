@@ -105,6 +105,8 @@ import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSet
 import { applyLoggedOnlyGates, effectiveRiskPercent, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
+import { buildAttribution } from "../_shared/attribution.ts";
+import { placeRoute2Order } from "../_shared/route2Placement.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
@@ -1052,12 +1054,12 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
   let data: any = null;
   // Try connection-specific config first
   if (connectionId) {
-    const res = await supabase.from("bot_configs").select("id, config_json").eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
+    const res = await supabase.from("bot_configs").select("id, config_json, config_version").eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
     data = res.data;
   }
   // Fall back to global config
   if (!data) {
-    const res = await supabase.from("bot_configs").select("id, config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
+    const res = await supabase.from("bot_configs").select("id, config_json, config_version").eq("user_id", userId).is("connection_id", null).maybeSingle();
     data = res.data;
   }
   // Delegate to shared mapper (single source of truth for field resolution)
@@ -1067,6 +1069,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
   // than whether its value happens to differ from a default. A reference, not
   // a copy, and read in exactly one place.
   (flat as any).__rawConfigJson = data?.config_json ?? null;
+  // Step 15: md5(config_json::text) of exactly these bytes — the change log's
+  // hash, read in the same statement as the config it describes.
+  (flat as any).__configVersion = data?.config_version ?? null;
   return flat;
 }
 
@@ -4371,6 +4376,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "FILL_SIZING_UNAVAILABLE", tier: confirmationSignal.tier });
             continue;
           }
+          // Step 15: the fill-sizing record attribution stores (section F). Stop
+          // distance in pips and whether the fill landed inside the floor are
+          // RECORDED only — the fill-floor policy is unchanged (open decision).
+          const fillFloorPips = Number(((pending as any).dry_run_context?.route2Stop?.floorPips) ?? NaN);
+          const fillSizingRecord = fillSizing ? {
+            ...fillSizing,
+            stopDistancePips: fillSizing.stopDistance / (SPECS[pending.symbol] || SPECS["EUR/USD"]).pipSize,
+            insideFloor: Number.isFinite(fillFloorPips)
+              ? fillSizing.stopDistance / (SPECS[pending.symbol] || SPECS["EUR/USD"]).pipSize < fillFloorPips - 1e-9
+              : null,
+          } : null;
           const signalReason = {
             ...(fillSizing ? { fillSizing } : {}),
             ...parsedSignalReason,
@@ -4453,6 +4469,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             bot_id: BOT_ID,
             order_type: "limit",
             trigger_price: entryPrice.toString(),
+            // Step 15: the order's lifecycle identity follows it into the position.
+            signal_id: (pending as any).signal_id ?? null,
           };
 
           const pendingFillPatch = {
@@ -4475,6 +4493,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             fill_reason: `Confirmed ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
             filled_at: nowStr,
             resolved_at: nowStr,
+            // Step 15: read by the order lifecycle trigger to write section F
+            // atomically with the fill (same transaction as the position insert).
+            fill_sizing: fillSizingRecord,
           };
 
           // Step 13: the account risk gate decides fills too (dry-run included,
@@ -4494,7 +4515,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               ...pendingFillPatch,
               status: "filled",
               fill_reason: `[DRY RUN — hypothetical] ${pendingFillPatch.fill_reason}`,
-              dry_run_context: { ...((pending as any).dry_run_context ?? {}), fillSizing, fillPrice: actualFillPrice },
+              dry_run_context: { ...((pending as any).dry_run_context ?? {}), fillSizing: fillSizingRecord ?? fillSizing, fillPrice: actualFillPrice },
             }).eq("id", (pending as any).id).eq("status", pending.status);
             if (dryErr) console.warn(`[pending] dry-run fill record failed for ${pending.order_id}: ${dryErr.message}`);
             pollCtx.branch = "dry_run_fill";
@@ -5122,6 +5143,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   for (const pair of scanOrder) {
     const cap = newCapture(scanCycleId, userId, BOT_ID, pair, null);
+    // Step 15: the decision row's id, known before any write (rows are flushed
+    // at the end of the cycle). signal_id is set only if this decision placed
+    // or re-detected a tracked Route 2 order.
+    cap.id = crypto.randomUUID();
     decisionCaptures.push(cap);
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
@@ -8063,7 +8088,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // Market evolves — a new setup for the same symbol/direction is a different trade idea
           // with different entry zone, SL/TP, score. Expire the old one and insert fresh.
           const { data: stalePending } = await supabase.from("pending_orders")
-            .select("order_id, entry_price, signal_score")
+            .select("order_id, entry_price, signal_score, signal_id")
             .eq("user_id", userId).eq("bot_id", BOT_ID)
             .eq("symbol", pair).eq("direction", analysis.direction)
             .eq("status", "pending");
@@ -8111,20 +8136,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               size: limitSize,
             }).in("order_id", samePriceOrders.map((s: any) => s.order_id)).eq("user_id", userId);
             console.log(`[pending] ${pair} ${analysis.direction} — setup re-detected at the same level ${limitEntry.price}; refreshed ${samePriceOrders.length} order(s) in place instead of replacing`);
+            // Same tracked setup: the decision links to its lifecycle identity.
+            // The refresh itself is recorded as an event by the DB trigger; the
+            // attribution plan (A–D) cannot change.
+            cap.signal_id = samePriceOrders[0]?.signal_id ?? null;
           }
-          if (movedOrders.length > 0) {
-            const staleIds = movedOrders.map((s: any) => s.order_id);
-            await supabase.from("pending_orders").update({
-              status: "cancelled",
-              terminal_reason: "CANCELLED_SUPERSEDED" as TerminalReason,
-              // resolved_at was never set on this path, unlike every other
-              // cancel. Order lifetime was therefore unmeasurable for the
-              // largest cancellation bucket in the table.
-              resolved_at: new Date().toISOString(),
-              cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${movedOrders[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${movedOrders[0].entry_price})`,
-            }).in("order_id", staleIds).eq("user_id", userId);
-            console.log(`[pending] Expired ${movedOrders.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded, level moved (score ${analysis.score.toFixed(1)})`);
-          }
+          // Superseded orders are cancelled INSIDE route2_place_order, in the
+          // same transaction as the new order and its attribution, so the old
+          // and new records link both ways. Fields written are unchanged.
+          const supersede = movedOrders.map((s: any) => ({
+            order_id: s.order_id as string,
+            cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${movedOrders[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${movedOrders[0].entry_price})`,
+          }));
 
           // Refreshed in place — inserting as well would leave two live orders
           // at the same level for the same symbol and direction.
@@ -8194,7 +8217,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // Zone Story: OBSERVATIONAL ONLY. Recorded here, never consulted.
             zoneStory: (detail as any).unifiedZone ?? null,
           });
-          const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
+          const route2OrderRow: Record<string, unknown> = {
             user_id: userId,
             bot_id: BOT_ID,
             order_id: pendingOrderId,
@@ -8248,18 +8271,103 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               // Legacy would have used Unified's entry/SL/size for this setup.
               legacyGeometryDiffers: !!(detail as any).unifiedDetected,
             } : null,
-          });
+          };
 
-          if (pendingInsertErr) {
-            console.error(`[pending] INSERT failed for ${pair}: ${pendingInsertErr.message}`);
-            detail.status = "zone_setup_insert_failed";
-            detail.error = pendingInsertErr.message;
-            detail.skipReason = /duplicate key/i.test(pendingInsertErr.message)
-              ? "Zone setup already active (see Zone Setups panel)"
-              : `Zone setup insert failed: ${pendingInsertErr.message}`;
+          // ── Step 15: attribution (A–D), built here — the decision as judged ──
+          // Immutable once written. New entries FAIL CLOSED: if the record
+          // cannot be built, no order is placed and the decision log says why.
+          const route2SignalId = crypto.randomUUID();
+          const configVersion = (config as any).__configVersion as string | null;
+          let route2Attribution: Record<string, unknown> | null = null;
+          let attributionInvalid: string | null = null;
+          if (!(typeof configVersion === "string" && /^[0-9a-f]{32}$/.test(configVersion))) {
+            attributionInvalid = `canonical config hash unavailable (${configVersion === null ? "null" : "invalid"})`;
+          } else {
+            try {
+              const pfDecision = propFirmGateResult.decision;
+              const attrCaps = resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig);
+              route2Attribution = buildAttribution({
+                signalId: route2SignalId, decisionId: cap.id as string, scanCycleId, userId, botId: BOT_ID,
+                symbol: pair, direction: analysis.direction as "long" | "short", dryRun: dryRunActive,
+                decisionAt: r2PlacedAt, configVersion, strategyVersion: String((r2Telem as any).strategy_version ?? "unknown"),
+                switches: simp, legacyRiskPercent: pairConfig.riskPerTrade,
+                management: { breakEvenEnabled: pairConfig.breakEvenEnabled, trailingStopEnabled: pairConfig.trailingStopEnabled,
+                  partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
+                caps: attrCaps, impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
+                riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null,
+                promotedFromWatchlist: isPromotedFromStaging && existingStaged ? {
+                  stagedSetupId: existingStaged.id ?? null, initialScore: parseFloat(existingStaged.initial_score),
+                  cycles: (existingStaged.scan_cycles ?? 0) + 1 } : null,
+                entrySource: limitEntrySource, izGateMode,
+                gamePlanEnabled: (config as any).gamePlanEnabled !== false,
+                gamePlanContext: (pairConfig as any)._gamePlanContext ?? null,
+                directionVerdict: (detail as any).directionVerdict ?? null,
+                impulse: izData ? { hasZone: !!izData.hasZone, selectedTF: izData.selectedTF ?? null, impulse: izData.impulse ?? null, bestZone: izData.bestZone ?? null } : null,
+                obFvgZone: limitEntrySource === "legacy" ? { type: limitEntry.zoneType, low: limitEntry.zoneLow, high: limitEntry.zoneHigh } : null,
+                unifiedDetected: (detail as any).unifiedDetected ?? null,
+                unifiedComparison: (detail as any).unifiedComparison ?? null,
+                gateScore: Number.isFinite(analysis.score) ? analysis.score : null,
+                decisionScoreGate: (detail as any).scoreGate ?? null,
+                factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+                gates: gates as any, ictFvgGate: (detail as any).ictFVGGate ?? null, orderRR: (detail as any).orderRR ?? null,
+                loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
+                riskGate: propFirmGateResult.enabled ? {
+                  enabled: true, allowed: propFirmGateResult.allowed, reason: propFirmGateResult.reason,
+                  severity: pfDecision?.severity ?? null, trading_day: propFirmGateResult.tradingDay ?? null,
+                  day_start_balance: pfDecision?.dayStartBalance ?? null, equity: pfDecision?.equity ?? null,
+                  daily_loss_usd: pfDecision?.dailyLossUsd ?? null, thresholds: pfDecision?.thresholds ?? null,
+                } : { enabled: false, allowed: true, reason: "no active risk profile" },
+                zoneId: (r2Telem as any).zone_id ?? null, entryDepth: (pairConfig as any).zoneEntryDepth ?? null,
+                limitPrice: limitEntry.price, stopPrice: limitSL, targetPrice: limitTP, pipSize: spec.pipSize,
+                route2Stop: (detail as any).route2Stop ?? null, plannedSizing: (detail as any).plannedSizing ?? null,
+                balance, expiresAt,
+              });
+            } catch (attrErr: any) {
+              attributionInvalid = `build failed: ${attrErr?.message ?? attrErr}`;
+              route2Attribution = null;
+            }
+          }
+          if (attributionInvalid || !route2Attribution) {
+            const why = attributionInvalid ?? "no attribution record";
+            console.error(`[attribution] ${pair} ${analysis.direction}: ATTRIBUTION_INVALID — order NOT placed: ${why}`);
+            detail.status = "attribution_invalid";
+            (detail as any).attributionOutcome = "ATTRIBUTION_INVALID";
+            detail.error = why;
+            detail.skipReason = `Order not placed: attribution invalid (${why})`;
             scanDetails.push(detail);
             continue;
           }
+
+          const placement = await placeRoute2Order(supabase, { attribution: route2Attribution, order: route2OrderRow, supersede });
+          if (placement.superseded.length > 0) {
+            console.log(`[pending] Expired ${placement.superseded.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded, level moved (score ${analysis.score.toFixed(1)})`);
+          }
+          if (placement.outcome === "attribution_write_failed") {
+            const msg = placement.error ?? "unknown";
+            console.error(`[attribution] ${pair} ${analysis.direction}: ATTRIBUTION_WRITE_FAILED — order NOT placed: ${msg}`);
+            detail.status = "attribution_write_failed";
+            (detail as any).attributionOutcome = "ATTRIBUTION_WRITE_FAILED";
+            detail.error = msg;
+            detail.skipReason = `Order not placed: attribution write failed (${msg})`;
+            scanDetails.push(detail);
+            continue;
+          }
+          if (placement.outcome !== "placed") {
+            const msg = placement.error ?? "unknown";
+            console.error(`[pending] INSERT failed for ${pair}: ${msg}`);
+            detail.status = "zone_setup_insert_failed";
+            detail.error = msg;
+            (detail as any).placementCode = placement.code;
+            detail.skipReason = placement.outcome === "duplicate"
+              ? "Zone setup already active (see Zone Setups panel)"
+              : `Zone setup insert failed: ${msg}`;
+            // A re-detection of the setup already being tracked keeps ITS identity.
+            if (placement.outcome === "duplicate") cap.signal_id = placement.existingSignalId ?? null;
+            scanDetails.push(detail);
+            continue;
+          }
+          cap.signal_id = placement.signalId;
+          (detail as any).signalId = placement.signalId;
 
           pendingPlaced++;
           detail.status = dryRunActive ? "dry_run_setup_active" : isPromotedFromStaging ? "zone_setup_from_watchlist" : "zone_setup_active";

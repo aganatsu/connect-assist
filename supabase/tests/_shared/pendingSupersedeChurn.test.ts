@@ -104,7 +104,8 @@ Deno.test("a refreshed order is not also inserted", () => {
   // Two live orders at the same level for the same symbol and direction would
   // double the position if both filled.
   const refresh = scanner.indexOf('action: "refreshed_in_place"');
-  const insert = scanner.indexOf('from("pending_orders").insert(');
+  // Step 15: the order is placed through placeRoute2Order (route2_place_order).
+  const insert = scanner.indexOf("await placeRoute2Order(supabase,");
   assert(refresh > -1 && insert > refresh, "the guard must come before the insert");
   const between = scanner.slice(refresh, insert);
   assert(/continue;/.test(between), "the refreshed path must skip the insert");
@@ -114,10 +115,11 @@ Deno.test("the supersede path now records resolved_at", () => {
   // Every other cancel sets it. This one did not, which is why
   // avg_life_minutes came back NULL for the largest bucket in the table and
   // order lifetime could not be measured at all.
-  const i = scanner.indexOf("if (movedOrders.length > 0) {");
-  const block = scanner.slice(i, i + 900);
-  assert(/status: "cancelled"/.test(block));
-  assert(/resolved_at: new Date\(\)\.toISOString\(\)/.test(block), "resolved_at must be set");
+  // Step 15: the supersede cancel runs inside route2_place_order, in the same
+  // transaction as the new order (there is no unattributed fallback path).
+  const sql = Deno.readTextFileSync(new URL("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql", import.meta.url));
+  assert(/SET status = 'cancelled', terminal_reason = 'CANCELLED_SUPERSEDED', resolved_at = now\(\)/.test(sql), "RPC sets resolved_at");
+  assert(scanner.includes("placeRoute2Order(supabase, { attribution: route2Attribution, order: route2OrderRow, supersede })"), "superseded orders go through the RPC");
 });
 
 Deno.test("the cancel reason reports the order it actually cancelled", () => {
