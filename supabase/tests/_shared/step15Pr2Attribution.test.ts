@@ -222,3 +222,19 @@ Deno.test("wiring: fills carry the signal and the fill-sizing record; dry-run in
   assert(!/insideFloor[^\n]*continue;/.test(scanner), "inside-floor is recorded, never acted on");
   assert(zcs.includes("signal_id: (pending as any).signal_id ?? null,"), "the (switched-off) second poller is consistent");
 });
+
+// ─── PR 2 follow-up: canonical config hash on the order ─────────────────────
+
+Deno.test("new Route 2 orders carry only the canonical 32-hex config hash — the same value as their attribution", () => {
+  // the telemetry field and the final order row both use bot_configs.config_version
+  assert(/configHash: String\(\(config as any\)\.__configVersion \?\? ""\)/.test(scanner));
+  const set = scanner.indexOf("route2OrderRow.config_hash = configVersion;");
+  const call = scanner.indexOf("const placement = await placeRoute2Order(");
+  const valid = scanner.indexOf("if (!(typeof configVersion === \"string\" && /^[0-9a-f]{32}$/.test(configVersion))) {");
+  assert(valid > 0 && set > valid && call > set, "set after the 32-hex check, right before placement");
+  // the attribution is built from the same variable
+  assert(/buildAttribution\(\{[\s\S]{0,400}configVersion, strategyVersion/.test(scanner));
+  // the 16-hex mapped hash is no longer written onto orders
+  assert(!/configHash: _configHash/.test(scanner));
+  assert(scanner.includes('from("bot_config_history").upsert('), "the 16-hex archive is kept so pre-step-15 orders still resolve");
+});
