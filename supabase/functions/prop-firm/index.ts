@@ -18,10 +18,9 @@ import {
   calculateDailyLossLimit,
   calculateDrawdownFloor,
   calculateProfitTarget,
-  getResetHourUTC,
-  getCESTTradingDay,
   type PropFirmConfig,
 } from "../_shared/propFirmRisk.ts";
+import { tradingDayAt } from "../_shared/accountRiskLimits.ts";
 
 // ─── MetaAPI Region-Aware Fetch ─────────────────────────────────────────────
 // Mirrors the pattern in bot-scanner and paper-trading for reliable connectivity.
@@ -109,9 +108,10 @@ Deno.serve(async (req: Request) => {
         }
 
         // Get today's state
-        const now = new Date();
-        const resetHour = getResetHourUTC(now);
-        const tradingDay = getCESTTradingDay(now, resetHour);
+        // The one trading-day definition (step 13), in the profile's zone.
+        const day = tradingDayAt(new Date(), config.day_boundary_tz || "Europe/Prague");
+        const tradingDay = day.tradingDay;
+        const resetHour = day.startsAt.getUTCHours();
 
         const { data: dailyState } = await supabase
           .from("prop_firm_daily_state")
@@ -151,7 +151,9 @@ Deno.serve(async (req: Request) => {
           .limit(1)
           .maybeSingle();
 
-        if (brokerConn?.account_id && brokerConn?.api_key) {
+        // Only a profile whose equity source is the broker shows broker equity;
+        // the paper profile is measured on the paper ledger (step 13).
+        if ((config.equity_source ?? "paper") === "broker" && brokerConn?.account_id && brokerConn?.api_key) {
           try {
             brokerEquity = await fetchBrokerEquity(brokerConn.account_id, brokerConn.api_key);
             if (brokerEquity !== undefined) {

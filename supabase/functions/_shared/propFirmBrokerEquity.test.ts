@@ -1,59 +1,28 @@
 /**
- * Tests for prop firm broker equity fix and calcPnl NaN guard.
+ * Tests for the prop firm equity source and the calcPnl NaN guard.
  *
- * Verifies:
- * 1. propFirmGate uses brokerEquity when hasBrokerConnection=true (even without isLiveAccount)
- * 2. propFirmGate skips safely when hasBrokerConnection=true but brokerEquity is undefined
- * 3. calcPnl returns zero when entry/current/size is NaN or invalid
+ * Step 13 replaced "broker equity first, skip the check if it is unavailable"
+ * (fail-open, and it measured the PAPER account on whatever MetaAPI account
+ * was connected — "FTMO 2", used for candles) with an explicit profile
+ * equity_source: 'paper' (ledger + open positions) or 'broker' (not supported
+ * until broker reconciliation → entries blocked).
  */
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-// ── Test 1: propFirmGate hasBrokerConnection flag in opts type ──
-Deno.test("propFirmGate opts interface includes hasBrokerConnection", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./propFirmGate.ts", import.meta.url).pathname
-  );
-  // Verify the new flag exists in the opts interface
-  assertStringIncludes(source, "hasBrokerConnection?: boolean");
-  // Verify the safety check uses hasBrokerConnection
-  assertStringIncludes(source, "opts?.isLiveAccount || opts?.hasBrokerConnection");
+// ── Test 1: the gate takes its equity source from the profile, not from a connection ──
+Deno.test("propFirmGate reads equity_source from the profile; no hasBrokerConnection fallback", async () => {
+  const source = await Deno.readTextFile(new URL("./propFirmGate.ts", import.meta.url).pathname);
+  assertStringIncludes(source, `(profile.equity_source ?? "paper") !== "paper"`);
+  assertEquals(source.includes("hasBrokerConnection"), false);
+  assertEquals(source.includes("Broker equity unavailable — prop firm check skipped"), false, "no fail-open skip");
 });
 
-// ── Test 2: propFirmGate uses broker equity when available (not just live) ──
-Deno.test("propFirmGate equity priority comment reflects broker-first approach", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./propFirmGate.ts", import.meta.url).pathname
-  );
-  // Verify the comment documents the new behavior
-  assertStringIncludes(source, "Priority: broker equity (from MetaAPI) > paper balance + floating P&L");
-  assertStringIncludes(source, "even in paper mode");
-});
-
-// ── Test 3: bot-scanner passes hasBrokerConnection flag ──
-Deno.test("bot-scanner passes hasBrokerConnection to runPropFirmGate", async () => {
-  const source = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname
-  );
-  // Verify hasBrokerConnection is passed
-  assertStringIncludes(source, "hasBrokerConnection: !!_scanBrokerConn");
-});
-
-// ── Test 4: bot-scanner fetches broker equity without live-mode restriction ──
-Deno.test("bot-scanner fetches broker equity when any broker connection exists (not just live)", async () => {
-  const source = await Deno.readTextFile(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname
-  );
-  // The old code had: if (account.execution_mode === "live" && _scanBrokerConn)
-  // The new code has: if (_scanBrokerConn)
-  // Verify the live-mode restriction is removed from the equity fetch block
-  assertStringIncludes(source, "if (_scanBrokerConn) {\n      try {\n        const metaAccountId = _scanBrokerConn.account_id;");
-  // Verify the old live-only pattern is NOT present in the equity fetch context
-  const equityFetchSection = source.substring(
-    source.indexOf("// Determine broker equity"),
-    source.indexOf("propFirmGateResult = await runPropFirmGate")
-  );
-  assertEquals(equityFetchSection.includes('account.execution_mode === "live" && _scanBrokerConn'), false,
-    "Should NOT have live-mode restriction on broker equity fetch");
+// ── Test 2: bot-scanner no longer fetches broker equity for the gate ──
+Deno.test("bot-scanner does not fetch broker equity for the prop firm gate", async () => {
+  const source = await Deno.readTextFile(new URL("../bot-scanner/index.ts", import.meta.url).pathname);
+  assertEquals(source.includes("hasBrokerConnection: !!_scanBrokerConn"), false);
+  assertEquals(source.includes("// Determine broker equity"), false);
+  assertStringIncludes(source, "{ rateMap, commissionPerLotRoundTrip: avgCommissionPerLot }");
 });
 
 // ── Test 5: calcPnl NaN guard returns zero for NaN entry ──

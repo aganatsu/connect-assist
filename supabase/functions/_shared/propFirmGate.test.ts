@@ -13,210 +13,50 @@ import {
   propFirmEmergencyClose,
 } from "./propFirmGate.ts";
 
-// ─── Mock Supabase Client ────────────────────────────────────────────────────
+// ─── runPropFirmGate (step 13) ───────────────────────────────────────────────
+// The gate's decisions are covered in supabase/tests/_shared/step13EquityRiskLimits.test.ts.
+// These replace the pre-step-13 tests that asserted the old FAIL-OPEN behaviour
+// (broker equity unavailable → allowed; equity sanity failure → allowed).
 
-function makeMockSupabase(opts: {
-  config?: any;
-  dailyState?: any;
-  prevStates?: any[];
-  insertedEvents?: any[];
-  deletedPositions?: string[];
-  insertedHistory?: any[];
-  accountBalance?: string;
-}) {
-  const insertedEvents: any[] = opts.insertedEvents || [];
-  const deletedPositions: string[] = opts.deletedPositions || [];
-  const insertedHistory: any[] = opts.insertedHistory || [];
+const PROFILE = {
+  id: "test-config", user_id: "test-user", bot_id: "smc", is_active: true,
+  initial_balance: 100_000, max_daily_loss_pct: 0.05, max_overall_loss_pct: 0.10,
+  daily_entry_stop_pct: 0.03, daily_flatten_pct: 0.04,
+  overall_entry_stop_equity: 92_000, overall_flatten_equity: 91_000,
+  day_boundary_tz: "Europe/Prague", equity_source: "paper", close_on_breach: true,
+};
 
+function profileOnly(profile: any, error: any = null) {
   return {
     from: (table: string) => {
-      if (table === "prop_firm_config") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                eq: () => ({
-                  maybeSingle: async () => ({ data: opts.config || null, error: null }),
-                }),
-              }),
-            }),
-          }),
-        };
-      }
-      if (table === "prop_firm_daily_state") {
-        return {
-          select: () => ({
-            eq: (_: string, __: any) => ({
-              eq: (_: string, __: any) => ({
-                maybeSingle: async () => ({ data: opts.dailyState || null, error: null }),
-              }),
-              order: () => ({
-                limit: () => opts.prevStates || [],
-              }),
-            }),
-          }),
-          insert: (data: any) => ({
-            select: () => ({
-              single: async () => ({ data: { ...data, id: "new-state-id" }, error: null }),
-            }),
-          }),
-          update: (_: any) => ({
-            eq: () => Promise.resolve({ error: null }),
-          }),
-        };
-      }
-      if (table === "prop_firm_events") {
-        return {
-          insert: async (data: any) => { insertedEvents.push(data); return { error: null }; },
-        };
-      }
-      if (table === "paper_positions") {
-        return {
-          delete: () => ({
-            eq: async () => { return { error: null }; },
-          }),
-        };
-      }
-      if (table === "paper_trade_history") {
-        return {
-          insert: async (data: any) => { insertedHistory.push(data); return { error: null }; },
-        };
-      }
-      if (table === "paper_accounts") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({ data: { balance: opts.accountBalance || "100000" }, error: null }),
-              }),
-            }),
-          }),
-          update: () => ({
-            eq: () => ({
-              eq: () => Promise.resolve({ error: null }),
-            }),
-          }),
-        };
-      }
-      return {};
+      if (table !== "prop_firm_config") throw new Error(`unexpected read of ${table}`);
+      const b: any = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: profile, error }) };
+      return b;
     },
   };
 }
+const ACCOUNT = { id: "acct", ledger_epoch_id: "ep", balance: 10_000 };
 
-function makeConfig(overrides: any = {}) {
-  return {
-    id: "test-config",
-    user_id: "test-user",
-    bot_id: "smc",
-    is_active: true,
-    initial_balance: 100_000,
-    max_daily_loss_pct: 5,
-    max_drawdown_pct: 10,
-    profit_target_pct: 10,
-    daily_loss_type: "balance_based",
-    drawdown_type: "static",
-    best_day_rule_enabled: false,
-    best_day_rule_pct: 0,
-    ...overrides,
-  };
-}
-
-function makeDailyState(overrides: any = {}) {
-  return {
-    id: "test-state",
-    config_id: "test-config",
-    trading_day: "2026-05-10",
-    day_start_balance: 100_000,
-    day_start_equity: 100_000,
-    highest_equity_today: 100_500,
-    lowest_equity_today: 99_500,
-    current_equity: 100_000,
-    highest_eod_balance_ever: 100_000,
-    end_of_day_balance: 100_000,
-    is_locked: false,
-    locked_at: null,
-    lock_reason: null,
-    trades_today: 0,
-    ...overrides,
-  };
-}
-
-// ─── Test: Live account without broker equity → skip ─────────────────────────
-
-Deno.test("propFirmGate: live account without broker equity skips check (safety)", async () => {
-  const config = makeConfig();
-  const dailyState = makeDailyState();
-  const supabase = makeMockSupabase({ config, dailyState });
-
-  // Simulate: live account, broker equity fetch FAILED (undefined)
-  // Paper balance is $10,000 (wrong — real account is $100K)
-  const result = await runPropFirmGate(
-    supabase, "test-user", "smc", 10_000, [], "scan-001",
-    { brokerEquity: undefined, isLiveAccount: true },
-  );
-
-  assertEquals(result.enabled, true);
-  assertEquals(result.allowed, true);
-  assertEquals(result.shouldCloseAll, false);
-  assert(result.reason.includes("Broker equity unavailable"));
-  assertEquals(result.configId, "test-config");
+Deno.test("propFirmGate: broker equity source is not trusted yet → entries blocked, no liquidation", async () => {
+  const result = await runPropFirmGate(profileOnly({ ...PROFILE, equity_source: "broker" }), "test-user", "smc", ACCOUNT, [], "scan-001", { rateMap: {} });
+  assertEquals([result.enabled, result.allowed, result.shouldCloseAll], [true, false, false]);
+  assert(result.reason.includes("equity_source 'broker'"));
 });
 
-Deno.test("propFirmGate: live account WITH broker equity proceeds normally", async () => {
-  const config = makeConfig();
-  const dailyState = makeDailyState();
-  const supabase = makeMockSupabase({ config, dailyState });
-
-  // Simulate: live account, broker equity = $99,500 (healthy)
-  const result = await runPropFirmGate(
-    supabase, "test-user", "smc", 10_000, [], "scan-002",
-    { brokerEquity: 99_500, isLiveAccount: true },
-  );
-
-  assertEquals(result.enabled, true);
-  // Should proceed to compliance check (not skip)
-  // With $99,500 equity and $90K floor, it should be allowed
-  assertEquals(result.allowed, true);
-  assertEquals(result.shouldCloseAll, false);
+Deno.test("propFirmGate: profile read error → entries blocked, no liquidation (was: allowed)", async () => {
+  const result = await runPropFirmGate(profileOnly(null, { message: "boom" }), "test-user", "smc", ACCOUNT, [], "scan-002", { rateMap: {} });
+  assertEquals([result.enabled, result.allowed, result.shouldCloseAll], [true, false, false]);
 });
 
-// ─── Test: Sanity check (equity < 50% of initial_balance) ────────────────────
-
-Deno.test("propFirmGate: equity sanity check blocks false emergency (paper mode)", async () => {
-  const config = makeConfig({ initial_balance: 100_000 });
-  const dailyState = makeDailyState();
-  const supabase = makeMockSupabase({ config, dailyState });
-
-  // Simulate: paper balance is $10,000 (should be $100K — data error)
-  // No open positions, so equity = paperBalance = $10,000
-  // $10,000 < 50% of $100,000 → sanity check triggers
-  const result = await runPropFirmGate(
-    supabase, "test-user", "smc", 10_000, [], "scan-003",
-    { isLiveAccount: false },
-  );
-
-  assertEquals(result.enabled, true);
-  assertEquals(result.allowed, true);
-  assertEquals(result.shouldCloseAll, false);
-  assert(result.reason.includes("sanity check failed"));
+Deno.test("propFirmGate: an invalid profile (missing buffers) → entries blocked, no liquidation", async () => {
+  const result = await runPropFirmGate(profileOnly({ ...PROFILE, daily_flatten_pct: null }), "test-user", "smc", ACCOUNT, [], "scan-003", { rateMap: {} });
+  assertEquals([result.enabled, result.allowed, result.shouldCloseAll], [true, false, false]);
+  assert(result.reason.includes("invalid risk profile"));
 });
 
-Deno.test("propFirmGate: equity at 60% of initial_balance passes sanity check", async () => {
-  const config = makeConfig({ initial_balance: 100_000 });
-  const dailyState = makeDailyState({ day_start_balance: 60_000 });
-  const supabase = makeMockSupabase({ config, dailyState });
-
-  // $60,000 is 60% of $100K — above the 50% sanity threshold
-  // Should proceed to normal compliance check
-  const result = await runPropFirmGate(
-    supabase, "test-user", "smc", 60_000, [], "scan-004",
-    { isLiveAccount: false },
-  );
-
-  assertEquals(result.enabled, true);
-  // This will trigger a real drawdown breach (60K vs 90K floor)
-  // but the point is it DOES run the check (doesn't skip from sanity)
-  assert(!result.reason.includes("sanity check"));
+Deno.test("propFirmGate: no active profile → gate disabled", async () => {
+  const result = await runPropFirmGate(profileOnly(null), "test-user", "smc", ACCOUNT, [], "scan-004", { rateMap: {} });
+  assertEquals([result.enabled, result.allowed], [false, true]);
 });
 
 // ─── Test: Weekend FX guard in emergency close ───────────────────────────────
