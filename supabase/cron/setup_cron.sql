@@ -85,29 +85,11 @@ select cron.schedule('outcome-tracker-hourly', '15 * * * *', '
   );
   ');
 
-select cron.schedule('prop-firm-daily-reset-summer', '0 22 * * *', '
-  SELECT net.http_post(
-    url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''supabase_url'') || ''/functions/v1/prop-firm-daily-reset'',
-    headers := jsonb_build_object(
-      ''Content-Type'', ''application/json'',
-      ''Authorization'', ''Bearer '' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''service_role_key''),
-      ''x-cron-secret'', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''cron_secret'')
-    ),
-    body := ''{"source": "cron_summer"}''::jsonb
-  );
-  ');
-
-select cron.schedule('prop-firm-daily-reset-winter', '0 23 * * *', '
-  SELECT net.http_post(
-    url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''supabase_url'') || ''/functions/v1/prop-firm-daily-reset'',
-    headers := jsonb_build_object(
-      ''Content-Type'', ''application/json'',
-      ''Authorization'', ''Bearer '' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''service_role_key''),
-      ''x-cron-secret'', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = ''cron_secret'')
-    ),
-    body := ''{"source": "cron_winter"}''::jsonb
-  );
-  ');
+-- prop-firm-daily-reset-summer (22:00 UTC) and prop-firm-daily-reset-winter
+-- (23:00 UTC) are RETIRED (step 13). The trading day has one definition,
+-- tradingDayAt() in _shared/accountRiskLimits.ts, and the day-start balance
+-- comes from the settlement ledger; nothing needs to run at midnight.
+-- Do not re-schedule them. See docs/STEP13_EQUITY_RISK_LIMITS_V1.md.
 
 select cron.schedule('scanner-operational-health-1min', '* * * * *', 'SELECT public.evaluate_scanner_operational_health();');
 

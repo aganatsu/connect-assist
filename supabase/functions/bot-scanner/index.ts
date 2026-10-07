@@ -3503,6 +3503,61 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ── ACCOUNT RISK GATE (step 13) ──
+  // Equity-based daily loss and overall floor from the active risk profile
+  // (prop_firm_config). Evaluated ONCE per cycle, BEFORE the Route 2 hunt, so
+  // its decision applies to fills as well as to new placement. Missing data
+  // blocks entries and fills and never liquidates; only a successful
+  // calculation crossing a flatten threshold closes positions.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const propFirmGateResult: PropFirmGateResult = await runPropFirmGate(
+    supabase, userId, BOT_ID, account, openPosArr, scanCycleId,
+    { rateMap, commissionPerLotRoundTrip: avgCommissionPerLot },
+  );
+  if (propFirmGateResult.enabled) {
+    // Emergency close-all
+    if (propFirmGateResult.shouldCloseAll && openPosArr.length > 0) {
+      console.log(`[prop-firm-gate] 🚨 EMERGENCY CLOSE-ALL triggered: ${propFirmGateResult.reason}`);
+      const closedCount = await propFirmEmergencyClose(
+        supabase, userId, BOT_ID, openPosArr, propFirmGateResult.reason, scanCycleId,
+        {
+          fxMarketClosed,
+          // Same P&L as the breach close: contract size and quote->USD
+          // conversion per instrument, not the flat 100,000 approximation.
+          pnlFor: (p: any, exitPrice: number) => {
+            const pSpec = SPECS[p.symbol] || SPECS["EUR/USD"];
+            const d = p.direction === "long" ? exitPrice - parseFloat(p.entry_price) : parseFloat(p.entry_price) - exitPrice;
+            return d * pSpec.lotUnits * parseFloat(p.size) * getQuoteToUSDRate(p.symbol, rateMap);
+          },
+        },
+      );
+      // Notify via Telegram
+      if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {
+        const msg = `🚨 PROP FIRM EMERGENCY\n\n${propFirmGateResult.reason}\n\nClosed ${closedCount} position(s) to protect account.`;
+        await Promise.all(telegramChatIds.map(async (chatId: string) => {
+          try {
+            await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+              body: JSON.stringify({ chat_id: chatId, message: msg }),
+            });
+          } catch {} // Non-fatal
+        }));
+      }
+      // Return early — no new entries after emergency close
+      const summaryPayload: any = {
+        scan_cycle_id: scanCycleId,
+        scanned_at: new Date().toISOString(),
+        mode: "prop_firm_emergency",
+        reason: propFirmGateResult.reason,
+        positions_closed: closedCount,
+      };
+      await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
+      return new Response(JSON.stringify({ ok: true, mode: "prop_firm_emergency", reason: propFirmGateResult.reason, positions_closed: closedCount }), { headers: { "Content-Type": "application/json" } });
+    }
+  }
+
   // ── Limit Orders: Monitor active pending orders for fills/expiry ──
   let pendingFilled = 0;
   let pendingExpired = 0;
@@ -4399,6 +4454,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             resolved_at: nowStr,
           };
 
+          // Step 13: the account risk gate decides fills too (dry-run included,
+          // so the dry run measures what the live account would do).
+          if (propFirmGateResult.enabled && !propFirmGateResult.allowed) {
+            console.warn(`[pending] ${pending.symbol} ${pending.direction} — account risk gate: ${propFirmGateResult.reason} — not filling ${pending.order_id}`);
+            pollCtx.branch = "prop_firm_locked";
+            pollCtx.after = pending.status;
+            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "PROP_FIRM_LOCKED", tier: confirmationSignal.tier, reason: propFirmGateResult.reason });
+            continue;
+          }
+
           // DRY RUN order: record a hypothetical fill at the confirmation price.
           // Never a position — not even after unlock.
           if ((pending as any).dry_run === true) {
@@ -4697,87 +4762,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ── PROP FIRM COMPLIANCE GATE (Gate 0) ──
-  // Runs ONCE per scan cycle before any per-pair analysis.
-  // Checks: daily loss limit, max drawdown, profit target.
-  // If blocked: skips entire scan loop (saves API credits).
-  // If shouldCloseAll: emergency-closes all open positions.
-  // If size reduction: stores multiplier for lot sizing later.
+  // If entries are not allowed: skips the entire scan loop (no new placement).
   // ═══════════════════════════════════════════════════════════════════════════
-  let propFirmGateResult: PropFirmGateResult | null = null;
+  // Step 13: the gate was evaluated (and any flatten done) once at the start
+  // of the cycle, before the Route 2 hunt — see "ACCOUNT RISK GATE" above.
+  // Here it only stops new placement for the rest of the cycle.
   let propFirmSizeMultiplier = 1.0;
   try {
-    // Determine broker equity — fetch from MetaAPI whenever a broker connection exists
-    // (even in paper mode) so prop firm compliance tracks the real MT5 account
-    let brokerEquity: number | undefined;
-    if (_scanBrokerConn) {
-      try {
-        const metaAccountId = _scanBrokerConn.account_id;
-        const authToken = _scanBrokerConn.api_key;
-        const metaBase = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-        const eqRes = await fetch(`${metaBase}/account-information`, {
-          headers: { "auth-token": authToken },
-        });
-        if (eqRes.ok) {
-          const eqData = await eqRes.json();
-          brokerEquity = parseFloat(eqData.equity ?? eqData.balance ?? "0");
-          console.log(`[prop-firm-gate] Broker equity fetched: $${brokerEquity.toFixed(2)}`);
-        } else {
-          console.warn(`[prop-firm-gate] Broker equity fetch returned ${eqRes.status}`);
-        }
-      } catch (e: any) {
-        console.warn(`[prop-firm-gate] Broker equity fetch failed (falling back to paper): ${e?.message}`);
-      }
-    }
-    propFirmGateResult = await runPropFirmGate(
-      supabase, userId, BOT_ID, balance, openPosArr, scanCycleId,
-      { brokerEquity, isLiveAccount: account.execution_mode === "live", hasBrokerConnection: !!_scanBrokerConn, fxMarketClosed },
-    );
-
     if (propFirmGateResult.enabled) {
       propFirmSizeMultiplier = propFirmGateResult.maxPositionSizeMultiplier;
 
-      // Emergency close-all
-      if (propFirmGateResult.shouldCloseAll && openPosArr.length > 0) {
-        console.log(`[prop-firm-gate] 🚨 EMERGENCY CLOSE-ALL triggered: ${propFirmGateResult.reason}`);
-        const closedCount = await propFirmEmergencyClose(
-          supabase, userId, BOT_ID, openPosArr, propFirmGateResult.reason, scanCycleId,
-          {
-            fxMarketClosed,
-            // Same P&L as the breach close: contract size and quote->USD
-            // conversion per instrument, not the flat 100,000 approximation.
-            pnlFor: (p: any, exitPrice: number) => {
-              const pSpec = SPECS[p.symbol] || SPECS["EUR/USD"];
-              const d = p.direction === "long" ? exitPrice - parseFloat(p.entry_price) : parseFloat(p.entry_price) - exitPrice;
-              return d * pSpec.lotUnits * parseFloat(p.size) * getQuoteToUSDRate(p.symbol, rateMap);
-            },
-          },
-        );
-        // Notify via Telegram
-        if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {
-          const msg = `🚨 PROP FIRM EMERGENCY\n\n${propFirmGateResult.reason}\n\nClosed ${closedCount} position(s) to protect account.`;
-          await Promise.all(telegramChatIds.map(async (chatId: string) => {
-            try {
-              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                body: JSON.stringify({ chat_id: chatId, message: msg }),
-              });
-            } catch {} // Non-fatal
-          }));
-        }
-        // Return early — no new entries after emergency close
-        const summaryPayload: any = {
-          scan_cycle_id: scanCycleId,
-          scanned_at: new Date().toISOString(),
-          mode: "prop_firm_emergency",
-          reason: propFirmGateResult.reason,
-          positions_closed: closedCount,
-        };
-        await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
-        return new Response(JSON.stringify({ ok: true, mode: "prop_firm_emergency", reason: propFirmGateResult.reason, positions_closed: closedCount }), { headers: { "Content-Type": "application/json" } });
-      }
-
-      // Block new entries (soft lock / profit target reached)
+      // Block new entries (entry stop, flatten, lock, or missing risk data)
       if (!propFirmGateResult.allowed) {
         console.log(`[prop-firm-gate] ⛔ New entries BLOCKED: ${propFirmGateResult.reason}`);
         const summaryPayload: any = {
@@ -4797,8 +4792,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
   } catch (e: any) {
-    // Prop firm gate failure is NON-BLOCKING — we don't want a bug here to stop all trading
-    console.warn(`[prop-firm-gate] Error (non-blocking): ${e?.message}`);
+    // runPropFirmGate never throws (it fails closed); this only guards the
+    // scan_history write above.
+    console.warn(`[prop-firm-gate] Error: ${e?.message}`);
   }
 
   // ── Dynamic Scan Skip: management-only mode when max positions reached ──
