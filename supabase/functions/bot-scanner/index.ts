@@ -11,7 +11,7 @@ import {
   type RateProvenance,
 } from "../_shared/rateMapPolicy.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
-import { stylePendingExpiryMinutes, styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
+import { stylePendingExpiryMinutes, styleConfirmationTimeframe, resolveConfirmationTimeframe, MIN_CONFIRMATION_CANDLES, STYLE_CONFIRMATION_TIMEFRAME } from "../_shared/styleTimeframes.ts";
 
 // Attribute this isolate's TwelveData credits. Several functions reach the
 // provider through candleSource; without this they are indistinguishable in
@@ -102,7 +102,7 @@ import {
 } from "../_shared/route2Confirmation.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
-import { applyLoggedOnlyGates, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
+import { applyLoggedOnlyGates, effectiveRiskPercent, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
@@ -1639,8 +1639,9 @@ export async function runSafetyGates(
       const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize * quoteToUSD;
       totalRiskDollars += riskPerUnit;
     } else {
-      // Fallback: assume configured risk% if SL is missing
-      totalRiskDollars += balance * (config.riskPerTrade / 100);
+      // Fallback: assume configured risk% if SL is missing (step 14: the one
+      // risk owner — 0.5% under fill-time sizing, never a separate 1%).
+      totalRiskDollars += balance * (effectiveRiskPercent(resolveSimplification((config as any).__rawConfigJson), config.riskPerTrade) / 100);
     }
   }
   const totalRiskPercent = balance > 0 ? (totalRiskDollars / balance) * 100 : 0;
@@ -1789,7 +1790,7 @@ export async function runSafetyGates(
     }
   }
 
-  // Gate 14: Max Consecutive Losses (with 4-hour auto-reset cooldown)
+  // Gate 14: Max Consecutive Losses (auto-reset after protection.consecutiveLossPauseHours, default 4)
   if (config.maxConsecutiveLosses > 0) {
     const { data: recentHistory } = await sinceReset(supabase.from("paper_trade_history").select("pnl, closed_at")
       .eq("user_id", userId)).order("closed_at", { ascending: false }).limit(config.maxConsecutiveLosses + 1);
@@ -1803,7 +1804,7 @@ export async function runSafetyGates(
         // Check if enough time has passed since the last loss to auto-reset (4 hours)
         const lastLossTime = new Date(recentHistory[0].closed_at).getTime();
         const hoursSinceLast = (Date.now() - lastLossTime) / (1000 * 60 * 60);
-        const resetHours = 4;
+        const resetHours = Number((config as any).consecutiveLossPauseHours) > 0 ? Number((config as any).consecutiveLossPauseHours) : 4;
         if (hoursSinceLast >= resetHours) {
           gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses but auto-reset after ${resetHours}h cooldown (${Math.floor(hoursSinceLast)}h elapsed)` });
         } else {
@@ -2346,9 +2347,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // scanIntervalMinutes is NOT in userProtectedFields, so the style value
   // always wins in the loop below. Resolve it the same way here rather than
   // reordering a block that other things depend on.
+  //
+  // Step 14: with simplification.styleOverridesMode "off" the style writes
+  // nothing — the interval is the stored entry.scanIntervalMinutes.
+  const styleOverridesMode = resolveSimplification((config as any).__rawConfigJson).styleOverridesMode;
   const _intervalStyle = config.tradingStyle?.mode || "day_trader";
-  const intervalMinutes = (STYLE_OVERRIDES as any)[_intervalStyle]?.scanIntervalMinutes
-    ?? config.scanIntervalMinutes ?? 15;
+  const intervalMinutes = styleOverridesMode === "off"
+    ? (config.scanIntervalMinutes ?? 15)
+    : ((STYLE_OVERRIDES as any)[_intervalStyle]?.scanIntervalMinutes ?? config.scanIntervalMinutes ?? 15);
   if (!opts?.isManualScan && !opts?.isManagementOnly) {
     // IMPORTANT: management-only cycles (every 60s) and game-plan rows also write
     // scan_logs rows. If we take the newest row blindly, the elapsed time is always
@@ -2387,7 +2393,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // The management fields (trailing, BE, partial, maxHold) may have been
   // explicitly set by the user to accommodate broker-specific conditions.
   // We only fill in style defaults for fields the user hasn't touched.
-  if (STYLE_OVERRIDES[resolvedStyle]) {
+  //
+  // Step 14: styleOverridesMode "off" skips this entirely — no value is
+  // written by the style. The style remains the declared timeframe profile
+  // (zone slots, direction engine), so the explicit timeframes are checked
+  // against it and a disagreement is logged, never silently resolved.
+  const confirmationTF = resolveConfirmationTimeframe(resolvedStyle, (config as any).confirmationTimeframe, styleOverridesMode);
+  if (styleOverridesMode === "off") {
+    const prof = STYLE_OVERRIDES[resolvedStyle] as any;
+    const mismatch = prof ? [
+      prof.entryTimeframe !== config.entryTimeframe ? `entryTimeframe ${config.entryTimeframe} vs profile ${prof.entryTimeframe}` : null,
+      prof.htfTimeframe !== config.htfTimeframe ? `htfTimeframe ${config.htfTimeframe} vs profile ${prof.htfTimeframe}` : null,
+      confirmationTF !== styleConfirmationTimeframe(resolvedStyle) ? `confirmationTimeframe ${confirmationTF} vs profile ${styleConfirmationTimeframe(resolvedStyle)}` : null,
+    ].filter(Boolean) : [];
+    (config as any).__styleOverridesMode = "off";
+    (config as any).__timeframeProfileMismatch = mismatch.length ? mismatch : null;
+    console.log(`[config] Style overrides OFF — every value from stored config (profile "${resolvedStyle}", entry ${config.entryTimeframe}, htf ${config.htfTimeframe}, confirm ${confirmationTF})`);
+    if (mismatch.length) console.warn(`[config] explicit timeframes disagree with the "${resolvedStyle}" profile: ${mismatch.join("; ")}`);
+  } else if (STYLE_OVERRIDES[resolvedStyle]) {
     const styleDefaults = STYLE_OVERRIDES[resolvedStyle];
     // These fields should NEVER be overwritten by style if the user set them:
     const userProtectedFields = new Set([
@@ -3962,7 +3985,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // touch. Measured hunts before this were 3.4 s and 60.0 s against
             // a 5m confirmation requirement — the two clocks were in
             // incompatible units.
-            const minUntil = confirmationMinObservationUntil(nowStr, styleConfirmationTimeframe(resolvedStyle));
+            const minUntil = confirmationMinObservationUntil(nowStr, confirmationTF);
             const { error: touchErr } = await supabase.from("pending_orders").update({
               status: "awaiting_confirmation",
               zone_touch_time: nowStr,
@@ -4161,7 +4184,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // bot-scanner already IMPORTED STYLE_CONFIRMATION_TIMEFRAME and used
           // it in exactly one place — a console.log at :2174 announcing the
           // right timeframe before hunting on the wrong one.
-          const confirmTF = styleConfirmationTimeframe(resolvedStyle);
+          const confirmTF = confirmationTF;
           const confirmRange = getEntryRange(confirmTF);
           const confirmCandles = await cachedFetch(pending.symbol, confirmTF, confirmRange, "pending_confirmation");
           if (confirmCandles.length < MIN_CONFIRMATION_CANDLES) {
@@ -5139,6 +5162,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
     // Clone config per-instrument to prevent style mutation (Fix #6)
     let pairConfig = { ...config };
+    // Step 14: the one risk-percent owner for every planning / record / market use.
+    const pairRiskPercent = effectiveRiskPercent(simp, pairConfig.riskPerTrade);
     // Apply per-pair gate overrides (if configured for this symbol)
     applyPairOverrides(pairConfig, pair);
 
@@ -7622,7 +7647,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             })(),
             maxCorrelatedPositions: (config as any).maxCorrelatedPositions ?? null,
             maxCorrelation: (config as any).maxCorrelation ?? null,
-            maxPortfolioHeat: (config as any).maxPortfolioHeat ?? null,
+            maxPortfolioHeat: (config as any).portfolioHeat ?? null, // flat key is portfolioHeat (was always null)
             allowSameDirectionStacking: (config as any).allowSameDirectionStacking ?? null,
             openCount: openPosArr.length,
           };
@@ -7671,7 +7696,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const sizingResult = computePositionSize(
           {
             balance,
-            riskPercent: pairConfig.riskPerTrade,
+            riskPercent: pairRiskPercent,
             entryPrice: analysis.lastPrice,
             stopLoss: sl,
             symbol: pair,
@@ -7729,7 +7754,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // none of this survived the scan.
         const sizingProvenance = {
           signalSource: (detail as any).signalSource ?? null,
-          riskPercent: pairConfig.riskPerTrade,
+          riskPercent: pairRiskPercent,
           method: (pairConfig as any).positionSizingMethod || "percent_risk",
           baseLots: sizingResult.baseLots,
           finalLots: size,
@@ -7869,6 +7894,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
         // or when marketFillAtZone is explicitly disabled.
         const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
+        // Step 14: Route 2 only. A setup without a limit entry (or a Market
+        // Fill at Zone) would become a market position — refused.
+        if (!simp.marketEntriesEnabled && !(effectiveLimitEnabled && limitEntry)) {
+          detail.status = "market_entry_disabled";
+          detail.skipReason = "Market entries disabled (simplification.marketEntriesEnabled=false) — Route 2 only";
+          scanDetails.push(detail);
+          continue;
+        }
         if (dryRunActive && !(effectiveLimitEnabled && limitEntry)) {
           // Dry run measures Route 2 only. A market entry would be a real
           // position — refused here (and by the database while locked).
@@ -7993,7 +8026,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const limitSizingResult = computePositionSize(
             {
               balance,
-              riskPercent: pairConfig.riskPerTrade,
+              riskPercent: pairRiskPercent,
               entryPrice: limitEntry.price,
               stopLoss: limitSL,
               symbol: pair,
@@ -8112,7 +8145,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const pendingFrozenDecision = buildFrozenDecision({
             route: "pending-order",
             balanceAtEntry: balance,
-            riskPercent: pairConfig.riskPerTrade,
+            riskPercent: pairRiskPercent,
             sizeLots: limitSize,
             entryPrice: limitEntry.price,
             stopAtEntry: limitSL,
@@ -8441,7 +8474,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const frozenDecision = buildFrozenDecision({
           route: "market-entry",
           balanceAtEntry: balance,
-          riskPercent: pairConfig.riskPerTrade,
+          riskPercent: pairRiskPercent,
           sizeLots: size,
           entryPrice: marketEntryPrice,
           stopAtEntry: sl,
@@ -8709,7 +8742,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                        mirrorResults.push(`${conn.display_name}: skipped (zero balance)`);
                        continue;
                      }
-                     const cappedRisk = Math.min(pairConfig.riskPerTrade, MAX_BROKER_RISK_PERCENT);
+                     const cappedRisk = Math.min(pairRiskPercent, MAX_BROKER_RISK_PERCENT);
                      // Get per-connection commission: user-set takes priority, then auto-detected (per-side × 2 for round-trip)
                      const connUserComm = parseFloat(conn.commission_per_lot ?? "0");
                      const connDetectedComm = parseFloat(conn.detected_commission_per_lot ?? "0") * 2;

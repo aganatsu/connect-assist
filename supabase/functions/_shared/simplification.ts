@@ -44,6 +44,13 @@ export interface SimplificationSwitches {
    *  false it does nothing for the account; every Route 2 lifecycle action
    *  (arm, reset, cancel, expire, confirm, fill) comes from the bot-scanner hunt. */
   secondPollerEnabled: boolean;
+  /** Step 14: "legacy" lets the trading-style preset (STYLE_OVERRIDES) write
+   *  values into the runtime config; "off" means every value comes from the
+   *  stored config. The style stays only as the declared timeframe profile. */
+  styleOverridesMode: "legacy" | "off";
+  /** Step 14: false refuses every market entry (including Market Fill at
+   *  Zone): Route 2 limit orders are the only way in. */
+  marketEntriesEnabled: boolean;
 }
 
 export const LEGACY_SWITCHES: SimplificationSwitches = {
@@ -59,6 +66,8 @@ export const LEGACY_SWITCHES: SimplificationSwitches = {
   maxLotsPerTrade: 20,
   stopAnchor: "market",
   secondPollerEnabled: true,
+  styleOverridesMode: "legacy",
+  marketEntriesEnabled: true,
 };
 
 const mode = (v: unknown, fallback: GateMode): GateMode => (v === "gate" || v === "log" ? v : fallback);
@@ -80,7 +89,18 @@ export function resolveSimplification(raw: Record<string, unknown> | null | unde
     maxLotsPerTrade: typeof s.maxLotsPerTrade === "number" && s.maxLotsPerTrade > 0 ? s.maxLotsPerTrade : LEGACY_SWITCHES.maxLotsPerTrade,
     stopAnchor: s.stopAnchor === "limit" ? "limit" : "market",
     secondPollerEnabled: s.secondPollerEnabled === false ? false : true,
+    styleOverridesMode: s.styleOverridesMode === "off" ? "off" : "legacy",
+    marketEntriesEnabled: s.marketEntriesEnabled === false ? false : true,
   };
+}
+
+/**
+ * Step 14: the one risk-percent owner. Under fill-time sizing (step 9) every
+ * planning, recording and fallback use reads the same number the fill is
+ * sized to; otherwise the legacy risk.riskPerTrade.
+ */
+export function effectiveRiskPercent(sw: SimplificationSwitches, legacyRiskPerTrade: number): number {
+  return sw.sizingMode === "fill_time" ? sw.riskPercent : legacyRiskPerTrade;
 }
 
 export type GateId = "reaction" | "score" | "rr_legacy" | "news_event" | "news_alignment";

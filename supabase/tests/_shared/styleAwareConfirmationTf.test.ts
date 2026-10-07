@@ -39,8 +39,11 @@ Deno.test("bot-scanner resolves it rather than hardcoding 5m", () => {
     "the literal 5m fetch must be gone",
   );
   assert(
-    /const confirmTF = styleConfirmationTimeframe\(resolvedStyle\);/.test(scanner),
-    "resolved from the style the scan is running",
+    // Step 14: resolved once (resolveConfirmationTimeframe) — the style's
+    // timeframe in legacy mode, the explicit config value when overrides are off.
+    /const confirmTF = confirmationTF;/.test(scanner)
+      && scanner.includes("const confirmationTF = resolveConfirmationTimeframe(resolvedStyle, (config as any).confirmationTimeframe, styleOverridesMode);"),
+    "resolved from the style the scan is running (or explicit config when overrides are off)",
   );
   assert(
     // The optional 4th argument is the management telemetry tag, which is

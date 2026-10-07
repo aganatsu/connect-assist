@@ -331,10 +331,24 @@ export const RUNTIME_DEFAULTS = {
   // ── Correlation Filter ──
   correlationFilterEnabled: true,
   maxCorrelatedPositions: 2,
+  /** |correlation| at/above which two pairs count as correlated. */
+  maxCorrelation: 0.8,
 
-  // ── Entry/HTF Timeframes (set by style) ──
+  // ── Entry/HTF Timeframes (set by style; explicit config since step 14) ──
   entryTimeframe: "15min",
   htfTimeframe: "1day",
+  /** Route 2 5-minute confirmation timeframe. null → the style's timeframe. */
+  confirmationTimeframe: null as string | null,
+
+  // ── Game Plan (top-level UI keys; step 14: passed through instead of dropped) ──
+  gamePlanEnabled: true,
+  gamePlanNotify: true,
+  gamePlanRefreshHours: 4,
+  dolTPExtensionEnabled: true,
+  ipdaRangesEnabled: true,
+
+  // ── Gate 14 pause after maxConsecutiveLosses (hours) ──
+  consecutiveLossPauseHours: 4,
 
   // ── Per-Pair Gate Overrides ──
   // Allows per-symbol overrides for key gate thresholds.
@@ -573,7 +587,23 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     scanIntervalMinutes: entry.scanIntervalMinutes ?? raw.scanIntervalMinutes ?? RUNTIME_DEFAULTS.scanIntervalMinutes,
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
+    // Step 14: explicit (was a default only; scannerManagement section 5).
+    structureInvalidationEnabled: exit.structureInvalidationEnabled ?? raw.structureInvalidationEnabled ?? RUNTIME_DEFAULTS.structureInvalidationEnabled,
     slBufferPips: entry.slBufferPips ?? raw.slBufferPips ?? RUNTIME_DEFAULTS.slBufferPips,
+
+    // ── Timeframes (step 14: explicit; previously only the style could set them) ──
+    entryTimeframe: strategy.entryTimeframe ?? raw.entryTimeframe ?? RUNTIME_DEFAULTS.entryTimeframe,
+    htfTimeframe: strategy.htfTimeframe ?? raw.htfTimeframe ?? RUNTIME_DEFAULTS.htfTimeframe,
+    confirmationTimeframe: strategy.confirmationTimeframe ?? raw.confirmationTimeframe ?? RUNTIME_DEFAULTS.confirmationTimeframe,
+
+    // ── Game Plan (step 14). The UI writes these at the top level of
+    //    config_json; the mapper used to drop them, so bot-scanner's
+    //    "!== false" defaults ran Game Plan with the toggle switched off. ──
+    gamePlanEnabled: raw.gamePlanEnabled ?? RUNTIME_DEFAULTS.gamePlanEnabled,
+    gamePlanNotify: raw.gamePlanNotify ?? RUNTIME_DEFAULTS.gamePlanNotify,
+    gamePlanRefreshHours: raw.gamePlanRefreshHours ?? RUNTIME_DEFAULTS.gamePlanRefreshHours,
+    dolTPExtensionEnabled: raw.dolTPExtensionEnabled ?? RUNTIME_DEFAULTS.dolTPExtensionEnabled,
+    ipdaRangesEnabled: raw.ipdaRangesEnabled ?? RUNTIME_DEFAULTS.ipdaRangesEnabled,
 
     // ── SL/TP Method Mappings ──
     slMethod: exit.stopLossMethod ?? exit.slMethod ?? raw.slMethod ?? RUNTIME_DEFAULTS.slMethod,
@@ -636,6 +666,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
 
     // ── Protection ──
     maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
+    consecutiveLossPauseHours: protection.consecutiveLossPauseHours ?? RUNTIME_DEFAULTS.consecutiveLossPauseHours,
     protectionMaxDailyLossDollar: protection.maxDailyLoss ?? protection.dailyLossLimit ?? 0,
     maxDrawdown: Math.min(
       risk.maxDrawdown ?? raw.maxDrawdown ?? RUNTIME_DEFAULTS.maxDrawdown,
@@ -717,8 +748,12 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     ictRiskFVGRuleOfTwoExit: strategy.ictRiskFVGRuleOfTwoExit ?? raw.ictRiskFVGRuleOfTwoExit ?? RUNTIME_DEFAULTS.ictRiskFVGRuleOfTwoExit,
 
     // ── Correlation Filter ──
-    correlationFilterEnabled: strategy.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? RUNTIME_DEFAULTS.correlationFilterEnabled,
-    maxCorrelatedPositions: strategy.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? RUNTIME_DEFAULTS.maxCorrelatedPositions,
+    // Step 14: the UI writes these under `instruments`; the mapper read only
+    // `strategy`, so every UI value was ignored and the defaults ran (on, 2,
+    // and 0.8 — maxCorrelation was never mapped at all).
+    correlationFilterEnabled: instruments.correlationFilterEnabled ?? strategy.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? RUNTIME_DEFAULTS.correlationFilterEnabled,
+    maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? strategy.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? RUNTIME_DEFAULTS.maxCorrelatedPositions,
+    maxCorrelation: instruments.maxCorrelation ?? strategy.maxCorrelation ?? raw.maxCorrelation ?? RUNTIME_DEFAULTS.maxCorrelation,
 
     // ── Limit Orders ──
     limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,

@@ -64,3 +64,18 @@ export function stylePendingExpiryMinutes(
   if (mode === "swing_trader") return Math.max(configuredMinutes, 480);
   return configuredMinutes;
 }
+
+/** Timeframes the Route 2 confirmation can run on. */
+export const CONFIRMATION_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h"] as const;
+
+/**
+ * Step 14: the confirmation timeframe the hunt uses. With style overrides
+ * "off" an explicit, valid `confirmationTimeframe` from config wins; otherwise
+ * (legacy, or the key is missing/invalid) the style's timeframe, as before.
+ */
+export function resolveConfirmationTimeframe(style: unknown, explicit: unknown, styleOverridesMode: "legacy" | "off"): string {
+  if (styleOverridesMode === "off" && typeof explicit === "string" && (CONFIRMATION_TIMEFRAMES as readonly string[]).includes(explicit)) {
+    return explicit;
+  }
+  return styleConfirmationTimeframe(style);
+}

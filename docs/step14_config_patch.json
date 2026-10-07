@@ -1,0 +1,63 @@
+{
+  "_comment": "Step 14 explicit-config patch. Each entry sets one path in config_json (approved 2026-10-07). Applied before merging the step 14 code; values equal today's effective runtime except risk 0.5%, max-hold off, DOL TP extension off, market entries off, ICT risk off.",
+  "set": {
+    "simplification.styleOverridesMode": "off",
+    "simplification.marketEntriesEnabled": false,
+
+    "strategy.entryTimeframe": "5m",
+    "strategy.htfTimeframe": "1h",
+    "strategy.confirmationTimeframe": "5m",
+    "strategy.impulseZoneGateMode": "hard",
+    "strategy.impulseSlCapMultiplier": 1.5,
+    "strategy.ictRiskEnabled": false,
+    "strategy.ictRiskBasePercent": 0.005,
+    "strategy.regimeAdaptiveTPEnabled": false,
+    "strategy.adaptiveTrailingEnabled": false,
+
+    "entry.slBufferPips": 1,
+    "entry.scanIntervalMinutes": 5,
+    "entry.cooldownMinutes": 5,
+    "entry.marketFillAtZone": false,
+    "entry.closeOnReverse": false,
+
+    "exit.maxHoldEnabled": false,
+    "exit.maxHoldHours": 0,
+    "exit.timeBasedExitEnabled": false,
+    "exit.breakEven": false,
+    "exit.breakEvenEnabled": false,
+    "exit.trailingStop": false,
+    "exit.trailingStopEnabled": false,
+    "exit.partialTP": false,
+    "exit.partialTPEnabled": false,
+    "exit.structureInvalidationEnabled": false,
+    "exit.tpRRRatio": 1.1,
+
+    "risk.riskPerTrade": 0.5,
+    "risk.maxConcurrentTrades": 3,
+    "risk.maxOpenPositions": 3,
+    "risk.maxPositionsPerSymbol": 1,
+    "risk.minRR": 1,
+    "risk.minRiskReward": 1,
+    "risk.conflictBlockAt": 3,
+
+    "protection.maxConsecutiveLosses": 6,
+    "protection.consecutiveLossPauseHours": 4,
+
+    "instruments.correlationFilterEnabled": true,
+    "instruments.maxCorrelatedPositions": 2,
+    "instruments.maxCorrelation": 0.8,
+    "instruments.allowedInstruments": {
+      "EUR/USD": true, "GBP/USD": true, "USD/JPY": true, "CHF/JPY": true, "NZD/CAD": true, "NZD/CHF": true,
+      "AUD/USD": false, "BTC/USD": false, "ETH/USD": false, "EUR/GBP": false, "GBP/JPY": false,
+      "NZD/USD": false, "USD/CAD": false, "XAG/USD": false, "XAU/USD": false
+    },
+
+    "pairGateOverrides.EUR/USD.zoneEntryDepth": 0.5,
+
+    "gamePlanEnabled": true,
+    "gamePlanNotify": true,
+    "gamePlanRefreshHours": 4,
+    "dolTPExtensionEnabled": false,
+    "ipdaRangesEnabled": true
+  }
+}
