@@ -20,9 +20,10 @@ with req(version, marker_ok) as (values
   ('20261009010000', (select md5(prosrc) from pg_proc where oid = 'public.reset_paper_account_if_flat(uuid,text,numeric,text)'::regprocedure) = 'de37b22a841c365c3c83a0712b1eb2db'),
   ('20261009020000', not has_function_privilege('anon', 'public.finalize_market_entry(uuid,text,text,jsonb,jsonb,integer,integer,boolean,boolean)', 'execute')
                      and not has_function_privilege('authenticated', 'public.retarget_pending_to_impulse_candidate(uuid,uuid,text)', 'execute')),
-  ('20261009030000', (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.real_exposure_admission_guard()')) = '4ade726424070850f851acef170f36bf')
+  ('20261009030000', coalesce((select md5(prosrc) from pg_proc where oid = to_regprocedure('public.real_exposure_admission_guard()'))
+                              = '4ade726424070850f851acef170f36bf', false))
 ), mig as (
-  select r.version, r.marker_ok,
+  select r.version, coalesce(r.marker_ok, false) as marker_ok,  -- a NULL marker (object absent) counts as missing
          exists (select 1 from supabase_migrations.schema_migrations m where m.version = r.version) as recorded
     from req r
 ), cron_expected(jobname) as (values
