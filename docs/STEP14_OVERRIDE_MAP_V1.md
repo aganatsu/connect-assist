@@ -1,5 +1,11 @@
 # Step 14 — hidden and indirect config overrides: research map (no changes made)
 
+> **Corrections from the Step 16 audit (2026-10-08, re-verified in code and production; see `STEP16_FROZEN_BASELINE_V1.md`):**
+> 1. **`zoneEntryDepth` does not reach Route 2 orders** (§1, "yes: EUR/USD impulse-zone entry depth" is wrong). The limit is the Impulse refined entry, or the zone midpoint (bs:7843-7859). The depth reaches only the Unified engine and attribution. Of the 19 orders after the reset, none sits at 0.55; EUR/USD's 0.50 coincides with the midpoint fallback.
+> 2. **Gate 15 is not delegated** to the step 13 profile (§3 / §5 say the daily-loss gates are). Only Gates 7 and 8 are. Gate 15 ($3,000 net realised loss since UTC midnight) runs alongside the profile (bs:1827).
+> 3. **The conflict counter cannot block** (§7, "active"). With Displacement, AMD, FOTSI and Daily Bias off, at most 2 of the 6 possible opposing factors can count, below the block at 3. There were 0 occurrences in 432 decisions after Step 14.
+> 4. **Correlation is checked at placement only**, not when the hunt fills.
+
 > **Correction (found while building, see `STEP14_EXPLICIT_CONFIG_V1.md`):** the correlation filter's three settings are written by the UI under `instruments.*`, but the mapper read only `strategy.*`. The runtime therefore used the defaults: on, 2, and **0.8**. `maxCorrelation` was never mapped, so the 0.75 shown in the UI never applied. The rows below that call the correlation settings "explicit" are wrong on this point.
 
 **Date:** 2026-10-07.
