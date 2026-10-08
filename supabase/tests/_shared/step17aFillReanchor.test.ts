@@ -64,6 +64,8 @@ Deno.test("order R:R conflict: NZD/CAD (2.5p spread) and NZD/CHF (3.0p) on a 20-
   const nc = reanchorFill(base({ symbol: "NZD/CAD", fillPrice: 0.8030, stop: 0.80115, target: 0.80520, floorPips: 20, capPips: 60 }));
   assertEquals((nc as any).reason, "order_rr_below_min");
   assert((nc as any).detail.includes("0.9750"));
+  assertAlmostEquals((nc as any).effectiveRR, 0.975, 1e-9, "the actual effective R:R is recorded as a number");
+  assertEquals([(nc as any).orderRRMin, (nc as any).floorPips], [1.0, 20]);
   const nf = reanchorFill(base({ symbol: "NZD/CHF", fillPrice: 0.4700, stop: 0.46815, target: 0.47220, floorPips: 20, capPips: 60 }));
   assertEquals((nf as any).reason, "order_rr_below_min");
   assertEquals([SPECS["NZD/CAD"].typicalSpread, SPECS["NZD/CHF"].typicalSpread], [2.5, 3.0]);
@@ -73,6 +75,10 @@ Deno.test("CHF/JPY (2.5p spread, 25p floor) sits on the R:R boundary: the same `
   const r = reanchorFill(base({ symbol: "CHF/JPY", fillPrice: 190.20, stop: 189.97, target: 190.48, pipSize: 0.01, capPips: 66.7 }));
   // effective = 1.1 − 2.5/25 = 1.0 in exact arithmetic; whichever side floating point lands on, the outcome matches orderEffectiveRR + `<`
   assert(r.status === "reanchored" || (r.status === "rejected" && r.reason === "order_rr_below_min"));
+  // no special case: the recorded effective R:R and the decision agree with `< orderRRMin`
+  const eff = (r as any).effectiveRR as number;
+  assert(typeof eff === "number" && Math.abs(eff - 1.0) < 1e-9, "effective R:R ≈ 1.00 recorded either way");
+  assertEquals(r.status === "reanchored", !(eff < 1.0));
   const withCommission = reanchorFill(base({ symbol: "CHF/JPY", fillPrice: 190.20, stop: 189.97, target: 190.48, pipSize: 0.01, capPips: 66.7, commissionPerLot: 7, rateMap: { "USD/JPY": 158, "USD/CHF": 0.8 } }));
   assertEquals((withCommission as any).reason, "order_rr_below_min", "any commission pushes it below");
 });

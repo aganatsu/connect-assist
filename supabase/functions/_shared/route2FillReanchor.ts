@@ -46,7 +46,11 @@ export type ReanchorResult =
     fillToOriginalStopPips: number; stopDistancePips: number; floorPips: number;
     rawRR: number; effectiveRR: number; costInPrice: number;
   }
-  | { status: "rejected"; reason: RejectReason; detail: string; fillToStopPips: number | null; floorPips: number | null };
+  | {
+    status: "rejected"; reason: RejectReason; detail: string; fillToStopPips: number | null; floorPips: number | null;
+    /** order_rr_below_min only: the re-anchored order's R:R exactly as the gate computed it */
+    rawRR?: number; effectiveRR?: number; costInPrice?: number; orderRRMin?: number;
+  };
 
 export function reanchorFill(i: ReanchorInput): ReanchorResult {
   const long = i.direction === "long";
@@ -73,6 +77,7 @@ export function reanchorFill(i: ReanchorInput): ReanchorResult {
       status: "rejected", reason: "order_rr_below_min",
       detail: `re-anchored effective R:R ${orr.effectiveRR.toFixed(4)} (${orr.rawRR.toFixed(2)} raw, cost ${orr.costInPrice}) < ${i.orderRRMin}`,
       fillToStopPips: signedPips, floorPips: floor,
+      rawRR: orr.rawRR, effectiveRR: orr.effectiveRR, costInPrice: orr.costInPrice, orderRRMin: i.orderRRMin,
     };
   }
   return {

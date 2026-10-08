@@ -47,6 +47,11 @@ Under the approved constraints, inside-floor fills on the NZD pairs keep today's
 - `route2_claim_and_fill` still uses the order's stop and `fillSizingRecord`;
 - `dryRunFillGeometry` is called exactly once, in the dry-run branch (test-enforced).
 
+**R:R policy confirmed (2026-10-08):**
+- `orderRRMin` stays 1.0 and the TP ratio stays 1.1.
+- NZD/CAD and NZD/CHF inside-floor fills that fail record `reanchor.status = rejected`, `reason = order_rr_below_min`, and **keep and resolve the original geometry**. This is a re-anchor rejection, **not** a rejected fill.
+- CHF/JPY uses exactly `orderEffectiveRR` + `< orderRRMin`, with no special case. A rejection now records the **numeric** `effectiveRR` / `rawRR` / `costInPrice` / `orderRRMin` (a re-anchor already did). For example, a CHF/JPY fill at 190.20 / stop 189.97 computes effective R:R 1.0000000000000226 and re-anchors.
+
 ## 2. What is recorded
 
 | Where | What |
@@ -123,6 +128,29 @@ Read-only: Step 15 resolver on stored bars, recorded geometry vs re-anchored geo
 | stop on the wrong side | 4 fail |
 
 **Suites:** Deno **3,447 passed, 0 failed**; `deno check` clean.
+
+## 6b. SQL-editor package (`research_snapshots/`, dry-run in the real-Postgres harness)
+
+All four scripts were run against the production pre-migration state (the PR 2 function body):
+
+| File | Harness result |
+|---|---|
+| `PRECHECK_STEP17A_READONLY.sql` (SELECT only) | `current_md5 d50ec8a4…`, `matches_pr2_function t`, SECURITY DEFINER, trigger enabled, PR 3 recorded, 17-A not recorded → `ready_to_apply = t` |
+| `APPLY_STEP17A_FILL_REANCHOR_ATTRIBUTION.sql` (one transaction) | aborts unless the live body is `d50ec8a4…` and 17-A is unrecorded; applies the migration verbatim; aborts unless the result is `d5067c30…`, SECURITY DEFINER and attached → `function_md5 d5067c30…`, `migration_rows 1` |
+| `VERIFY_STEP17A_ROLLED_BACK.sql` (always rolls back) | `STEP17A_VERIFY_PASS` — see the cases below |
+| `POSTCHECK_STEP17A_READONLY.sql` (SELECT only) | `all_pass = t`: migration recorded, `d5067c30…`, SECURITY DEFINER, trigger enabled, 0 verify rows left, account $100,000 paused + locked, 0 positions |
+
+**What the verify proves:**
+- **re-anchored fill:** section F = 1.3191 / 1.32435; section B = 1.319745 (the plan); the event carries `reanchor: reanchored`;
+- **not-needed fill:** geometry unchanged; the event carries `not_needed`;
+- **rejected re-anchor (NZD/CHF):** the fill is still recorded (hypothetical) with the original stop, reason `order_rr_below_min` and effective R:R 0.95;
+- **ordinary fill** with today's record shape: works;
+- **cancel / expiry payloads:** unchanged (exactly `status`, `terminal_reason`, `cancel_reason`);
+- **account / position / ledger fingerprint:** unchanged.
+
+**Fail-closed checks:**
+- re-running the apply is refused;
+- with a **tampered** function: the pre-check reports `ready_to_apply = false`, the apply **aborts**, and nothing is recorded (the function is untouched).
 
 ## 7. Deploy order (after approval)
 
