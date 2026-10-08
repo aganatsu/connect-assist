@@ -18,15 +18,19 @@ import {
 
 const o = (status: string, dry_run: boolean | null) => ({ status, dry_run });
 
-Deno.test("definition: active = pending | awaiting_confirmation (the unique-active index set); real = dry_run IS NOT TRUE", () => {
-  assertEquals([...ACTIVE_ORDER_STATUSES], ["pending", "awaiting_confirmation"]);
+Deno.test("definition: active = pending | awaiting_confirmation | triggered; real = dry_run IS NOT TRUE", () => {
+  // Step 17-C: 'triggered' added (status CHECK allows it; system-reset treats it as live)
+  assertEquals([...ACTIVE_ORDER_STATUSES], ["pending", "awaiting_confirmation", "triggered"]);
+  assertEquals(isActiveRealOrder(o("triggered", false)), true);
   assertEquals(isActiveRealOrder(o("pending", false)), true);
   assertEquals(isActiveRealOrder(o("awaiting_confirmation", false)), true);
   assertEquals(isActiveRealOrder(o("pending", null)), true, "NULL dry_run counts as real (fails safe)");
   assertEquals(isActiveRealOrder(o("pending", true)), false, "dry-run");
   for (const s of ["filled", "cancelled", "expired", "invalidated"]) assertEquals(isActiveRealOrder(o(s, false)), false, `${s} is terminal`);
   const idx = Deno.readTextFileSync(new URL("../../migrations/20260914000000_baseline_schema.sql", import.meta.url));
-  assert(/idx_pending_orders_unique_active ON public\.pending_orders .* WHERE \(status = ANY \(ARRAY\['pending'::text, 'awaiting_confirmation'::text\]\)\)/.test(idx), "same set as the unique-active index");
+  assert(/idx_pending_orders_unique_active ON public\.pending_orders .* WHERE \(status = ANY \(ARRAY\['pending'::text, 'awaiting_confirmation'::text\]\)\)/.test(idx), "the unique-active index set is a subset");
+  const sysReset = Deno.readTextFileSync(new URL("../../functions/system-reset/index.ts", import.meta.url));
+  assert(sysReset.includes('const LIVE_PENDING = ["pending", "awaiting_confirmation", "triggered"];'), "system-reset's live set — the guard matches it");
 });
 
 Deno.test("flat account → allowed (no refusal)", () => {
@@ -89,7 +93,7 @@ Deno.test("queries: every position row of the user; only active-status orders of
   assertEquals(r, { ok: true, exposure: { openPositions: 1, activeRealOrders: 0, activeDryRunOrders: 1 } });
   const pos = db.calls.find((c) => c.table === "paper_positions")!, ord = db.calls.find((c) => c.table === "pending_orders")!;
   assertEquals(pos.filters, [["eq", "user_id", "u1"]], "no status filter on positions: every row is exposure");
-  assertEquals(ord.filters, [["eq", "user_id", "u1"], ["in", "status", ["pending", "awaiting_confirmation"]]]);
+  assertEquals(ord.filters, [["eq", "user_id", "u1"], ["in", "status", ["pending", "awaiting_confirmation", "triggered"]]]);
   assert(ord.select.includes("dry_run") && ord.select.includes("status"));
 });
 
@@ -116,10 +120,11 @@ Deno.test("wiring: the guard runs first in resetPaperAccount — before the acco
   const g = helper.indexOf("await checkResetAllowed(supabase, user.id)");
   const refuse = helper.indexOf("if (!guard.allowed) {");
   const ret = helper.indexOf("return { ok: false, error: guard.refusal.error, refusal: guard.refusal };");
-  const rpc = helper.indexOf('supabase.rpc("reset_paper_account"');
+  const rpc = helper.indexOf('supabase.rpc("reset_paper_account_if_flat"'); // Step 17-C: the guarded database reset
   assert(g > -1 && g < refuse && refuse < ret && ret < rpc, "guard → refuse/return → (only then) RPC");
   assert(helper.indexOf('from("paper_accounts")') > ret, "no read of the account before the guard decides");
-  assertEquals((src.match(/rpc\("reset_paper_account"/g) ?? []).length, 1, "resetPaperAccount is the only reset call in paper-trading");
+  assertEquals((src.match(/rpc\("reset_paper_account_if_flat"/g) ?? []).length, 1, "resetPaperAccount is the only reset call in paper-trading");
+  assertEquals((src.match(/rpc\("reset_paper_account"/g) ?? []).length, 0, "Step 17-C: paper-trading never calls the unguarded reset");
 });
 
 Deno.test("wiring: all three actions reset through resetPaperAccount and return on refusal BEFORE any write (zero partial changes)", () => {
