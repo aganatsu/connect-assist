@@ -31,6 +31,7 @@ import {
   settlePaperPosition,
 } from "../../functions/_shared/paperSettlement.ts";
 import { buildAttribution } from "../../functions/_shared/attribution.ts";
+import { ACTIVE_ORDER_STATUSES, exposureFromRows, resetRefusal } from "../../functions/_shared/accountResetGuard.ts";
 
 const read = (rel: string) => Deno.readTextFileSync(new URL(rel, import.meta.url));
 const BASELINE = read("../../migrations/20260914000000_baseline_schema.sql");
@@ -1470,4 +1471,99 @@ Deno.test("step 15 PR 3: a deferral is recorded once per gap and stops once reso
     }
   }
   await db.close();
+});
+
+
+// ─── Step 16-D: real-exposure guard on balance resets (real Postgres) ───────
+
+/** The paper-trading reset path: guard first (same rows readExposure fetches), then reset_paper_account. */
+async function guardedReset(db: PGlite, amount = 100000) {
+  const pos = (await db.query(`select id from public.paper_positions where user_id = $1`, [USER])).rows;
+  const ord = (await db.query<{ status: string; dry_run: boolean | null }>(
+    `select id, status, dry_run from public.pending_orders where user_id = $1 and status = any($2::text[])`,
+    [USER, [...ACTIVE_ORDER_STATUSES]])).rows;
+  const exposure = exposureFromRows(pos, ord);
+  const refusal = resetRefusal(exposure);
+  if (refusal) return { reset: false as const, refusal, exposure };
+  const r = (await db.query<{ r: Record<string, unknown> }>(
+    `select public.reset_paper_account($1::uuid, 'smc', $2, 'step16d test') as r`, [USER, amount])).rows[0].r;
+  return { reset: r.code === "reset", exposure, r };
+}
+const snapshotAccount = async (db: PGlite) => JSON.stringify((await db.query(
+  `select balance, peak_balance, daily_pnl_base, ledger_epoch_id, ledger_reset_at, is_paused from public.paper_accounts where user_id = $1`, [USER])).rows[0]);
+
+Deno.test("step 16-D defect: a reset with a REAL position open is refused, so its close is credited in full — not posted as $0", async () => {
+  const db = await freshDb({ balance: 104979.62 });
+  const pos = await openPosition(db, { position_id: "chfjpy16", symbol: "CHF/JPY" });
+  const before = await snapshotAccount(db);
+  const ledgerBefore = await count(db, "public.paper_account_ledger");
+
+  const g = await guardedReset(db);
+  assertEquals(g.reset, false);
+  if (g.reset) throw new Error("unreachable");
+  assertEquals(g.refusal.code, "reset_refused_real_exposure");
+  assertEquals(g.exposure, { openPositions: 1, activeRealOrders: 0, activeDryRunOrders: 0 });
+  assertEquals(await snapshotAccount(db), before, "refusal: zero changes — same balance, peak, epoch");
+  assertEquals(await count(db, "public.paper_account_ledger"), ledgerBefore, "no reset entry written");
+  assertEquals(await count(db, "public.paper_positions"), 1, "the position is not deleted");
+
+  // the position then closes normally inside the CURRENT epoch: full P/L, not pre-epoch
+  const r = await settle(db, pos, { exit_price: 180.0, pnl: -558.4, close_reason: "sl_hit" });
+  assertEquals(r.outcome, "settled");
+  if (r.outcome !== "settled") throw new Error("unreachable");
+  assertEquals(r.preEpoch, false, "not a pre-epoch close");
+  assertEquals(r.amount, -558.4, "the loss is credited, not $0");
+  assertEquals(await balance(db), 104979.62 - 558.4);
+
+  // now flat → the same reset proceeds exactly as before (new epoch, balance set)
+  const g2 = await guardedReset(db);
+  assertEquals(g2.reset, true);
+  assertEquals(await balance(db), 100000);
+  await db.close();
+});
+
+Deno.test("step 16-D: an active REAL order (pending or armed) refuses the reset; nothing changes", async () => {
+  for (const status of ["pending", "awaiting_confirmation"]) {
+    const db = await freshDb();
+    await insertPending(db, pendingRow({ status, dry_run: false }));
+    const before = await snapshotAccount(db);
+    const g = await guardedReset(db, 50000);
+    assertEquals(g.reset, false, status);
+    assertEquals(g.exposure, { openPositions: 0, activeRealOrders: 1, activeDryRunOrders: 0 });
+    assertEquals(await snapshotAccount(db), before, `${status}: zero changes`);
+    assertEquals(await count(db, "public.pending_orders where status = $1", [status]), 1, "the order is untouched");
+    await db.close();
+  }
+});
+
+Deno.test("step 16-D: dry-run orders alone do NOT block; the reset proceeds as before and the dry-run orders are left running", async () => {
+  const db = await freshDb();
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  const a = await insertPending(db, pendingRow({ symbol: "EUR/USD", dry_run: true }));
+  const b = await insertPending(db, pendingRow({ symbol: "GBP/USD", dry_run: true, status: "awaiting_confirmation" }));
+  const epochBefore = (await db.query<{ e: string }>(`select ledger_epoch_id e from public.paper_accounts where user_id = $1`, [USER])).rows[0].e;
+  const g = await guardedReset(db, 100000);
+  assertEquals(g.reset, true);
+  assertEquals(g.exposure, { openPositions: 0, activeRealOrders: 0, activeDryRunOrders: 2 });
+  const epochAfter = (await db.query<{ e: string }>(`select ledger_epoch_id e from public.paper_accounts where user_id = $1`, [USER])).rows[0].e;
+  assert(epochAfter !== epochBefore, "a new ledger epoch, exactly as a flat reset does today");
+  const st = (await db.query<{ id: string; status: string }>(`select id, status from public.pending_orders where id = any($1::uuid[]) order by symbol`, [[a, b]])).rows;
+  assertEquals(st.map((x) => x.status), ["pending", "awaiting_confirmation"], "dry-run orders not cancelled");
+  await db.close();
+});
+
+Deno.test("step 16-D: mixed real + dry-run exposure refuses; a flat account (only terminal orders) resets as today", async () => {
+  const db = await freshDb();
+  await insertPending(db, pendingRow({ symbol: "USD/JPY", dry_run: false, entry_price: 158, current_price: 158.1, stop_loss: 157.75, take_profit: 158.5 }));
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  await insertPending(db, pendingRow({ symbol: "EUR/USD", dry_run: true }));
+  const g = await guardedReset(db);
+  assertEquals([g.reset, g.exposure], [false, { openPositions: 0, activeRealOrders: 1, activeDryRunOrders: 1 }]);
+
+  const flat = await freshDb({ balance: 98000 });
+  await insertPending(flat, pendingRow({ status: "cancelled", dry_run: false }));
+  const g2 = await guardedReset(flat, 100000);
+  assertEquals(g2.reset, true);
+  assertEquals([await balance(flat), await peak(flat)], [100000, 100000]);
+  await db.close(); await flat.close();
 });

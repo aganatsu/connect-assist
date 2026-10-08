@@ -174,12 +174,16 @@ Deno.test("global: no references to wrong column daily_pnl_date in paper-trading
 // ═══════════════════════════════════════════════════════════════════════
 // Test 11: reset_account — deletes from all 6 required tables
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("reset_account: clears open positions, after the ledger reset", () => {
+Deno.test("reset_account: never deletes positions — it is refused while any exist (Step 16-D)", () => {
+  // REVERSED 2026-10-08, deliberately. This used to require the positions to be
+  // deleted after the ledger reset. Deleting an open position without settling
+  // it erases its P/L, and any position open across a new epoch would settle
+  // later as pre_epoch_close with $0. The guard in resetPaperAccount now refuses
+  // the reset while a position or an active real order exists, so the account is
+  // flat whenever the reset runs and there is nothing to delete.
   const block = extractBlock(paperSource, "reset_account");
-  const resetAt = block.indexOf("resetPaperAccount(");
-  const deleteAt = block.indexOf('.from("paper_positions").delete()');
-  assert(resetAt > -1 && deleteAt > -1, "both present");
-  assert(resetAt < deleteAt, "a refused reset leaves the positions alone");
+  assert(block.includes("resetPaperAccount("), "resets through the guarded helper");
+  assert(!block.includes('.from("paper_positions").delete()'), "reset_account must not delete positions");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
