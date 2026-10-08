@@ -101,7 +101,10 @@ Deno.test("hunt: size computed at the actual fill, before the position row; refu
 Deno.test("dry-run fills record their fill-time sizing", () => {
   const d = scanner.indexOf("if ((pending as any).dry_run === true) {");
   // Step 15: the same sizing, plus stop distance in pips / inside-floor (recorded only).
-  assert(/dry_run_context: \{ \.\.\.\(\(pending as any\)\.dry_run_context \?\? \{\}\), fillSizing: fillSizingRecord \?\? fillSizing, fillPrice: actualFillPrice \}/.test(scanner.slice(d, d + 1500)));
+  // Step 17-A: the dry-run record is the same fill-time sizing (base), re-sized only when the fill is re-anchored
+  const dry = scanner.slice(d, scanner.indexOf("continue;", d));
+  assert(/baseSizing: \(fillSizingRecord \?\? fillSizing\) as Record<string, unknown> \| null,/.test(dry));
+  assert(/dry_run_context: \{ \.\.\.\(\(pending as any\)\.dry_run_context \?\? \{\}\), fillSizing: dryGeo\.sizing, fillPrice: actualFillPrice, fillReanchor: dryGeo\.record \}/.test(dry));
   assert(/const fillSizingRecord = fillSizing \? \{\s*\.\.\.fillSizing,/.test(scanner), "the record IS the fill-time sizing, extended");
 });
 
