@@ -46,12 +46,21 @@ Writer inventory (traced, repo-wide):
 | paper_positions DELETE | settlement | via `settle_paper_position` (SECURITY DEFINER, manual close) — **kept** |
 | Browser direct writes | — | none (src/ only reads paper_positions) |
 
-Enforcement (row trigger `a_real_exposure_admission`, no table-privilege change, so no UI update/close flow breaks):
-- paper_positions INSERT → server only;
-- pending_orders INSERT → server only (dry-run too: a client dry-run order could hold a symbol+direction);
-- pending_orders status entering pending / awaiting_confirmation / triggered from a non-active status → server only.
-"Server" = `auth.role() = 'service_role'` or a DB-admin session (`postgres` / `supabase_admin`), the predicate already used by
-`_paper_ledger_caller_ok` and the entries-lock guard.
+**Revised enforcement (2026-10-08, after review):**
+- **pending_orders — privilege revocation (primary).** anon / authenticated keep SELECT only; INSERT, UPDATE, DELETE, TRUNCATE,
+  REFERENCES, TRIGGER revoked (the baseline granted all of them; RLS let the owner rewrite any column of an active order).
+  Chosen over a trigger-only fix because it covers every column, DELETE and TRUNCATE (which RLS and row triggers cannot), has
+  no logic to maintain, and no client writer exists (the UI's "Cancel pending" goes through bot-scanner `cancel_pending` with
+  the service-role client).
+- **pending_orders — full-row trigger (defence in depth).** `a_real_exposure_admission` now fires BEFORE INSERT OR UPDATE OR
+  DELETE and refuses every non-server write, because table privileges do not apply inside a SECURITY DEFINER function — exactly
+  how the D1 hole worked. It also carries D3 for real orders entering an active status.
+- **paper_positions — unchanged narrow rule.** BEFORE INSERT: client refused (+ D3). No privilege change; client UPDATE
+  (status refresh, SL/TP edit, mirror ids) and manual close via `settle_paper_position` preserved.
+- "Server" = `auth.role() = 'service_role'` or a DB-admin session (`postgres` / `supabase_admin`).
+- Postcheck in the migration: client write privileges on pending_orders all false, client SELECT true, service_role
+  SELECT/INSERT/UPDATE/DELETE each true, trigger events exact (pending_orders I+U+D, paper_positions I), client UPDATE and DELETE
+  on paper_positions still true; otherwise `D2_ABORTED`.
 
 **Push-back / required companion change:** `place_order` is the only client writer and is intentionally disabled by D2. Today
 it ignores the insert error and returns `{success: true}`, so after D2 the app would report a manual trade that does not exist.
@@ -68,11 +77,18 @@ Manual trading from the app ends — the intended production model.
   always rolled back).
 
 ### Tests (PGlite; `proposed_tests/d1_d2_d3_atomic_unlock.test-snippet.ts`)
-- Existing settlement suite with D2/D3 applied: 73/73 pass (incl. client settle/reset authorisation, Route 2 placement and fill).
-- Dedicated: 25/25 pass — D1 before/after ACL, client calls denied, idempotent, precheck abort; D3 reproduced then closed;
-  dry-run experiment (server dry order + route2_place_order) while locked; atomic unlock with D1+D2; client manual position /
-  real order / dry order / re-activation refused; server real order, route2_place_order, route2_claim_and_fill fill work;
-  client position update and manual close still work; re-lock; unlock refused without D1 / without D2.
+- Existing settlement suite with the revised D2/D3 applied (after mirroring production's pending_orders grants): 73/73 pass.
+- Dedicated: 55/55 pass — D1 (before/after ACL, client calls denied, idempotent, precheck abort); D3 reproduced then closed;
+  locked dry-run experiment (server dry order, server hunt update of a dry order, route2_place_order as service_role); atomic
+  unlock; client manual position refused; client pending_orders INSERT, UPDATE of entry_price / stop_loss / take_profit /
+  direction / symbol / size / expires_at / dry_run, status pending↔awaiting_confirmation, active→cancelled, re-activation, and
+  DELETE all refused, anon update refused, both active orders byte-identical afterwards; client SELECT of own orders works;
+  client write through a SECURITY DEFINER function refused by the row trigger; service_role insert, touch, reset, same-level
+  refresh, supersede/cancel, expire, delete all work; route2_place_order and route2_claim_and_fill as service_role work; client
+  paper_positions update and manual close work; re-lock; unlock refused without D1, without D2, and if client UPDATE on
+  pending_orders is re-granted.
+- Harness fidelity notes: clients via SET SESSION AUTHORIZATION (PostgREST session_user is `authenticator`); service_role given
+  production grants and BYPASSRLS.
 
 ## Original open items (superseded by the section above)
 - D1 legacy `finalize_market_entry` / `finalize_pending_order_fill`: SECURITY DEFINER, no caller check, unused by any

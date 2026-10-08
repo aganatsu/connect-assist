@@ -37,8 +37,11 @@ begin
   end if;
   -- D1 / D2+D3 must be in place: no client RPC or client write can create real exposure after unlock
   if (select count(*) from pg_trigger where tgname = 'a_real_exposure_admission' and tgenabled <> 'D'
-        and tgrelid in ('public.paper_positions'::regclass, 'public.pending_orders'::regclass)) <> 2 then
-    raise exception 'UNLOCK_ABORTED: D2/D3 real-exposure admission triggers are not in place';
+        and ((tgrelid = 'public.pending_orders'::regclass and (tgtype & 28) = 28)      -- INSERT + UPDATE + DELETE
+          or (tgrelid = 'public.paper_positions'::regclass and (tgtype & 28) = 4))) <> 2 -- INSERT
+     or has_table_privilege('authenticated', 'public.pending_orders', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     or has_table_privilege('anon', 'public.pending_orders', 'INSERT, UPDATE, DELETE, TRUNCATE') then
+    raise exception 'UNLOCK_ABORTED: D2/D3 not in place (admission triggers, or client write privileges on pending_orders)';
   end if;
   if has_function_privilege('anon', 'public.finalize_market_entry(uuid,text,text,jsonb,jsonb,integer,integer,boolean,boolean)', 'execute')
      or has_function_privilege('authenticated', 'public.finalize_market_entry(uuid,text,text,jsonb,jsonb,integer,integer,boolean,boolean)', 'execute')

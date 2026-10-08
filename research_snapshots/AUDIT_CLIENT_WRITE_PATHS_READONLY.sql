@@ -1,6 +1,7 @@
 -- Client (anon / authenticated) write paths that can create exposure. READ-ONLY (one SELECT, one row).
 -- Before D1: the four finalize_*/retarget columns are expected TRUE (the hole); after D1 all FALSE.
--- Before D2: d2_admission_triggers 0; after D2: 2. Table INSERT/UPDATE grants stay TRUE by design (D2 is a row trigger).
+-- Before D2: d2_admission_triggers 0 and every pending_orders write privilege TRUE; after D2: triggers 2, pending_orders
+-- client write privileges all FALSE (auth_select_orders stays TRUE); paper_positions privileges unchanged by design.
 select
   has_function_privilege('anon', 'public.finalize_market_entry(uuid,text,text,jsonb,jsonb,integer,integer,boolean,boolean)', 'execute') as anon_finalize_market_entry,
   has_function_privilege('authenticated', 'public.finalize_market_entry(uuid,text,text,jsonb,jsonb,integer,integer,boolean,boolean)', 'execute') as auth_finalize_market_entry,
@@ -18,6 +19,11 @@ select
   has_table_privilege('authenticated', 'public.pending_orders', 'insert') as auth_insert_orders,
   has_table_privilege('authenticated', 'public.pending_orders', 'update') as auth_update_orders,
   has_table_privilege('authenticated', 'public.paper_accounts', 'update') as auth_update_accounts,
+  has_table_privilege('authenticated', 'public.pending_orders', 'delete') as auth_delete_orders,
+  has_table_privilege('authenticated', 'public.pending_orders', 'truncate') as auth_truncate_orders,
+  has_table_privilege('authenticated', 'public.pending_orders', 'select') as auth_select_orders,
+  has_table_privilege('anon', 'public.pending_orders', 'insert') or has_table_privilege('anon', 'public.pending_orders', 'update')
+    or has_table_privilege('anon', 'public.pending_orders', 'delete') as anon_write_orders,
   has_table_privilege('anon', 'public.paper_positions', 'insert') as anon_insert_positions,
   (select string_agg(polname || ':' || polcmd, ', ' order by polname) from pg_policy where polrelid = 'public.paper_positions'::regclass) as position_policies,
   (select string_agg(polname || ':' || polcmd, ', ' order by polname) from pg_policy where polrelid = 'public.pending_orders'::regclass) as order_policies,
