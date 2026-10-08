@@ -107,6 +107,7 @@ import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
 import { buildAttribution } from "../_shared/attribution.ts";
 import { placeRoute2Order } from "../_shared/route2Placement.ts";
+import { splitByLevel } from "../_shared/route2SameLevel.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
@@ -8104,15 +8105,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // mind.
           //
           // When the level has not moved, refresh the existing order in place
-          // instead. expires_at is still extended exactly as a reinsert would
-          // have done, so the effective lifetime is unchanged — this removes
-          // the churn, not the order's shot at filling.
-          const samePriceOrders = (stalePending ?? []).filter((s: any) =>
-            Number(s.entry_price) === Number(limitEntry.price)
-          );
-          const movedOrders = (stalePending ?? []).filter((s: any) =>
-            Number(s.entry_price) !== Number(limitEntry.price)
-          );
+          // instead. expires_at is NOT extended (see below): the order keeps the
+          // fixed ROUTE2_TTL_MINUTES window from its first placement.
+          // Step 16-C: same level within ROUTE2_SAME_LEVEL_TOLERANCE_PIPS, compared
+          // in pip space. Exact float equality turned representation noise
+          // (0.8029075 vs 0.8029074999999999) into a supersede: 14 of 31.
+          const { same: samePriceOrders, moved: movedOrders } =
+            splitByLevel<any>(stalePending ?? [], limitEntry.price, spec.pipSize);
           if (samePriceOrders.length > 0) {
             // Refresh the RISK LEVELS too, not just the score and TTL. The
             // first version of this updated signal_score/expires_at/
