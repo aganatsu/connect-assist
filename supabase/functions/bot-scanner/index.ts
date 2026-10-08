@@ -110,6 +110,7 @@ import { placeRoute2Order } from "../_shared/route2Placement.ts";
 import { splitByLevel } from "../_shared/route2SameLevel.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
 import { dryRunFillGeometry } from "../_shared/route2FillReanchor.ts";
+import { evaluateTpSmallGate } from "../_shared/tpSmallGate.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
@@ -7679,12 +7680,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
         const minTpPips = MIN_TP_PIPS[pair] ?? 12;
         const actualTpPips = Math.abs(tp - analysis.lastPrice) / spec.pipSize;
-        if (actualTpPips < minTpPips) {
+        // Step 17-B: log-only in the locked dry run (measured, tagged, not blocked);
+        // a hard block exactly as before everywhere else.
+        const tpGate = evaluateTpSmallGate({ symbol: pair, tpPips: actualTpPips, minTpPips, dryRunActive });
+        if (tpGate.block) {
           console.log(`[${pair}] TP too small: ${actualTpPips.toFixed(1)} pips < min ${minTpPips} pips. Trade not worth the spread cost. SKIPPING.`);
           detail.status = "skipped_tp_too_small";
           detail.skipReason = `TP ${actualTpPips.toFixed(1)}p < min ${minTpPips}p`;
           scanDetails.push(detail);
           continue;
+        }
+        if (tpGate.record) {
+          console.log(`[${pair}] TP too small (${tpGate.record.reason}) — dry run: LOGGED, not blocked; continuing through the Route 2 gates`);
+          (detail as any).tpTooSmall = tpGate.record;
+          (detail as any).loggedOnlyGates = [...((detail as any).loggedOnlyGates ?? []), { gateId: tpGate.record.gateId, reason: tpGate.record.reason }];
         }
 
         // ── Portfolio Correlation Advisory (post-gate soft check) ──
@@ -8288,6 +8297,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             dry_run_context: dryRunActive ? {
               switches: simp,
               loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
+              // Step 17-B: the logged-only TP gate's measurement (null unless it would have blocked)
+              tpTooSmall: (detail as any).tpTooSmall ?? null,
               scoreGate: (detail as any).scoreGate ?? null,
               ictFVGGate: (detail as any).ictFVGGate ?? null,
               orderRR: (detail as any).orderRR ?? null,
@@ -8345,6 +8356,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
                 gates: gates as any, ictFvgGate: (detail as any).ictFVGGate ?? null, orderRR: (detail as any).orderRR ?? null,
                 loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
+                tpSmallGate: (detail as any).tpTooSmall ?? null,
                 riskGate: propFirmGateResult.enabled ? {
                   enabled: true, allowed: propFirmGateResult.allowed, reason: propFirmGateResult.reason,
                   severity: pfDecision?.severity ?? null, trading_day: propFirmGateResult.tradingDay ?? null,
@@ -9339,6 +9351,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         tradePlaced: d.status === "signal" || d.status === "entered",
         correlationAdvisory: d.correlationAdvisory ?? null,
         staging: d.staging ?? null,
+        // Step 17-B: present only when the logged-only TP gate would have blocked
+        ...(d.tpTooSmall ? { tpTooSmall: d.tpTooSmall } : {}),
       };
       if (c.reached_stage === "portfolio" || c.reached_stage === "gates") c.reached_stage = "final";
     }
