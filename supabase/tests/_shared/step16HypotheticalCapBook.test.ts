@@ -165,7 +165,9 @@ Deno.test("correlation (caps+correlation model only): EUR/USD↔GBP/USD opposite
 
 Deno.test("config classes: totals pool only registered behaviour-equivalent versions; others stay separate", () => {
   assertEquals(configClassOf(CFG), "frozen_impulse_route2_v1");
-  assertEquals(Object.values(CONFIG_EQUIVALENCE_CLASSES).flat(), [CFG], "only the current version is registered until 16-E adds its proof");
+  assertEquals(Object.values(CONFIG_EQUIVALENCE_CLASSES).flat(), [CFG, "1037e6170289f865e4d6618dcf28b94d"],
+    "Step 16-E registered its behaviour-equivalent hash, with its proof (step16eExplicitDefaults.test.ts)");
+  assertEquals(configClassOf("1037e6170289f865e4d6618dcf28b94d"), "frozen_impulse_route2_v1");
   const a = fill({ symbol: "GBP/USD", filled: "2026-10-07T10:00:00Z" });
   const b = fill({ symbol: "EUR/USD", filled: "2026-10-07T10:05:00Z", configVersion: "ffffffffffffffffffffffffffffffff" });
   const rep = buildCapBook([a, b], { nowMs: NOW });

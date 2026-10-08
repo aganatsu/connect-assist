@@ -43,7 +43,13 @@ export const CAP_BOOK_VERSION = "hypothetical_cap_book.v1";
  * silently. Adding a version requires the equivalence proof (Step 16 decision 3).
  */
 export const CONFIG_EQUIVALENCE_CLASSES: Record<string, string[]> = {
-  "frozen_impulse_route2_v1": ["3d5b8fb0d756b3596ed46d133e873a88"],
+  "frozen_impulse_route2_v1": [
+    "3d5b8fb0d756b3596ed46d133e873a88", // Step 14 patch (2026-10-07)
+    // Step 16-E: the same effective configuration with the 26 live default-only
+    // controls stored explicitly — behaviour-equivalent, NOT identical; marks the
+    // explicit frozen-config boundary. Proof: step16eExplicitDefaults.test.ts.
+    "1037e6170289f865e4d6618dcf28b94d",
+  ],
 };
 
 export function configClassOf(version: string | null | undefined): string {

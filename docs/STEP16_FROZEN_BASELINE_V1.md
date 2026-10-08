@@ -124,15 +124,23 @@ paper-trading reads the raw `exit.*Enabled` names; the scanner reads the mapper'
 
 ## 11. Config versions
 
-| Version | Meaning |
-|---|---|
-| `3d5b8fb0d756b3596ed46d133e873a88` | current (Step 14 patch, 2026-10-07 12:55) |
-| *(PR 16-E, planned)* | the same effective configuration with the 13 default-only live controls stored explicitly under `strategy`: `impulseZoneEnabled`, `legStopBufferPct`, `legStopCapMultiple`, `useSimpleDirection`, `useConfirmedTrend`, `confirmedTrendFibFactor`, `confirmedTrendSwingLookback`, `simpleDirectionH1BosLookback`, `simpleDirectionH4ChochLookback`, `zoneChaseMaxZoneWidths`, `thesisValidationEnabled`, `thesisCheckDirectionFlip`, `ictHTFEnabled` |
+| Version | Status | Meaning |
+|---|---|---|
+| `3d5b8fb0d756b3596ed46d133e873a88` | live until the 16-E PATCH | Step 14 patch (2026-10-07 12:55) |
+| `1037e6170289f865e4d6618dcf28b94d` | **proven; becomes live when the approved PATCH is applied** | **Step 16-E: the explicit frozen-config boundary.** The same effective configuration with **26** live code-default-only controls stored explicitly |
 
-**About the planned new version:**
-- It will be a **different hash**. It is *behaviour-equivalent*, not identical, and marks the explicit frozen-config boundary. It is recorded here once the equivalence proof passes and the PATCH is applied.
-- Reports may aggregate across the two only by recording that equivalence explicitly.
-- `atrDerivedFloorsEnabled false` is also default-only. It is not in the 13 because it is an *off* default; listed here so it is not overlooked.
+**The 26 keys:**
+
+| Group | Keys |
+|---|---|
+| Set A, `strategy` (14) | `impulseZoneEnabled` true, `legStopBufferPct` 0.02, `legStopCapMultiple` 1.2, `useSimpleDirection` true, `useConfirmedTrend` true, `confirmedTrendFibFactor` 0.25, `confirmedTrendSwingLookback` 5, `simpleDirectionH1BosLookback` 8, `simpleDirectionH4ChochLookback` 10, `zoneChaseMaxZoneWidths` 1, `thesisValidationEnabled` true, `thesisCheckDirectionFlip` true, `ictHTFEnabled` true, **`atrDerivedFloorsEnabled` false** |
+| Set B, `strategy` (10) | `gamePlanGateMode` "soft", `zoneAnchoredStop` false, `requireUnifiedZone` false, `priceAwareStructureBlocks` false, `thesisDirectionStyleAware` false, `htfBiasHardVeto` false, `ictHTFGateMode` "off", `ictKillZoneGateMode` "off", `ictJudasSwingGateMode` "off", `ictDisplacementMSSGateMode` "off" |
+| Set B, other sections (2) | `sessions.killZoneOnly` false, `entry.limitOrderEnabled` false |
+
+**`1037e617…` is behaviour-equivalent to `3d5b8fb0…`, NOT identical:**
+- **Proof:** `supabase/tests/_shared/step16eExplicitDefaults.test.ts`. The full effective runtime config is byte-identical on all six pairs, as are simplification, caps at every stage, and every behaviour category. The production SQL `docs/step16/STEP16E_PATCH_AB_26.sql` is executed in real Postgres.
+- **Reporting** pools the two only through the explicit registry, `CONFIG_EQUIVALENCE_CLASSES["frozen_impulse_route2_v1"]` (`_shared/hypotheticalCapBook.ts`).
+- **Live status:** this table is updated with the PATCH time and the first scan recording `__configVersion = 1037e617…`.
 
 ## Not part of the baseline (open, decided before unlock)
 
