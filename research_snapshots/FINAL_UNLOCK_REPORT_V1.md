@@ -98,3 +98,14 @@ Manual trading from the app ends — the intended production model.
   place_order; direct REST insert/update under RLS). Option: real positions/orders and real-order activation only by the
   server role. Disables manual trading — product decision.
 - D3 entries lock is keyed by (user, bot): a real position/order under a bot_id with no paper account is not refused.
+
+## Production run order (approved 2026-10-08) — PR #656 head d10f4646
+1. `AUDIT_FINAL_PREUNLOCK_READONLY.sql` (expect 15/17 before D1/D2: D1/D2 markers false) + `PRECHECK_D1_READONLY.sql` (ready_to_apply t)
+2. `APPLY_D1_LEGACY_RPC_REVOKE.sql` → `VERIFY_D1_ROLLED_BACK.sql` (D1_VERIFY_PASS) → `POSTCHECK_D1_READONLY.sql` (all_pass t)
+3. `PRECHECK_D2D3_READONLY.sql` (ready_to_apply t) → `APPLY_D2D3_REAL_EXPOSURE_ADMISSION.sql` → `VERIFY_D2D3_ROLLED_BACK.sql`
+   (D2_VERIFY_PASS) → `POSTCHECK_D2D3_READONLY.sql` (all_pass t)
+4. merge PR #656 (deploys the paper-trading place_order fix; the migrations are already applied)
+5. final pre-unlock audit: `AUDIT_FINAL_PREUNLOCK_READONLY.sql` (17/17, catalog_all_pass t) + `AUDIT_CLIENT_WRITE_PATHS_READONLY.sql`
+6. STOP for explicit unlock approval. `UNLOCK_ATOMIC_AT_ZERO_DRY.sql` is not part of the migration/deploy.
+Both APPLY files embed the PR #656 migration files byte-for-byte (md5 fddc04ac… / 7ab12187…). The D2/D3 VERIFY cannot exercise
+the trigger's client branch in the SQL editor (session_user is postgres); PR #656's tests cover it.

@@ -17,7 +17,10 @@ with req(version, marker_ok) as (values
   ('20261008010000', exists (select 1 from pg_trigger where tgname = 'pending_orders_attribution' and tgenabled <> 'D')),
   ('20261008020000', exists (select 1 from pg_proc where proname = 'attribution_resolve_hypothetical')),
   ('20261009000000', (select md5(prosrc) from pg_proc where oid = 'public.pending_orders_attribution()'::regprocedure) = 'd5067c30cde71430a929504dc9e670d7'),
-  ('20261009010000', (select md5(prosrc) from pg_proc where oid = 'public.reset_paper_account_if_flat(uuid,text,numeric,text)'::regprocedure) = 'de37b22a841c365c3c83a0712b1eb2db')
+  ('20261009010000', (select md5(prosrc) from pg_proc where oid = 'public.reset_paper_account_if_flat(uuid,text,numeric,text)'::regprocedure) = 'de37b22a841c365c3c83a0712b1eb2db'),
+  ('20261009020000', not has_function_privilege('anon', 'public.finalize_market_entry(uuid,text,text,jsonb,jsonb,integer,integer,boolean,boolean)', 'execute')
+                     and not has_function_privilege('authenticated', 'public.retarget_pending_to_impulse_candidate(uuid,uuid,text)', 'execute')),
+  ('20261009030000', (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.real_exposure_admission_guard()')) = '4ade726424070850f851acef170f36bf')
 ), mig as (
   select r.version, r.marker_ok,
          exists (select 1 from supabase_migrations.schema_migrations m where m.version = r.version) as recorded
@@ -34,7 +37,7 @@ with req(version, marker_ok) as (values
     from cron.job j
 )
 select
-  (select count(*) from mig where marker_ok) || '/15' as migration_objects_present,
+  (select count(*) from mig where marker_ok) || '/17' as migration_objects_present,
   (select string_agg(version, ',' order by version) from mig where recorded) as recorded_versions,
   (select string_agg(version, ',' order by version) from mig where not recorded) as not_recorded_but_object_present,
   (select string_agg(version, ',' order by version) from mig where not marker_ok) as object_missing,
@@ -53,7 +56,7 @@ select
   (select string_agg(jobname || ' ' || schedule || ' → ' || target || coalesce(' ' || body, ''), ' | ' order by jobname) from cron where active
       and jobname in ('bot-scanner-every-5min', 'manage-positions-1min')) as scanner_jobs,
   (select coalesce(sum(failed_24h), 0) from cron where active) as cron_failed_24h,
-  coalesce((select count(*) from mig where marker_ok) = 15
+  coalesce((select count(*) from mig where marker_ok) = 17
    and (select count(*) from pg_trigger where not tgisinternal and tgenabled <> 'D'
          and ((tgname = 'paper_positions_serialize_with_reset' and tgrelid = 'public.paper_positions'::regclass)
            or (tgname = 'pending_orders_serialize_with_reset' and tgrelid = 'public.pending_orders'::regclass))) = 2
@@ -65,6 +68,6 @@ select
    and (select mode from public.paper_ledger_guard where id = 1) = 'enforce'
    and not exists (select 1 from cron_expected e where not exists (select 1 from cron c where c.jobname = e.jobname and c.active))
    and not exists (select 1 from cron c where c.active and c.jobname not in (select jobname from cron_expected)), false) as catalog_all_pass;
--- expect: 15/15 | (recorded list) | (scripts that recorded no row, if any) | NULL | 2 | NULL | NO | f | t | f | enforce
+-- expect: 17/17 | (recorded list) | (scripts that recorded no row, if any) | NULL | 2 | NULL | NO | f | t | f | enforce
 --         | (the 8 expected jobs) | NULL | NULL | bot-scanner-every-5min */5 … → bot-scanner | manage-positions-1min * * * * * → bot-scanner {"action":"manage"…}
 --         | 0 | t

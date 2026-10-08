@@ -25,7 +25,7 @@ select
   has_table_privilege('anon', 'public.pending_orders', 'insert') or has_table_privilege('anon', 'public.pending_orders', 'update')
     or has_table_privilege('anon', 'public.pending_orders', 'delete') as anon_write_orders,
   has_table_privilege('anon', 'public.paper_positions', 'insert') as anon_insert_positions,
-  (select string_agg(polname || ':' || polcmd, ', ' order by polname) from pg_policy where polrelid = 'public.paper_positions'::regclass) as position_policies,
-  (select string_agg(polname || ':' || polcmd, ', ' order by polname) from pg_policy where polrelid = 'public.pending_orders'::regclass) as order_policies,
+  (select string_agg(polname || ':' || polcmd::text, ', ' order by polname) from pg_policy where polrelid = 'public.paper_positions'::regclass) as position_policies,
+  (select string_agg(polname || ':' || polcmd::text, ', ' order by polname) from pg_policy where polrelid = 'public.pending_orders'::regclass) as order_policies,
   (select relrowsecurity from pg_class where oid = 'public.paper_positions'::regclass) as positions_rls_on,
   (select relrowsecurity from pg_class where oid = 'public.pending_orders'::regclass) as orders_rls_on;
