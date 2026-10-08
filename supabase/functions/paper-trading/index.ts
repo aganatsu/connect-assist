@@ -13,6 +13,7 @@ import { buildFrozenDecision } from "../_shared/frozenDecision.ts";
 // that decide which analysis cohort it belongs to.
 import { carryToHistory } from "../_shared/smcTradeTelemetry.ts";
 import { settlePaperPosition, settlePaperPartial, describeSettlementMiss } from "../_shared/paperSettlement.ts";
+import { checkResetAllowed, type GuardRefusal } from "../_shared/accountResetGuard.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -1831,15 +1832,36 @@ Deno.serve(async (req) => {
 
     // The only way to set the balance outright: reset_paper_account posts a
     // reset entry to the ledger and starts a new epoch.
-    async function resetPaperAccount(amount: number, reason: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    //
+    // Step 16-D: every balance reset (set_balance, reset_balance_only,
+    // reset_account) goes through here, and the exposure guard runs FIRST. A new
+    // epoch with a real position open would record that position's later close
+    // as pre_epoch_close with $0, so any open position or active real order
+    // refuses the reset before anything is written. Active dry-run orders do
+    // not block; they are counted, logged and left running (never cancelled).
+    async function resetPaperAccount(amount: number, reason: string): Promise<
+      { ok: true; activeDryRunOrders: number } | { ok: false; error: string; refusal?: GuardRefusal }
+    > {
+      const guard = await checkResetAllowed(supabase, user.id);
+      if (!guard.allowed) {
+        console.warn(`[reset] ${reason} refused (${guard.refusal.code}): ${JSON.stringify(guard.refusal.exposure)}`);
+        return { ok: false, error: guard.refusal.error, refusal: guard.refusal };
+      }
+      if (guard.exposure.activeDryRunOrders > 0) {
+        console.log(`[reset] ${reason}: account flat; ${guard.exposure.activeDryRunOrders} active dry-run order(s) left running (not cancelled)`);
+      }
       const { data: acct } = await supabase.from("paper_accounts").select("bot_id").eq("user_id", user.id).maybeSingle();
       const { data, error } = await supabase.rpc("reset_paper_account", {
         p_user_id: user.id, p_bot_id: acct?.bot_id || "smc", p_new_balance: amount, p_reason: reason,
       });
       if (error) return { ok: false, error: error.message };
       if ((data as any)?.reset !== true) return { ok: false, error: `reset refused: ${(data as any)?.code ?? "unknown"}` };
-      return { ok: true };
+      return { ok: true, activeDryRunOrders: guard.exposure.activeDryRunOrders };
     }
+    const resetRefused = (r: { error: string; refusal?: GuardRefusal }) => respond({
+      error: r.error,
+      ...(r.refusal ? { refused: true, code: r.refusal.code, exposure: r.refusal.exposure } : {}),
+    });
 
     // ── Set Balance: set account balance to any custom amount ──
     if (action === "set_balance") {
@@ -1850,26 +1872,31 @@ Deno.serve(async (req) => {
       const balStr = newBalance.toFixed(2);
       // A ledger reset: balance, peak_balance and daily_pnl_base all become the
       // new amount (a fresh starting point, so the drawdown gate doesn't read
-      // $100 against an old $10k peak as 99% down), and a new epoch begins —
-      // positions opened before it can no longer move the balance.
+      // $100 against an old $10k peak as 99% down), and a new epoch begins.
+      // Only when flat (Step 16-D guard in resetPaperAccount).
       const reset = await resetPaperAccount(newBalance, "set_balance");
-      if (!reset.ok) return respond({ error: reset.error });
+      if (!reset.ok) return resetRefused(reset);
       await supabase.from("paper_accounts").update({ kill_switch_active: false }).eq("user_id", user.id);
-      return respond({ success: true, balance: balStr });
+      return respond({ success: true, balance: balStr, active_dry_run_orders: reset.activeDryRunOrders });
     }
 
-    // ── Reset Balance Only: preserves positions, trade history, scan logs, reasonings, post-mortems ──
+    // ── Reset Balance Only: preserves trade history, scan logs, reasonings, post-mortems; refused while real exposure exists (Step 16-D) ──
     if (action === "reset_balance_only") {
       const startBal = await getConfiguredStartingBalance();
       const reset = await resetPaperAccount(parseFloat(startBal), "reset_balance_only");
-      if (!reset.ok) return respond({ error: reset.error });
+      if (!reset.ok) return resetRefused(reset);
       await supabase.from("paper_accounts").update({
         scan_count: 0, signal_count: 0, rejected_count: 0, kill_switch_active: false,
       }).eq("user_id", user.id);
-      return respond({ success: true, startingBalance: startBal });
+      return respond({ success: true, startingBalance: startBal, active_dry_run_orders: reset.activeDryRunOrders });
     }
 
-    // ── Full Reset: clears open positions, resets balance to configured starting balance ──
+    // ── Full Reset: resets balance to configured starting balance and pauses ──
+    //
+    // Step 16-D: it no longer deletes positions. The guard in resetPaperAccount
+    // refuses while any position or active real order exists, so the account
+    // is flat whenever this runs; deleting positions without settling them is
+    // never needed and never happens.
     //
     // Trade history, reasonings, post-mortems, scan logs and trades are KEPT.
     // This used to delete them, which destroyed the record any later
@@ -1878,14 +1905,13 @@ Deno.serve(async (req) => {
     if (action === "reset_account") {
       const startBal = await getConfiguredStartingBalance();
       const reset = await resetPaperAccount(parseFloat(startBal), "reset_account");
-      if (!reset.ok) return respond({ error: reset.error });
-      await supabase.from("paper_positions").delete().eq("user_id", user.id);
+      if (!reset.ok) return resetRefused(reset);
       await supabase.from("paper_accounts").update({
         is_running: false, is_paused: true,
         scan_count: 0, signal_count: 0, rejected_count: 0,
         kill_switch_active: false, execution_mode: "paper",
       }).eq("user_id", user.id);
-      return respond({ success: true, startingBalance: startBal, paused: true });
+      return respond({ success: true, startingBalance: startBal, paused: true, active_dry_run_orders: reset.activeDryRunOrders });
     }
 
     if (action === "set_execution_mode") {
