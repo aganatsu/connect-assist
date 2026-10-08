@@ -243,6 +243,9 @@ try: C.execute("select public.reset_paper_account(%s, 'smc', 1, 'bypass')", (u,)
 except psycopg.errors.InsufficientPrivilege: bypass = "permission denied"
 check(bypass == "permission denied", f"a client cannot call the unguarded reset_paper_account ({bypass})")
 check(guarded(C, u, "own").get("reset") is True, "a client resets its OWN flat account only through the guarded function")
+# The account was entries-locked above for the dry-run case; the step 8 entries_lock_insert_guard
+# (correctly) refuses a real position on a locked account, so unlock before the exposure fixture.
+M.execute("update public.paper_accounts set entries_locked = false where user_id = %s", (u,))
 M.execute("insert into public.paper_positions (user_id, bot_id, position_id, order_id, symbol, direction, size, entry_price, stop_loss, take_profit, current_price, open_time, signal_score) "
           "values (%s, 'smc', 'cli', 'ocli', 'USD/JPY', 'long', 1, 154.9, 154.69, 155.5, 155.5, now(), '46')", (u,))
 check(guarded(C, u, "own-exposed").get("code") == "reset_refused_real_exposure", "a client cannot bypass the exposure check (refused with an open position)")

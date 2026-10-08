@@ -83,3 +83,32 @@ Deno.test("runner coverage: A, B, C1, C2, controls, stress and E are all present
     assert(runner.includes(s), s);
   }
 });
+
+Deno.test("runner fixture: Scenario E unlocks the account before its real exposure position (the step 8 entries-lock guard refuses it otherwise)", () => {
+  const lock = runner.indexOf('M.execute("update public.paper_accounts set entries_locked = true where user_id = %s", (u,))');
+  const unlock = runner.indexOf('M.execute("update public.paper_accounts set entries_locked = false where user_id = %s", (u,))');
+  const fixture = runner.indexOf("'cli', 'ocli'");
+  assert(lock > 0 && unlock > lock && fixture > unlock, "lock (dry-run case) → unlock → real exposure position, in that order");
+  // no other real position / order insert happens between the lock and the unlock
+  const between = runner.slice(lock, unlock);
+  assert(!/insert into public\.paper_positions/.test(between), "no real position inserted while locked");
+  assert(!/order_sql\(u, "[^"]+"\)(?!, dry=True)/.test(between.replace(/order_sql\(u, "dry17c", dry=True\)/, "")), "only the dry-run order is placed while locked");
+});
+
+Deno.test("runner fixture, replayed in Postgres: locked → the guard refuses the real position (the first-run failure); unlocked → it inserts and the guarded reset refuses on exposure", async () => {
+  const db = await newPglite();
+  await db.exec(await buildBootstrapSql());
+  await db.exec(`insert into auth.users (id) values ('${U}'); insert into public.paper_accounts (user_id, bot_id, balance, peak_balance, daily_pnl_base) values ('${U}', 'smc', 97000, 97000, 97000);
+    update public.paper_accounts set entries_locked = true where user_id = '${U}';`);
+  await db.query(order("dryE").replace("false) returning", "true) returning"));
+  const g = (await db.query(guarded)).rows[0].r;
+  assertEquals([g.reset, g.exposure.activeDryRunOrders], [true, 1], "dry-run only → reset proceeds");
+  let refused = "";
+  try { await db.query(pos("cliLocked")); } catch (e) { refused = String((e as Error).message); }
+  assert(refused.includes("entries locked"), `the step 8 guard refuses a real position on a locked account: ${refused}`);
+  await db.exec(`update public.paper_accounts set entries_locked = false where user_id = '${U}'`);
+  await db.query(pos("cli"));
+  const g2 = (await db.query(guarded)).rows[0].r;
+  assertEquals([g2.reset, g2.code, g2.exposure.openPositions], [false, "reset_refused_real_exposure", 1]);
+  await db.close();
+});

@@ -1,11 +1,10 @@
 # Step 17-C — atomic reset / exposure serialisation: design and effect report
 
-**Status:** built; PR open for review.
+**Status:** built; PR open for review. **External two-session PostgreSQL proof: PASSED** (2026-10-08; §7b).
 
 **Not done:**
 - the migration is **not applied**;
-- the PR is **not merged**;
-- the **two-session PostgreSQL proof is still outstanding**. It will be run on another computer with real PostgreSQL. This machine's policy denies SysV shared memory (`shmget` → EPERM), so no real Postgres server can start here.
+- the PR is **not merged**.
 
 **Unchanged:**
 - the account stays $100,000, paused and entries-locked;
@@ -160,7 +159,40 @@ Trigger functions need no EXECUTE grant to fire. Every function is `REVOKE ALL �
 
 **CI guard:** `supabase/tests/_shared/step17cConcurrencyRunner.test.ts` checks that the schema builder still builds and loads, runs the runner's flows sequentially, and pins its safety guards and scenario coverage.
 
-## 8. Tests (single-session; real concurrency is the outstanding external proof)
+## 7b. External two-session proof — PASSED (2026-10-08)
+
+**Setup:** run by the operator on a separate Mac against **PostgreSQL 16.15**, a disposable database, with the committed runner and `--iterations 60`. This Mac cannot start PostgreSQL (SysV shared memory denied), so the run was external.
+
+**First run:** exposed a **runner fixture bug** in Scenario E, not a defect in the design.
+- E sets `entries_locked = true` for the dry-run case, then inserts a REAL position for the exposure-bypass check.
+- The step 8 `entries_lock_insert_guard` (BEFORE INSERT on `paper_positions`) correctly refused it: "entries locked".
+- **Validated against the code:** nothing in E unlocked the account (the system-reset call does not touch `entries_locked`). Scenarios A–D use freshly created, unlocked accounts and were unaffected.
+- **Fix (committed):** unlock the disposable account immediately before the exposure fixture.
+- **Regression guards** (`step17cConcurrencyRunner.test.ts`):
+  - a source check that the order is lock → unlock → real fixture, with nothing real inserted while locked;
+  - a Postgres replay of E's sequence: locked → the guard refuses the real position (the first-run failure); unlocked → it inserts and the guarded reset refuses on exposure.
+  - Mutation check: removing the unlock fails the test.
+
+**Second run** (database dropped and recreated). Results as reported by the operator:
+
+| Scenario | Result |
+|---|---|
+| A: fill first → reset second | PASS |
+| B: reset first → fill second | PASS |
+| C1: real order first → reset second | PASS |
+| C2: reset first → real order second | PASS |
+| controls: the old position $0 race and the order-escape race reproduce with the triggers removed | PASS |
+| D: 60 randomised races | **violations 0, deadlocks 0, errors 0** |
+| E: dry-run-only reset; service-role system-reset; authenticated cannot call the unguarded reset; owner can use the guarded reset; exposure bypass blocked; cross-user reset blocked | PASS |
+| **final** | **`=== RESULT: ALL PASS ===`** |
+
+**Transcript:** written on the external machine to `supabase/tests/concurrency/step17c/two_session_transcript.txt`. It is git-ignored by design and **not committed**. It can be added under `docs/step17/` as an artifact if wanted.
+
+**Why the pass is consistent with the design:**
+- the runner checks blocking with `pg_blocking_pids` (A, B, C1, C2), and the clock ordering with times taken inside each transaction (B, C2, stress);
+- the controls prove the test can detect both bugs: with the triggers removed it reproduces the $0 settlement and the escaped order, so a passing run is meaningful.
+
+## 8. Tests (single-session; the concurrency proof is §7b)
 
 **`paperSettlementLedger.test.ts`** (real Postgres via PGlite, migration applied), 7 × 17-C:
 - guarded refusals (real position; real `pending` / `awaiting_confirmation`; real `triggered`) with no data change;
@@ -170,7 +202,7 @@ Trigger functions need no EXECUTE grant to fire. Every function is `REVOKE ALL �
 - the order trigger is attached (`BEFORE INSERT OR UPDATE OF status`), excludes dry-run, and real / dry order writes still work;
 - the full ACL matrix; SECURITY DEFINER with a fixed `search_path`.
 
-**`step17cConcurrencyRunner.test.ts`** (4): the runner's schema builder, flows, safety and coverage.
+**`step17cConcurrencyRunner.test.ts`** (6): the runner's schema builder, flows, safety and coverage, plus the Scenario E fixture regression (source order + Postgres replay).
 
 **Updated:**
 - "a signed-in user cannot … reset another user's account": a client now gets `permission denied` on the unguarded reset, and `forbidden` from the guarded one;
