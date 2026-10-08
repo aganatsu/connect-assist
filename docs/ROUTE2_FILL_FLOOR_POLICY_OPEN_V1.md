@@ -1,17 +1,19 @@
 # Route 2 fill vs the stop floor — open policy question (documented, NOT fixed)
 
-**Status:** decision required before unlock. Step 14 deliberately does not change this.
+**Status:** decision required before unlock. Step 14 and Step 16 deliberately do not change this. Tracked with the other open item in `PRE_UNLOCK_DECISIONS_V1.md`.
+
+> **Update 2026-10-08 (16-A):** the sample is now 7 dry-run fills, and **4 landed inside the floor**: 0.72, 4.95, 1.85 and **6.45** pips. That is more than "slightly". The floor is **per pair** (`MIN_SL_PIPS`): 25 pips on GBP/USD, USD/JPY and CHF/JPY; 20 pips on EUR/USD, NZD/CAD and NZD/CHF. The full table is in `PRE_UNLOCK_DECISIONS_V1.md` §1; the two rows below are the original 10-06/07 observation.
 
 ## The issue
 
-- **Placement:** step 10 anchors the Route 2 stop to the order's **limit** price and guarantees `|limit − stop| ≥ floor` (25 pips on the JPY pairs).
+- **Placement:** step 10 anchors the Route 2 stop to the order's **limit** price and guarantees `|limit − stop| ≥ floor` (per pair: 25 pips on GBP/USD, USD/JPY and CHF/JPY; 20 pips on EUR/USD, NZD/CAD and NZD/CHF).
 - **Fill:** the hunt fills at the **confirmation price**, which can differ from the limit by a fraction of a pip or more. The absolute stop doesn't move.
   - A fill **better** than the limit (higher for a short, lower for a long) sits closer to the stop, so the distance from the actual fill can be **slightly inside the floor**.
   - A worse fill sits farther away.
 
 Fill-time sizing (step 9) sizes to the actual fill → stop distance, so **dollar risk stays at 0.5% either way**. What is breached is the floor's *noise* purpose: the stop is closer to price than the rule intends.
 
-## Measured (dry run, 2026-10-06/07)
+## Measured (dry run, 2026-10-06/07; first two fills, see the update above)
 
 | Order | Pair | Limit | Fill | Stop | Limit→stop | **Fill→stop** | vs 25p floor | Lots | Risk |
 |---|---|---|---|---|---|---|---|---|---|
