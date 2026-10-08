@@ -1607,3 +1607,27 @@ Deno.test("step 17-A: cancel / expiry events are unchanged (no fill_sizing key)"
   assertEquals(Object.keys(ev.detail).sort(), ["cancel_reason", "status", "terminal_reason"]);
   await db.close();
 });
+
+// ─── Step 17-B: the logged-only TP gate is stored by the existing schema ────
+
+Deno.test("step 17-B: a dry-run order tagged tp_too_small — attribution stores the verdict with its numbers and the logged-only tag (no migration)", async () => {
+  const db = await freshDb();
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  const a = attrPayload({
+    dryRun: true, symbol: "GBP/USD",
+    loggedOnlyWouldBlock: [{ gateId: "reaction", reason: "Reaction" }, { gateId: "tp_too_small", reason: "TP 14.9p < min 20p" }],
+    tpSmallGate: { tpPips: 14.9, minTpPips: 20, basis: "legacy_market_target_from_last_price", reason: "TP 14.9p < min 20p" },
+  });
+  const sig = a.signal_id as string;
+  const r = await place(db, a, orderRow({ order_id: "tp17b", symbol: "GBP/USD", dry_run: true,
+    dry_run_context: { tpTooSmall: { gateId: "tp_too_small", wouldBlock: true, tpPips: 14.9, minTpPips: 20 } } }));
+  assertEquals(r.outcome, "placed");
+  const row = (await db.query<any>(`select gates, logged_only_would_block, legacy_would_admit from public.trade_attribution where signal_id = $1`, [sig])).rows[0];
+  const v = (row.gates as any[]).find((g) => g.gate_id === "tp_too_small");
+  assertEquals([v.mode, v.would_block, v.tp_pips, v.min_tp_pips, v.basis], ["log", true, 14.9, 20, "legacy_market_target_from_last_price"]);
+  assertEquals(row.logged_only_would_block, ["reaction", "tp_too_small"]);
+  assertEquals(row.legacy_would_admit, false);
+  const ord = (await db.query<any>(`select dry_run_context from public.pending_orders where order_id = 'tp17b'`)).rows[0];
+  assertEquals(ord.dry_run_context.tpTooSmall.tpPips, 14.9, "the order carries the tag too");
+  await db.close();
+});

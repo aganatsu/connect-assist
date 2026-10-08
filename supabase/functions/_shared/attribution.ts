@@ -30,7 +30,11 @@ export function primaryEngine(i: { entrySource: Route2EntrySource; izGateMode: s
 }
 
 export interface GateLike { gateId?: string; passed: boolean; reason: string; loggedOnly?: boolean; wouldBlock?: boolean }
-export interface GateVerdict { gate_id: string; mode: "gate" | "log"; passed: boolean; would_block: boolean; reason: string }
+export interface GateVerdict {
+  gate_id: string; mode: "gate" | "log"; passed: boolean; would_block: boolean; reason: string;
+  /** Step 17-B, tp_too_small only: the measured legacy-target distance and the minimum it failed */
+  tp_pips?: number; min_tp_pips?: number; basis?: string;
+}
 
 // Untagged safety gates, identified by the reason text runSafetyGates writes.
 const GATE_PATTERNS: [RegExp, string][] = [
@@ -120,6 +124,8 @@ export interface AttributionInput {
   ictFvgGate?: Record<string, any> | null;
   orderRR?: { rawRR?: number; effectiveRR?: number; costInPrice?: number; wouldBlock?: boolean; min?: number; mode?: string } | null;
   loggedOnlyWouldBlock: { gateId: string; reason: string }[];
+  /** Step 17-B: the MIN_TP_PIPS gate when it was logged (dry run) instead of blocking */
+  tpSmallGate?: { tpPips: number; minTpPips: number; basis: string; reason: string } | null;
   riskGate?: Record<string, any> | null;
   zoneId?: string | null;
   entryDepth?: number | null;
@@ -140,6 +146,10 @@ export function buildAttribution(i: AttributionInput): Record<string, unknown> {
   const gates = i.gates.map(classifyGate);
   if (i.ictFvgGate) gates.push({ gate_id: "ict_fvg", mode: i.ictFvgGate.mode === "hard" ? "gate" : "log", passed: !i.ictFvgGate.wouldBlock, would_block: !!i.ictFvgGate.wouldBlock, reason: `ICT FVG (${i.ictFvgGate.mode})` });
   if (i.orderRR) gates.push({ gate_id: "rr_order", mode: i.orderRR.mode === "order_geometry" ? "gate" : "log", passed: !i.orderRR.wouldBlock, would_block: !!i.orderRR.wouldBlock, reason: `effective R:R ${num(i.orderRR.effectiveRR)?.toFixed(3)} vs min ${i.orderRR.min}` });
+  if (i.tpSmallGate) gates.push({
+    gate_id: "tp_too_small", mode: "log", passed: false, would_block: true, reason: i.tpSmallGate.reason,
+    tp_pips: i.tpSmallGate.tpPips, min_tp_pips: i.tpSmallGate.minTpPips, basis: i.tpSmallGate.basis,
+  });
   if (i.riskGate) gates.push({ gate_id: "risk_profile", mode: "gate", passed: i.riskGate.enabled ? !!i.riskGate.allowed : true, would_block: i.riskGate.enabled ? !i.riskGate.allowed : false, reason: String(i.riskGate.reason ?? (i.riskGate.enabled ? "" : "no active risk profile")).slice(0, 300) });
   const scoreGateBlocks = !!i.decisionScoreGate?.wouldBlock;
   const ictBlocks = !!i.ictFvgGate?.wouldBlock;
