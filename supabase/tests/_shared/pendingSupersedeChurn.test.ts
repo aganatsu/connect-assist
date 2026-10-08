@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { splitByLevel } from "../../functions/_shared/route2SameLevel.ts";
 
 /**
  * Measured 2026-09-06 over 60 days of pending_orders:
@@ -27,20 +28,19 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
  * being torn down and rebuilt for nothing: new order_id, confirmation_attempts
  * reset, and 400 "cancelled" rows that read as the bot changing its mind.
  *
- * This refreshes in place when the level has not moved. expires_at is extended
- * exactly as a reinsert would have done, so effective lifetime is unchanged.
+ * This refreshes in place when the level has not moved. expires_at is NOT
+ * extended (2026-09-29): the window is fixed from the first placement.
+ * Step 16-C: "not moved" means within ROUTE2_SAME_LEVEL_TOLERANCE_PIPS in pip
+ * space (step16SameLevelTolerance.test.ts), not exact float equality.
  */
 
 const scanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
 
-/** The partition the scanner performs. */
+/** The partition the scanner performs (the real function; EUR/USD-style pip). */
 function partition(existing: Array<{ id: string; entry_price: number }>, newPrice: number) {
-  return {
-    same: existing.filter(o => Number(o.entry_price) === Number(newPrice)),
-    moved: existing.filter(o => Number(o.entry_price) !== Number(newPrice)),
-  };
+  return splitByLevel(existing, newPrice, 0.0001);
 }
 
 Deno.test("an unchanged level refreshes rather than replaces", () => {
@@ -72,8 +72,8 @@ Deno.test("comparison is numeric, not string", () => {
   const p = partition([{ id: "a", entry_price: "1.16234" as unknown as number }], 1.16234);
   assertEquals(p.same.length, 1, "string/number must compare equal");
   assert(
-    /Number\(s\.entry_price\) === Number\(limitEntry\.price\)/.test(scanner),
-    "both sides must be coerced",
+    /splitByLevel<any>\(stalePending \?\? \[\], limitEntry\.price, spec\.pipSize\)/.test(scanner),
+    "the scanner partitions through splitByLevel (which coerces both sides) with the pair's pip size",
   );
 });
 

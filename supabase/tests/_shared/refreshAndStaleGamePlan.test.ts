@@ -53,8 +53,10 @@ Deno.test("entry price is deliberately not rewritten", () => {
   const i = scanner.indexOf("if (samePriceOrders.length > 0) {");
   const block = scanner.slice(i, scanner.indexOf(".in(\"order_id\", samePriceOrders", i));
   assert(!/entry_price:/.test(block), "entry is unchanged by definition here");
+  // Step 16-C: "equals" means within ROUTE2_SAME_LEVEL_TOLERANCE_PIPS (0.001 pip)
+  // in pip space; the stored entry is kept, never replaced by float noise.
   assert(
-    /Number\(s\.entry_price\) === Number\(limitEntry\.price\)/.test(scanner),
+    /splitByLevel<any>\(stalePending \?\? \[\], limitEntry\.price, spec\.pipSize\)/.test(scanner),
     "and that is what the partition guarantees",
   );
 });
