@@ -1,0 +1,34 @@
+{
+  "strategy": {
+    "impulseZoneEnabled": true,
+    "legStopBufferPct": 0.02,
+    "legStopCapMultiple": 1.2,
+    "useSimpleDirection": true,
+    "useConfirmedTrend": true,
+    "confirmedTrendFibFactor": 0.25,
+    "confirmedTrendSwingLookback": 5,
+    "simpleDirectionH1BosLookback": 8,
+    "simpleDirectionH4ChochLookback": 10,
+    "zoneChaseMaxZoneWidths": 1,
+    "thesisValidationEnabled": true,
+    "thesisCheckDirectionFlip": true,
+    "ictHTFEnabled": true,
+    "atrDerivedFloorsEnabled": false,
+    "gamePlanGateMode": "soft",
+    "zoneAnchoredStop": false,
+    "requireUnifiedZone": false,
+    "priceAwareStructureBlocks": false,
+    "thesisDirectionStyleAware": false,
+    "htfBiasHardVeto": false,
+    "ictHTFGateMode": "off",
+    "ictKillZoneGateMode": "off",
+    "ictJudasSwingGateMode": "off",
+    "ictDisplacementMSSGateMode": "off"
+  },
+  "sessions": {
+    "killZoneOnly": false
+  },
+  "entry": {
+    "limitOrderEnabled": false
+  }
+}

@@ -60,3 +60,25 @@ Both behaviours below **run today** and are part of what the dry run measures. N
 **Classification:** a pre-unlock decision / fix candidate, alongside the fill floor. **Not removed, and not changed in Step 16.**
 
 **Measurement to decide with:** for each refused setup, would a Route 2 order have been placed, and what did it go on to do hypothetically? (A replay over stored bars, as the Step 15 resolver does for real orders.)
+
+## 3. Atomic reset / exposure race (from Step 16-D) — MANDATORY before unlock
+
+**Status:**
+- **Done:** Step 16-D added a **caller-level** guard. paper-trading's `set_balance`, `reset_balance_only` and `reset_account` refuse while any position or active real order exists (merged `45fb9a2a`, deployed 2026-10-08 03:07).
+- **Pending:** the guard's live behaviour is not yet verified (that needs a real reset attempt).
+- **Open:** the race below.
+
+**The race:**
+- The exposure check and `reset_paper_account` (which starts the new ledger epoch) run as separate statements, not one transaction.
+- A real fill landing between them would be open across the new epoch and later settle as `pre_epoch_close` with **$0**.
+- This is impossible while entries are locked. It becomes possible the moment they are unlocked.
+
+**Smallest atomic design (to design and approve before unlock; NOT built in Step 16):**
+- **Preferred:** a guarded account-reset database path for the UI actions, e.g. `reset_paper_account_if_flat(p_user_id, p_bot_id, p_new_balance, p_reason)`. In ONE transaction it:
+  1. locks the account row (`FOR UPDATE`);
+  2. checks the user's `paper_positions` and active real `pending_orders` (`status IN ('pending','awaiting_confirmation') AND dry_run IS NOT TRUE`);
+  3. refuses with the same exposure breakdown, or calls the existing reset logic.
+
+  `reset_paper_account` stays as it is, so the system-reset workflow, which resets *before* clearing active state, keeps working. paper-trading's three actions switch to the guarded function.
+- **Alternative (only with proof):** extend `reset_paper_account` with an explicit trusted / internal bypass for system-reset. This needs evidence that client roles cannot use the bypass, and that system-reset still passes end to end.
+- **Must also be decided:** whether fills (`route2_claim_and_fill`) take the same account-row lock, so a fill and a reset serialise rather than race.
