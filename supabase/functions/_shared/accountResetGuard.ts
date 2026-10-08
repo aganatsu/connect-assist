@@ -11,15 +11,17 @@
  * The guard runs BEFORE any write and fails closed:
  *   refuse when the user has any paper position (every row is real exposure:
  *     a DB trigger refuses a position from a dry-run order), or any ACTIVE REAL
- *     order — pending_orders.status IN ('pending','awaiting_confirmation')
- *     (the set idx_pending_orders_unique_active and the hunt use) AND
+ *     order — pending_orders.status IN ('pending','awaiting_confirmation','triggered')
+ *     (the hunt's set, plus 'triggered', which system-reset treats as live) AND
  *     dry_run IS NOT TRUE (NULL counts as real);
  *   active DRY-RUN orders alone never block (they cannot become positions or
  *     move the balance); their count is reported, and they are not cancelled;
  *   a read error refuses (cannot prove the account is flat).
  */
 
-export const ACTIVE_ORDER_STATUSES = ["pending", "awaiting_confirmation"] as const;
+// Step 17-C: 'triggered' added — allowed by the status CHECK and treated as live by
+// system-reset (LIVE_PENDING); the database guard uses the same set.
+export const ACTIVE_ORDER_STATUSES = ["pending", "awaiting_confirmation", "triggered"] as const;
 
 export interface Exposure {
   openPositions: number;

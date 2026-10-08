@@ -1851,11 +1851,23 @@ Deno.serve(async (req) => {
         console.log(`[reset] ${reason}: account flat; ${guard.exposure.activeDryRunOrders} active dry-run order(s) left running (not cancelled)`);
       }
       const { data: acct } = await supabase.from("paper_accounts").select("bot_id").eq("user_id", user.id).maybeSingle();
-      const { data, error } = await supabase.rpc("reset_paper_account", {
+      // Step 17-C: the guarded database reset — locks the account row, re-checks real
+      // exposure under that lock, and resets in the same transaction only when flat.
+      // (The unguarded reset_paper_account is service-role only.)
+      const { data, error } = await supabase.rpc("reset_paper_account_if_flat", {
         p_user_id: user.id, p_bot_id: acct?.bot_id || "smc", p_new_balance: amount, p_reason: reason,
       });
       if (error) return { ok: false, error: error.message };
-      if ((data as any)?.reset !== true) return { ok: false, error: `reset refused: ${(data as any)?.code ?? "unknown"}` };
+      const d = (data ?? {}) as any;
+      if (d.reset !== true) {
+        if (d.code === "reset_refused_real_exposure") {
+          const exposure = d.exposure ?? null;
+          console.warn(`[reset] ${reason} refused by the database guard: ${JSON.stringify(exposure)}`);
+          return { ok: false, error: `Reset refused: real exposure appeared before the reset could lock the account (${JSON.stringify(exposure)}).`,
+            refusal: { code: "reset_refused_real_exposure", error: "real exposure", exposure } };
+        }
+        return { ok: false, error: `reset refused: ${d.code ?? "unknown"}` };
+      }
       return { ok: true, activeDryRunOrders: guard.exposure.activeDryRunOrders };
     }
     const resetRefused = (r: { error: string; refusal?: GuardRefusal }) => respond({

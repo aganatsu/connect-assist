@@ -49,6 +49,7 @@ const MIGRATION_STEP15 = read("../../migrations/20261008000000_step15_attributio
 const MIGRATION_STEP15_PR2 = read("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql");
 const MIGRATION_STEP15_PR3 = read("../../migrations/20261008020000_step15_pr3_outcome_resolver.sql");
 const MIGRATION_STEP17A = read("../../migrations/20261009000000_step17a_fill_reanchor_attribution.sql");
+const MIGRATION_STEP17C = read("../../migrations/20261009010000_step17c_atomic_reset.sql");
 // Route 2 columns the PR 2 lifecycle trigger reads (zone_touch_time,
 // confirmation_*, terminal_reason, …) and route2_claim_and_fill. Applied in
 // date order, as in production.
@@ -169,6 +170,7 @@ async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_STEP15_PR2);
   await db.exec(MIGRATION_STEP15_PR3);
   await db.exec(MIGRATION_STEP17A);
+  await db.exec(MIGRATION_STEP17C);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -534,8 +536,11 @@ Deno.test("a signed-in user cannot settle or reset another user's account", asyn
   await db.query(`select set_config('request.jwt.claim.sub', $1, false), set_config('request.jwt.claim.role', 'authenticated', false)`, [OTHER_USER]);
   const r = await settle(db, rowId, usdJpyClose());
   assertEquals(r.outcome, "rejected");
+  // Step 17-C: clients cannot call the unguarded reset at all any more (service role only) …
+  await assertRejects(() => db.query(`select public.reset_paper_account($1::uuid, 'smc', 1e9, 'x')`, [USER]), Error, "permission denied");
+  // … and the guarded reset refuses another user's account.
   const reset = (await db.query<{ r: Record<string, unknown> }>(
-    `select public.reset_paper_account($1::uuid, 'smc', 1e9, 'x') as r`, [USER])).rows[0].r;
+    `select public.reset_paper_account_if_flat($1::uuid, 'smc', 1e9, 'x') as r`, [USER])).rows[0].r;
   assertEquals(reset.code, "forbidden");
   // The owner can.
   await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [USER]);
@@ -1629,5 +1634,129 @@ Deno.test("step 17-B: a dry-run order tagged tp_too_small — attribution stores
   assertEquals(row.legacy_would_admit, false);
   const ord = (await db.query<any>(`select dry_run_context from public.pending_orders where order_id = 'tp17b'`)).rows[0];
   assertEquals(ord.dry_run_context.tpTooSmall.tpPips, 14.9, "the order carries the tag too");
+  await db.close();
+});
+
+// ─── Step 17-C: atomic reset / exposure serialisation (single-session logic; ─
+// the two-session concurrency proof runs on real Postgres, docs/step17/)
+
+const guarded = async (db: PGlite, balance = 100000) =>
+  (await db.query<{ r: Record<string, any> }>(`select public.reset_paper_account_if_flat($1::uuid, 'smc', $2, 'step17c test') as r`, [USER, balance])).rows[0].r;
+const acctState = async (db: PGlite) => JSON.stringify((await db.query(
+  `select balance, peak_balance, daily_pnl_base, ledger_epoch_id, ledger_reset_at from public.paper_accounts where user_id = $1`, [USER])).rows[0]);
+
+Deno.test("step 17-C: the guarded reset refuses a real position or an active real order with no data change; dry-run orders alone do not block", async () => {
+  const db = await freshDb({ balance: 104000 });
+  const pos = await openPosition(db, { position_id: "g17c" });
+  let before = await acctState(db); const ledger = await count(db, "public.paper_account_ledger");
+  let r = await guarded(db);
+  assertEquals([r.reset, r.code, r.exposure.openPositions], [false, "reset_refused_real_exposure", 1]);
+  assertEquals([await acctState(db), await count(db, "public.paper_account_ledger")], [before, ledger], "no data change");
+  await settle(db, pos, usdJpyClose());
+  for (const status of ["pending", "awaiting_confirmation"]) {
+    const id = await insertPending(db, pendingRow({ status, dry_run: false }));
+    before = await acctState(db);
+    r = await guarded(db);
+    assertEquals([r.reset, r.code, r.exposure.activeRealOrders], [false, "reset_refused_real_exposure", 1], status);
+    assertEquals(await acctState(db), before);
+    await db.query(`delete from public.pending_orders where id = $1`, [id]);
+  }
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  await insertPending(db, pendingRow({ symbol: "GBP/USD", dry_run: true }));
+  r = await guarded(db);
+  assertEquals([r.reset, r.exposure.activeDryRunOrders, r.exposure.activeRealOrders], [true, 1, 0], "flat except a dry-run order → reset proceeds");
+  assertEquals(await balance(db), 100000);
+  assertEquals(await count(db, "public.pending_orders where dry_run and status = 'pending'"), 1, "the dry-run order is not cancelled");
+  await db.close();
+});
+
+Deno.test("step 17-C: created_at is stamped after the account lock with wall-clock time (not the transaction start); an explicit historical value is kept", async () => {
+  const db = await freshDb();
+  await db.exec("begin");
+  const t0 = (await db.query<{ t: string }>(`select transaction_timestamp()::text t`)).rows[0].t;
+  await db.query(`select pg_sleep(0.05)`);
+  const id = await openPosition(db, { position_id: "ts17c" });
+  const r = (await db.query<{ c: string; later: boolean }>(`select created_at::text c, created_at > transaction_timestamp() later from public.paper_positions where id = $1`, [id])).rows[0];
+  await db.exec("commit");
+  assert(r.later, `created_at ${r.c} must be later than the transaction start ${t0}`);
+  const old = await openPosition(db, { position_id: "old17c", created_at: "2026-10-04T10:00:00Z" });
+  assertEquals((await db.query<{ c: string }>(`select created_at::text c from public.paper_positions where id = $1`, [old])).rows[0].c, "2026-10-04 10:00:00+00");
+  // the column default is gone: an omitted created_at reaches the trigger as NULL (distinguishable),
+  // and an explicit value — even now() — is the caller's and is kept
+  assertEquals((await db.query<{ d: string | null }>(`select column_default d from information_schema.columns where table_name = 'paper_positions' and column_name = 'created_at'`)).rows[0].d, null);
+  await db.exec("begin");
+  const t1 = (await db.query<{ t: string }>(`select transaction_timestamp()::text t`)).rows[0].t;
+  const exp = await openPosition(db, { position_id: "exp17c", created_at: t1 });
+  const e = (await db.query<{ eq: boolean }>(`select created_at = transaction_timestamp() eq from public.paper_positions where id = $1`, [exp])).rows[0];
+  await db.exec("commit");
+  assertEquals(e.eq, true, "explicit value kept as given");
+  await db.close();
+});
+
+Deno.test("step 17-C: a position opened after a guarded reset belongs to the new epoch and its close is credited", async () => {
+  const db = await freshDb({ balance: 98000 });
+  assertEquals((await guarded(db)).reset, true);
+  const pos = await openPosition(db, { position_id: "after17c" });
+  const r = await settle(db, pos, usdJpyClose());
+  assert(r.outcome === "settled" && r.preEpoch === false && r.amount === 871.19, JSON.stringify(r));
+  assertEquals(await balance(db), 100871.19);
+  await db.close();
+});
+
+Deno.test("step 17-C: permissions — clients reach only the guarded reset; the unguarded reset and the trigger function are not client-callable", async () => {
+  const db = await freshDb();
+  const can = async (role: string, fn: string) => (await db.query<{ ok: boolean }>(`select has_function_privilege($1, $2, 'execute') ok`, [role, fn])).rows[0].ok;
+  const RESET = "public.reset_paper_account(uuid, text, numeric, text)", GUARDED = "public.reset_paper_account_if_flat(uuid, text, numeric, text)";
+  const TRG = "public.paper_positions_serialize_with_reset()";
+  assertEquals([await can("authenticated", RESET), await can("anon", RESET), await can("service_role", RESET)], [false, false, true]);
+  assertEquals([await can("authenticated", GUARDED), await can("anon", GUARDED), await can("service_role", GUARDED)], [true, false, true]);
+  assertEquals([await can("authenticated", TRG), await can("anon", TRG)], [false, false]);
+  // a signed-in owner resets through the guarded path (flat account)
+  await db.exec(`set session authorization authenticated`);
+  await db.query(`select set_config('request.jwt.claim.sub', $1, false), set_config('request.jwt.claim.role', 'authenticated', false)`, [USER]);
+  assertEquals((await guarded(db)).reset, true);
+  await db.exec(`set session authorization postgres`);
+  await db.close();
+});
+
+
+Deno.test("step 17-C: a REAL order in status 'triggered' also refuses the guarded reset", async () => {
+  const db = await freshDb();
+  await insertPending(db, pendingRow({ status: "triggered", dry_run: false }));
+  const r = await guarded(db);
+  assertEquals([r.reset, r.code, r.exposure.activeRealOrders], [false, "reset_refused_real_exposure", 1]);
+  await db.close();
+});
+
+Deno.test("step 17-C: the order trigger is attached (INSERT + UPDATE OF status) and real / dry-run order writes still work", async () => {
+  const db = await freshDb();
+  const t = (await db.query<{ n: number; src: string }>(`select (select count(*)::int from pg_trigger where tgname = 'pending_orders_serialize_with_reset' and tgrelid = 'public.pending_orders'::regclass) n,
+     (select prosrc from pg_proc where proname = 'pending_orders_serialize_with_reset') src`)).rows[0];
+  assertEquals(t.n, 1);
+  assert(t.src.includes("NEW.dry_run IS NOT TRUE") && t.src.includes("FOR KEY SHARE") && t.src.includes("OLD.status NOT IN ('pending', 'awaiting_confirmation', 'triggered')"), "real orders entering an active status lock the account row; dry-run orders do not");
+  const def = (await db.query<{ d: string }>(`select pg_get_triggerdef(oid) d from pg_trigger where tgname = 'pending_orders_serialize_with_reset'`)).rows[0].d;
+  assert(/BEFORE INSERT OR UPDATE OF status ON public\.pending_orders/.test(def), def);
+  const real = await insertPending(db, pendingRow({ status: "pending", dry_run: false }));
+  await db.query(`update public.pending_orders set status = 'awaiting_confirmation' where id = $1`, [real]);
+  await db.query(`update public.pending_orders set status = 'cancelled', terminal_reason = 'CANCELLED_ZONE_EXIT' where id = $1`, [real]);
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  await insertPending(db, pendingRow({ symbol: "GBP/USD", dry_run: true }));
+  assertEquals(await count(db, "public.pending_orders"), 2);
+  await db.close();
+});
+
+Deno.test("step 17-C: full ACL model — explicit grants only", async () => {
+  const db = await freshDb();
+  const can = async (role: string, fn: string) => (await db.query<{ ok: boolean }>(`select has_function_privilege($1, $2, 'execute') ok`, [role, fn])).rows[0].ok;
+  const RESET = "public.reset_paper_account(uuid, text, numeric, text)", GUARDED = "public.reset_paper_account_if_flat(uuid, text, numeric, text)";
+  for (const [fn, expected] of [[RESET, { public: false, anon: false, authenticated: false, service_role: true }],
+                                [GUARDED, { public: false, anon: false, authenticated: true, service_role: true }],
+                                ["public.paper_positions_serialize_with_reset()", { public: false, anon: false, authenticated: false, service_role: false }],
+                                ["public.pending_orders_serialize_with_reset()", { public: false, anon: false, authenticated: false, service_role: false }]] as const) {
+    for (const [role, want] of Object.entries(expected)) assertEquals(await can(role, fn), want, `${role} ${fn}`);
+  }
+  const defs = (await db.query<{ proname: string; prosecdef: boolean; cfg: string[] | null }>(`select proname, prosecdef, proconfig cfg from pg_proc
+     where proname in ('reset_paper_account_if_flat', 'paper_positions_serialize_with_reset', 'pending_orders_serialize_with_reset') order by proname`)).rows;
+  for (const d of defs) assert(d.prosecdef && (d.cfg ?? []).some((c) => c.startsWith("search_path=")), `${d.proname}: SECURITY DEFINER with a fixed search_path`);
   await db.close();
 });
