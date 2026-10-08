@@ -1,3 +1,10 @@
+-- ╔══════════════════════════════════════════════════════════════════════════════════════════╗
+-- ║ SUPERSEDED — DO NOT RUN. Withdrawn 2026-10-08: the paused-but-unlocked drain state let     ║
+-- ║ client paths create real exposure. Replaced by UNLOCK_ATOMIC_AT_ZERO_DRY.sql. Kept only    ║
+-- ║ for audit history. The first statement below aborts the script.                            ║
+-- ╚══════════════════════════════════════════════════════════════════════════════════════════╝
+do $superseded$ begin raise exception 'SUPERSEDED — DO NOT RUN: use UNLOCK_ATOMIC_AT_ZERO_DRY.sql'; end $superseded$;
+
 -- FINAL CONTROLLED UNLOCK — STAGE 1 of 2: entries_locked → false, is_paused stays TRUE.
 -- DO NOT RUN without explicit final approval. SQL editor (the entries-lock guard allows only the server / a DB admin).
 -- Effect (bot-scanner:2572-2573): dryRunActive = false and isPaused = true → no new orders of any kind (no dry-run,

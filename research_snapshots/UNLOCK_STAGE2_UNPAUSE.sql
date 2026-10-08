@@ -1,3 +1,10 @@
+-- ╔══════════════════════════════════════════════════════════════════════════════════════════╗
+-- ║ SUPERSEDED — DO NOT RUN. Withdrawn 2026-10-08: the paused-but-unlocked drain state let     ║
+-- ║ client paths create real exposure. Replaced by UNLOCK_ATOMIC_AT_ZERO_DRY.sql. Kept only    ║
+-- ║ for audit history. The first statement below aborts the script.                            ║
+-- ╚══════════════════════════════════════════════════════════════════════════════════════════╝
+do $superseded$ begin raise exception 'SUPERSEDED — DO NOT RUN: use UNLOCK_ATOMIC_AT_ZERO_DRY.sql'; end $superseded$;
+
 -- FINAL CONTROLLED UNLOCK — STAGE 2 of 2: is_paused → false. LIVE (paper) TRADING STARTS on the next full scan.
 -- DO NOT RUN without explicit final approval, and only after STAGE 1 and every stage-1 check passed.
 -- Requires ZERO active dry-run orders: a dry-run order still active on a symbol+direction would absorb the first real
