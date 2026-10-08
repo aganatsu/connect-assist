@@ -2,7 +2,7 @@
 
 **Status:** documentation of what runs. Written 2026-10-08 against `main` @ `316e2c7d`. Nothing here changes behaviour.
 
-**Config:** live `bot_configs` row `327912ae…`, canonical version `3d5b8fb0d756b3596ed46d133e873a88` (see §11 for the planned explicit-defaults boundary).
+**Config:** live `bot_configs` row `327912ae…`, canonical version **`1037e6170289f865e4d6618dcf28b94d`** since 2026-10-08 03:46 UTC (behaviour-equivalent to `3d5b8fb0…`; see §11).
 
 **Account:** $100,000, **paused and entries-locked**. Route 2 runs as a **dry run**: hypothetical fills, never positions (`simplification.dryRunWhenLocked`).
 
@@ -126,8 +126,8 @@ paper-trading reads the raw `exit.*Enabled` names; the scanner reads the mapper'
 
 | Version | Status | Meaning |
 |---|---|---|
-| `3d5b8fb0d756b3596ed46d133e873a88` | live until the 16-E PATCH | Step 14 patch (2026-10-07 12:55) |
-| `1037e6170289f865e4d6618dcf28b94d` | **proven; becomes live when the approved PATCH is applied** | **Step 16-E: the explicit frozen-config boundary.** The same effective configuration with **26** live code-default-only controls stored explicitly |
+| `3d5b8fb0d756b3596ed46d133e873a88` | superseded 2026-10-08 03:46:21 UTC | Step 14 patch (2026-10-07 12:55) |
+| `1037e6170289f865e4d6618dcf28b94d` | **LIVE since 2026-10-08 03:46:21 UTC** (verified) | **Step 16-E: the explicit frozen-config boundary.** The same effective configuration with **26** live code-default-only controls stored explicitly |
 
 **The 26 keys:**
 
@@ -140,7 +140,11 @@ paper-trading reads the raw `exit.*Enabled` names; the scanner reads the mapper'
 **`1037e617…` is behaviour-equivalent to `3d5b8fb0…`, NOT identical:**
 - **Proof:** `supabase/tests/_shared/step16eExplicitDefaults.test.ts`. The full effective runtime config is byte-identical on all six pairs, as are simplification, caps at every stage, and every behaviour category. The production SQL `docs/step16/STEP16E_PATCH_AB_26.sql` is executed in real Postgres.
 - **Reporting** pools the two only through the explicit registry, `CONFIG_EQUIVALENCE_CLASSES["frozen_impulse_route2_v1"]` (`_shared/hypotheticalCapBook.ts`).
-- **Live status:** this table is updated with the PATCH time and the first scan recording `__configVersion = 1037e617…`.
+- **Live verification (2026-10-08):**
+  - PATCH applied 03:46:21 UTC; the audit change log records `3d5b8fb0 → 1037e617`; the stored config equals the proven object exactly.
+  - The first full scan after it (03:50:11) recorded `__configVersion = 1037e617…` on all six pairs, with 199 settings each and **0 differences** from the mapper on the new config **and 0 from the old `3d5b8fb0` config**. Style overrides still off.
+  - Account $100,000, paused, entries-locked; 0 positions.
+  - **Still open:** no order has been placed since the PATCH, so the first attribution row carrying `1037e617…` is not yet observed. It is test-proven via #645's wiring and will be checked opportunistically.
 
 ## Not part of the baseline (open, decided before unlock)
 
