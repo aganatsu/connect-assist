@@ -2,11 +2,39 @@
 -- Run ONCE in the SQL editor, after PRECHECK_STEP17C_READONLY.sql returned ready_to_apply = t, and BEFORE merging PR #655.
 -- One transaction. FAILS CLOSED before (unexpected production state) and after (anything not exactly as designed).
 -- Migration file embedded verbatim (md5 of the file: 14fe41843503558aca1b8ec1b64a81f8).
+-- The live-state gate (one SMC account, $100,000, paused, entries locked, 0 positions, 0 active REAL
+-- orders) is re-checked HERE, inside the apply transaction: the standalone precheck is a separate
+-- transaction and the state could have changed since. The tables and the account row are locked
+-- before the check so it holds until COMMIT; lock_timeout makes a busy table abort the run (rolled
+-- back, nothing changed) instead of queueing the scanner behind it. Active dry-run orders are allowed.
 
 begin;
+set local lock_timeout = '5s';
 
 do $pre$
+declare
+  v_accounts int; v_positions int; v_real int; v_acct record;
 begin
+  -- the migration itself takes ACCESS EXCLUSIVE on paper_positions and SHARE ROW EXCLUSIVE on
+  -- pending_orders (CREATE TRIGGER); taking write-blocking locks first only moves them earlier
+  lock table public.paper_positions, public.pending_orders in share row exclusive mode;
+  select count(*) into v_accounts from public.paper_accounts where bot_id = 'smc';
+  if v_accounts <> 1 then
+    raise exception 'STEP17C_APPLY_ABORTED: expected exactly one SMC paper account, found %', v_accounts;
+  end if;
+  select * into v_acct from public.paper_accounts where bot_id = 'smc' for update;
+  if v_acct.balance is distinct from 100000 or v_acct.is_paused is distinct from true or v_acct.entries_locked is distinct from true then
+    raise exception 'STEP17C_APPLY_ABORTED: SMC account state changed (balance %, paused %, entries_locked %)', v_acct.balance, v_acct.is_paused, v_acct.entries_locked;
+  end if;
+  select count(*) into v_positions from public.paper_positions;
+  if v_positions <> 0 then
+    raise exception 'STEP17C_APPLY_ABORTED: % open paper position(s)', v_positions;
+  end if;
+  select count(*) into v_real from public.pending_orders
+   where status in ('pending', 'awaiting_confirmation', 'triggered') and dry_run is not true;
+  if v_real <> 0 then
+    raise exception 'STEP17C_APPLY_ABORTED: % active REAL order(s)', v_real;
+  end if;
   if (select count(*) from supabase_migrations.schema_migrations where version = '20261009000000') <> 1 then
     raise exception 'STEP17C_APPLY_ABORTED: Step 17-A (20261009000000) is not recorded';
   end if;
@@ -174,6 +202,13 @@ REVOKE ALL ON FUNCTION public.pending_orders_serialize_with_reset() FROM PUBLIC,
 do $post$
 declare v text;
 begin
+  -- live state still as gated (the locks taken in $pre$ are held until COMMIT)
+  if (select count(*) from public.paper_accounts where bot_id = 'smc' and balance = 100000 and is_paused and entries_locked) <> 1
+     or (select count(*) from public.paper_accounts where bot_id = 'smc') <> 1
+     or (select count(*) from public.paper_positions) <> 0
+     or (select count(*) from public.pending_orders where status in ('pending', 'awaiting_confirmation', 'triggered') and dry_run is not true) <> 0 then
+    raise exception 'STEP17C_APPLY_ABORTED: live state changed during the apply transaction';
+  end if;
   -- functions: exact bodies, SECURITY DEFINER, fixed search_path; reset_paper_account unchanged
   if (select md5(prosrc) from pg_proc where oid = 'public.reset_paper_account(uuid,text,numeric,text)'::regprocedure) is distinct from '246e0ddefc1f8b0662974af2cd32f293' then
     raise exception 'STEP17C_APPLY_ABORTED: reset_paper_account changed';
