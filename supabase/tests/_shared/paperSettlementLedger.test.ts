@@ -1760,3 +1760,189 @@ Deno.test("step 17-C: full ACL model — explicit grants only", async () => {
   for (const d of defs) assert(d.prosecdef && (d.cfg ?? []).some((c) => c.startsWith("search_path=")), `${d.proname}: SECURITY DEFINER with a fixed search_path`);
   await db.close();
 });
+
+// ─── D1 / D2 / D3: real exposure is server-only (20261009020000, 20261009030000) ─────────────────
+const MIGRATION_D1 = read("../../migrations/20261009020000_d1_revoke_legacy_exposure_rpcs.sql");
+const MIGRATION_D2 = read("../../migrations/20261009030000_d2_d3_real_exposure_admission.sql");
+const LEGACY_RPC: Record<string, string> = {
+  finalize_market_entry: "public.finalize_market_entry(uuid,text,text,jsonb,jsonb,integer,integer,boolean,boolean)",
+  finalize_pending_order_fill: "public.finalize_pending_order_fill(uuid,uuid,text,numeric,numeric,text,jsonb,text,jsonb,integer,integer,boolean)",
+  finalize_live_broker_position: "public.finalize_live_broker_position(uuid,text,text)",
+  retarget_pending_to_impulse_candidate: "public.retarget_pending_to_impulse_candidate(uuid,uuid,text)",
+};
+/** Production's pre-D1/D2 state: the four legacy RPCs with Supabase's default EXECUTE, the baseline
+ *  pending_orders grants, and a service_role with full grants + BYPASSRLS. */
+async function exposureDb(opts: { d1?: boolean; d2?: boolean; locked?: boolean } = {}): Promise<PGlite> {
+  const db = await freshDb();
+  await db.exec(`set check_function_bodies = off`);
+  for (const [name, sig] of Object.entries(LEGACY_RPC)) {
+    await db.exec(`${functionDdl(name)}\nGRANT EXECUTE ON FUNCTION ${sig} TO PUBLIC, anon, authenticated, service_role;`);
+  }
+  await db.exec(`set check_function_bodies = on;
+    grant all on public.pending_orders to anon, authenticated, service_role;
+    grant usage on schema public to service_role; grant all on all tables in schema public to service_role;
+    alter role service_role bypassrls;`);
+  if (opts.locked) await db.exec(`update public.paper_accounts set entries_locked = true where user_id = '${USER}'`);
+  if (opts.d1) await db.exec(MIGRATION_D1);
+  if (opts.d2) await db.exec(MIGRATION_D2);
+  return db;
+}
+/** Runs one statement as a PostgREST client would: session_user changes (PostgREST connects as
+ *  `authenticator`, never `postgres`) and request.jwt.claims carries the role. */
+async function asRole(db: PGlite, role: "authenticated" | "anon" | "service_role", sql: string, params: unknown[] = [], sub = USER) {
+  const claims = role === "service_role" ? `{"role":"service_role"}` : `{"role":"${role}","sub":"${sub}"}`;
+  await db.exec(`begin; set local session authorization ${role};
+    select set_config('request.jwt.claims', '${claims}', true), set_config('request.jwt.claim.sub', '${role === "service_role" ? "" : sub}', true);`);
+  let err = "";
+  let rows: any[] = [];
+  try { rows = (await db.query<any>(sql, params)).rows; } catch (e) { err = (e as Error).message; }
+  await db.exec(err ? "rollback" : "commit");
+  await db.exec("set session authorization postgres"); // PGlite does not restore it on its own
+  return { err, rows };
+}
+const exOrder = (orderId: string, dry: boolean, bot = "smc", symbol = "EUR/USD", direction = "long") =>
+  `insert into public.pending_orders (user_id, bot_id, order_id, symbol, direction, order_type, entry_price, current_price, stop_loss, take_profit, status, expires_at, dry_run)
+   values ('${USER}', '${bot}', '${orderId}', '${symbol}', '${direction}', 'limit', 1.1, 1.101, 1.098, 1.1022, 'pending', now() + interval '8 hours', ${dry}) returning id`;
+// exactly the columns paper-trading `place_order` inserts (bot_id omitted → default 'smc')
+const exManual = (positionId: string) =>
+  `insert into public.paper_positions (user_id, position_id, symbol, direction, size, frozen_strategy_context, entry_price, current_price, stop_loss, take_profit, open_time, signal_reason, signal_score, order_id, position_status)
+   values ('${USER}', '${positionId}', 'EUR/USD', 'long', '1', null, '1.1', '1.1', '1.098', '1.1022', now(), '', '0', 'm${positionId}', 'open') returning id`;
+const exServerPos = (positionId: string, bot = "smc") =>
+  `insert into public.paper_positions (user_id, bot_id, position_id, order_id, symbol, direction, size, entry_price, stop_loss, take_profit, current_price, open_time, signal_score)
+   values ('${USER}', '${bot}', '${positionId}', '${positionId}', 'USD/JPY', 'long', 1, 154.9, 154.69, 155.5, 155.5, now(), '46') returning id`;
+const legacyExecutable = async (db: PGlite) => (await db.query<Record<string, boolean>>(`select ${Object.entries(LEGACY_RPC)
+  .map(([n, s]) => `has_function_privilege('anon', '${s}', 'execute') or has_function_privilege('authenticated', '${s}', 'execute') as ${n}`).join(", ")}`)).rows[0];
+
+Deno.test("D1: the four legacy SECURITY DEFINER exposure RPCs lose client EXECUTE; service_role keeps it; bodies and search_path untouched", async () => {
+  const db = await exposureDb();
+  assert(Object.values(await legacyExecutable(db)).every((v) => v === true), "before: clients can execute all four (production state)");
+  const bodies = (await db.query<{ s: string }>(`select string_agg(md5(prosrc), ',' order by proname) s from pg_proc where proname = any($1)`, [Object.keys(LEGACY_RPC)])).rows[0].s;
+  await db.exec(MIGRATION_D1);
+  assert(Object.values(await legacyExecutable(db)).every((v) => v === false), "after: no anon/authenticated EXECUTE");
+  const svc = (await db.query<{ ok: boolean }>(`select ${Object.values(LEGACY_RPC).map((s) => `has_function_privilege('service_role', '${s}', 'execute')`).join(" and ")} ok`)).rows[0].ok;
+  const cfg = (await db.query<{ ok: boolean }>(`select bool_and(prosecdef and proconfig @> array['search_path=public']) ok from pg_proc where proname = any($1)`, [Object.keys(LEGACY_RPC)])).rows[0].ok;
+  const bodiesAfter = (await db.query<{ s: string }>(`select string_agg(md5(prosrc), ',' order by proname) s from pg_proc where proname = any($1)`, [Object.keys(LEGACY_RPC)])).rows[0].s;
+  assertEquals([svc, cfg, bodiesAfter], [true, true, bodies]);
+  const c = await asRole(db, "authenticated", `select public.finalize_live_broker_position('${USER}', 'smc', 'x')`);
+  const a = await asRole(db, "anon", `select public.retarget_pending_to_impulse_candidate(gen_random_uuid(), '${USER}', 'smc')`);
+  assert(c.err.includes("permission denied") && a.err.includes("permission denied"), `${c.err} / ${a.err}`);
+  await db.exec(MIGRATION_D1); // re-runnable
+  await db.close();
+});
+
+Deno.test("D1: aborts before revoking anything if a function is not SECURITY DEFINER with search_path=public", async () => {
+  const db = await exposureDb();
+  await db.exec(`alter function ${LEGACY_RPC.finalize_market_entry} reset search_path`);
+  await assertRejects(() => db.exec(MIGRATION_D1), Error, "D1_ABORTED");
+  await db.close();
+});
+
+Deno.test("D3: a real position or order under a bot id with no paper account bypassed the entries lock — now refused", async () => {
+  const before = await exposureDb({ locked: true, d1: true });
+  for (const sql of [exServerPos("ghostP", "ghost"), exOrder("ghostO", false, "ghost")]) {
+    assertEquals((await asRole(before, "service_role", sql)).err, "", "reproduced: created although the SMC account is locked");
+  }
+  await before.close();
+  const db = await exposureDb({ locked: true, d1: true, d2: true });
+  assert((await asRole(db, "service_role", exServerPos("ghostP", "ghost"))).err.includes("needs a paper account"));
+  assert((await asRole(db, "service_role", exOrder("ghostO", false, "ghost"))).err.includes("needs a paper account"));
+  assertEquals((await asRole(db, "service_role", exOrder("ghostDry", true, "ghost"))).err, "", "a dry-run order is not exposure");
+  await db.close();
+});
+
+Deno.test("D2: pending_orders are read-only for clients — no insert, no update of any column or status, no delete; not even through a SECURITY DEFINER function", async () => {
+  const db = await exposureDb({ d1: true, d2: true });
+  await asRole(db, "service_role", exOrder("act1", false, "smc", "GBP/USD"));
+  await asRole(db, "service_role", exOrder("act2", false, "smc", "NZD/CAD", "short"));
+  await asRole(db, "service_role", `update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), confirmation_arm_count = 1 where order_id = 'act2'`);
+  await asRole(db, "service_role", exOrder("old1", false, "smc", "USD/JPY"));
+  await asRole(db, "service_role", `update public.pending_orders set status = 'cancelled', terminal_reason = 'CANCELLED_ZONE_EXIT' where order_id = 'old1'`);
+  const snapshot = async () => JSON.stringify((await db.query(`select * from public.pending_orders order by order_id`)).rows);
+  const before = await snapshot();
+  const attempts: [string, string][] = [
+    ["insert real", exOrder("cl1", false, "smc", "EUR/USD", "short")],
+    ["insert dry-run", exOrder("cl2", true, "smc", "CHF/JPY")],
+    ...["entry_price = 1.2", "stop_loss = 1.05", "take_profit = 1.3", "direction = 'short'", "symbol = 'USD/JPY'", "size = 50",
+        "expires_at = now() + interval '30 days'", "dry_run = true", "status = 'awaiting_confirmation'", "status = 'cancelled'"]
+      .map((set): [string, string] => [`update ${set}`, `update public.pending_orders set ${set} where order_id = 'act1'`]),
+    ["awaiting_confirmation → pending", `update public.pending_orders set status = 'pending' where order_id = 'act2'`],
+    ["re-activate cancelled → pending", `update public.pending_orders set status = 'pending' where order_id = 'old1'`],
+    ["re-activate cancelled → triggered", `update public.pending_orders set status = 'triggered' where order_id = 'old1'`],
+    ["delete", `delete from public.pending_orders where order_id = 'act1'`],
+  ];
+  for (const [label, sql] of attempts) {
+    for (const role of ["authenticated", "anon"] as const) {
+      const r = await asRole(db, role, sql);
+      assert(/permission denied|server-only/.test(r.err), `${role} ${label}: ${r.err || "ALLOWED"}`);
+    }
+  }
+  assertEquals(await snapshot(), before, "every order byte-identical after all client attempts");
+  const privs = (await db.query<Record<string, boolean>>(`select
+    has_table_privilege('authenticated', 'public.pending_orders', 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') auth_write,
+    has_table_privilege('anon', 'public.pending_orders', 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') anon_write,
+    has_table_privilege('authenticated', 'public.pending_orders', 'SELECT') auth_select,
+    has_table_privilege('authenticated', 'public.paper_positions', 'UPDATE') pos_update,
+    has_table_privilege('authenticated', 'public.paper_positions', 'DELETE') pos_delete`)).rows[0];
+  assertEquals(privs, { auth_write: false, anon_write: false, auth_select: true, pos_update: true, pos_delete: true }, "the privilege layer itself, not just the trigger");
+  const sel = await asRole(db, "authenticated", `select order_id from public.pending_orders where order_id in ('act1', 'act2')`);
+  assertEquals([sel.err, sel.rows.length], ["", 2], "clients still read their own orders");
+  // privileges do not apply inside SECURITY DEFINER — the row trigger does
+  await db.exec(`create function public.d2_definer_probe() returns void language sql security definer as $$ update public.pending_orders set stop_loss = 1.0 where order_id = 'act1' $$;
+    grant execute on function public.d2_definer_probe() to authenticated;`);
+  assert((await asRole(db, "authenticated", `select public.d2_definer_probe()`)).err.includes("server-only"));
+  assertEquals(await snapshot(), before);
+  await db.close();
+});
+
+Deno.test("D2: server paths are unchanged — route2_place_order, scanner-style updates, cancel, expire, delete, route2_claim_and_fill; dry-run orders while locked", async () => {
+  const db = await exposureDb({ locked: true, d1: true, d2: true });
+  // the locked dry-run experiment
+  const dry = await asRole(db, "service_role", `select public.route2_place_order($1::jsonb, $2::jsonb, '[]'::jsonb) r`,
+    [JSON.stringify(attrPayload({ dryRun: true })), JSON.stringify(orderRow({ dry_run: true, order_id: "dryR" }))]);
+  assertEquals([dry.err, dry.rows[0]?.r.outcome], ["", "placed"]);
+  assertEquals((await asRole(db, "service_role", `update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now() where order_id = 'dryR'`)).err, "");
+  assert((await asRole(db, "service_role", exOrder("lockedReal", false, "smc", "NZD/CAD"))).err.includes("entries locked"), "the entries lock still refuses real orders");
+  await db.exec(`update public.pending_orders set status = 'expired', terminal_reason = 'EXPIRED_NEVER_TOUCHED' where dry_run;
+    update public.paper_accounts set entries_locked = false where user_id = '${USER}'`);
+  // live: placement, the hunt's updates, cancel / expire / delete
+  const placed = await asRole(db, "service_role", `select public.route2_place_order($1::jsonb, $2::jsonb, '[]'::jsonb) r`,
+    [JSON.stringify(attrPayload({})), JSON.stringify(orderRow({ order_id: "realR" }))]);
+  assertEquals([placed.err, placed.rows[0]?.r.outcome], ["", "placed"]);
+  await asRole(db, "service_role", exOrder("realS", false, "smc", "GBP/USD"));
+  for (const sql of [
+    `update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), confirmation_arm_count = 1 where order_id = 'realS'`,
+    `update public.pending_orders set status = 'pending', reset_reason = 'zone_exit' where order_id = 'realS'`,
+    `update public.pending_orders set signal_score = 70, current_price = 1.1005, stop_loss = 1.0975, take_profit = 1.1025, size = 2 where order_id = 'realS'`,
+    `update public.pending_orders set status = 'cancelled', terminal_reason = 'CANCELLED_SUPERSEDED', cancel_reason = 'Manually cancelled by user', resolved_at = now() where order_id = 'realS'`,
+    `delete from public.pending_orders where order_id = 'realS'`,
+  ]) assertEquals((await asRole(db, "service_role", sql)).err, "", sql);
+  // the Route 2 fill
+  const o = (await db.query<any>(`select id from public.pending_orders where order_id = 'realR'`)).rows[0];
+  await asRole(db, "service_role", `update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), confirmation_arm_count = 1 where order_id = 'realR'`);
+  const fill = await asRole(db, "service_role", `select public.route2_claim_and_fill($1::uuid, $2::uuid, 1, $3::jsonb, $4::jsonb) r`, [o.id, USER,
+    JSON.stringify({ terminal_reason: "FILLED", fill_price: 190.1643, filled_at: new Date().toISOString(), resolved_at: new Date().toISOString() }),
+    JSON.stringify({ user_id: USER, bot_id: "smc", position_id: "posR", order_id: "realR", symbol: "CHF/JPY", direction: "long", size: "2.91",
+      entry_price: "190.1643", current_price: "190.1643", stop_loss: "189.892885", take_profit: "190.417885", open_time: new Date().toISOString(), signal_score: "61.6", position_status: "open" })]);
+  assertEquals([fill.err, fill.rows[0]?.r.outcome], ["", "filled"]);
+  await db.close();
+});
+
+Deno.test("D2: paper_positions — a client insert (the manual place_order) is refused; client updates and the manual close are preserved", async () => {
+  const db = await exposureDb({ d1: true, d2: true });
+  assert((await asRole(db, "authenticated", exManual("m1"))).err.includes("server-only"));
+  const p = (await asRole(db, "service_role", exServerPos("posC"))).rows[0];
+  const upd = await asRole(db, "authenticated", `update public.paper_positions set current_price = '155.2', stop_loss = '154.8' where position_id = 'posC' returning id`);
+  assertEquals([upd.err, upd.rows.length], ["", 1], "status refresh / update_position");
+  const close = await asRole(db, "authenticated", `select public.settle_paper_position($1, '${USER}', 'smc', '{"exit_price":155.2,"pnl":300,"close_reason":"manual"}'::jsonb, 'paper_trading_manual_close') r`, [p.id]);
+  assertEquals([close.err, close.rows[0]?.r.code], ["", "settled"]);
+  await db.close();
+});
+
+Deno.test("D2: the migration aborts (nothing applied) unless service_role keeps every pending_orders write privilege", async () => {
+  const db = await exposureDb({ d1: true });
+  await db.exec(`revoke delete on public.pending_orders from service_role`);
+  await assertRejects(() => db.exec(`begin; ${MIGRATION_D2}; commit;`), Error, "D2_ABORTED");
+  await db.exec("rollback").catch(() => {});
+  assertEquals((await db.query<{ n: number }>(`select count(*)::int n from pg_trigger where tgname = 'a_real_exposure_admission'`)).rows[0].n, 0);
+  await db.close();
+});

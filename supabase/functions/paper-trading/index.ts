@@ -1573,7 +1573,7 @@ Deno.serve(async (req) => {
         sizeLots: size,
       });
 
-      await supabase.from("paper_positions").insert({
+      const { error: insertErr } = await supabase.from("paper_positions").insert({
         user_id: user.id, position_id: positionId, symbol, direction, size: size.toString(),
         frozen_strategy_context: manualFrozenDecision,
         entry_price: entryPrice.toString(), current_price: entryPrice.toString(),
@@ -1581,6 +1581,9 @@ Deno.serve(async (req) => {
         open_time: now, signal_reason: signalReason || "", signal_score: (signalScore || 0).toString(),
         order_id: orderId, position_status: "open",
       });
+      // Real exposure is server-only (migration 20261009030000) and the entries lock refuses
+      // positions too: report the refusal instead of a manual trade that does not exist.
+      if (insertErr) throw new Error(`Order refused: ${insertErr.message}`);
 
       // Mirror to MT5 if connected
       let mt5Mirror: any = null;
