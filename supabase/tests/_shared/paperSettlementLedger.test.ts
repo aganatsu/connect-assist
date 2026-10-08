@@ -48,6 +48,7 @@ const MIGRATION_DRY_RUN = read("../../migrations/20261007000000_step8_dry_run_or
 const MIGRATION_STEP15 = read("../../migrations/20261008000000_step15_attribution_schema.sql");
 const MIGRATION_STEP15_PR2 = read("../../migrations/20261008010000_step15_pr2_attribution_lifecycle.sql");
 const MIGRATION_STEP15_PR3 = read("../../migrations/20261008020000_step15_pr3_outcome_resolver.sql");
+const MIGRATION_STEP17A = read("../../migrations/20261009000000_step17a_fill_reanchor_attribution.sql");
 // Route 2 columns the PR 2 lifecycle trigger reads (zone_touch_time,
 // confirmation_*, terminal_reason, …) and route2_claim_and_fill. Applied in
 // date order, as in production.
@@ -167,6 +168,7 @@ async function applyMigrations(db: PGlite) {
   await db.exec(MIGRATION_STEP15);
   await db.exec(MIGRATION_STEP15_PR2);
   await db.exec(MIGRATION_STEP15_PR3);
+  await db.exec(MIGRATION_STEP17A);
 }
 
 async function freshDb(opts: { preFix?: boolean; balance?: number } = {}): Promise<PGlite> {
@@ -1566,4 +1568,42 @@ Deno.test("step 16-D: mixed real + dry-run exposure refuses; a flat account (onl
   assertEquals(g2.reset, true);
   assertEquals([await balance(flat), await peak(flat)], [100000, 100000]);
   await db.close(); await flat.close();
+});
+
+
+// ─── Step 17-A: the fill event records the (dry-run) re-anchor ──────────────
+
+Deno.test("step 17-A: a re-anchored dry-run fill — section F holds the re-anchored geometry, section B the plan, the fill event the full record", async () => {
+  const db = await freshDb();
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  const a = attrPayload({ dryRun: true, symbol: "GBP/USD" }); const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: "ra1", symbol: "GBP/USD", dry_run: true, entry_price: 1.322, stop_loss: 1.319745, take_profit: 1.324995 }));
+  const plan = (await db.query<{ stop_price: string; target_price: string }>(`select stop_price, target_price from public.trade_attribution where signal_id = $1`, [sig])).rows[0];
+  const reanchor = { version: "route2_fill_reanchor.v1", status: "reanchored", originalStop: 1.319745, originalTarget: 1.324995, stop: 1.3191, target: 1.32435,
+    fillToOriginalStopPips: 18.55, stopDistancePips: 25, floorPips: 25, rawRR: 1.1, effectiveRR: 1.04, costInPrice: 0.00015, fillPrice: 1.3216, riskUsd: 499.99 };
+  const sizing = { ok: true, lots: 2.0, riskUsdActual: 499.99, riskPercentActual: 0.49999, stopDistance: 0.0025, stopDistancePips: 25, insideFloor: true, reanchor };
+  await db.query(`update public.pending_orders set status = 'filled', filled_at = now(), fill_price = 1.3216, terminal_reason = 'FILLED',
+     stop_loss = 1.3191, take_profit = 1.32435, fill_sizing = $1::jsonb where order_id = 'ra1'`, [JSON.stringify(sizing)]);
+  const r = (await db.query<any>(`select fill_kind, fill_stop_price, fill_target_price, fill_stop_distance_pips, fill_inside_floor, fill_risk_usd, stop_price, target_price
+     from public.trade_attribution where signal_id = $1`, [sig])).rows[0];
+  assertEquals(r.fill_kind, "hypothetical");
+  assertEquals([Number(r.fill_stop_price), Number(r.fill_target_price)], [1.3191, 1.32435], "section F: the geometry actually used (re-anchored)");
+  assertEquals([Number(r.fill_stop_distance_pips), r.fill_inside_floor, Number(r.fill_risk_usd)], [25, true, 499.99], "final distance = floor; landed inside; risk dollars");
+  assertEquals([r.stop_price, r.target_price], [plan.stop_price, plan.target_price], "section B: the plan is untouched");
+  const ev = (await db.query<{ detail: any }>(`select detail from public.trade_attribution_events where signal_id = $1 and event_type = 'filled'`, [sig])).rows[0].detail;
+  assertEquals(ev.fill_sizing.reanchor.status, "reanchored");
+  assertEquals([ev.fill_sizing.reanchor.originalStop, ev.fill_sizing.reanchor.stop, ev.fill_sizing.reanchor.floorPips, ev.fill_sizing.reanchor.fillPrice], [1.319745, 1.3191, 25, 1.3216]);
+  assertEquals(ev.status, "filled", "the original event fields are kept");
+  await db.close();
+});
+
+Deno.test("step 17-A: cancel / expiry events are unchanged (no fill_sizing key)", async () => {
+  const db = await freshDb();
+  await db.query(`update public.paper_accounts set entries_locked = true where user_id = $1`, [USER]);
+  const a = attrPayload({ dryRun: true, symbol: "EUR/USD" }); const sig = a.signal_id as string;
+  await place(db, a, orderRow({ order_id: "ra2", symbol: "EUR/USD", dry_run: true, entry_price: 1.1, stop_loss: 1.098, take_profit: 1.1022 }));
+  await db.query(`update public.pending_orders set status = 'cancelled', terminal_reason = 'CANCELLED_ZONE_EXIT', resolved_at = now() where order_id = 'ra2'`);
+  const ev = (await db.query<{ event_type: string; detail: any }>(`select event_type, detail from public.trade_attribution_events where signal_id = $1 and dedupe_key = 'terminal'`, [sig])).rows[0];
+  assertEquals(Object.keys(ev.detail).sort(), ["cancel_reason", "status", "terminal_reason"]);
+  await db.close();
 });

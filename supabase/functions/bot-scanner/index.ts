@@ -109,6 +109,7 @@ import { buildAttribution } from "../_shared/attribution.ts";
 import { placeRoute2Order } from "../_shared/route2Placement.ts";
 import { splitByLevel } from "../_shared/route2SameLevel.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
+import { dryRunFillGeometry } from "../_shared/route2FillReanchor.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
@@ -4514,12 +4515,40 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // DRY RUN order: record a hypothetical fill at the confirmation price.
           // Never a position — not even after unlock.
           if ((pending as any).dry_run === true) {
+            // Step 17-A (DRY RUN ONLY): a fill inside the pair's floor re-anchors
+            // the stop to fill ∓ floor, the target to 1.1R from the fill, and is
+            // re-sized at 0.5%; a re-anchor that would break the stop cap or the
+            // order R:R gate is rejected and tagged, keeping the original geometry.
+            // The live fill path below does not do this.
+            const r2StopCtx = (pending as any).dry_run_context?.route2Stop ?? {};
+            const dryGeo = dryRunFillGeometry({
+              input: {
+                symbol: pending.symbol, direction: pending.direction as "long" | "short", fillPrice: actualFillPrice,
+                stop: Number(pending.stop_loss), target: Number(pending.take_profit),
+                floorPips: Number.isFinite(fillFloorPips) ? fillFloorPips : null,
+                capPips: typeof r2StopCtx.capPips === "number" ? r2StopCtx.capPips : null,
+                pipSize: r2Spec.pipSize, tpRatio: config.tpRatio, orderRRMin: simp.orderRRMin, rateMap, commissionPerLot: avgCommissionPerLot,
+              },
+              baseSizing: (fillSizingRecord ?? fillSizing) as Record<string, unknown> | null,
+              resize: (stop) => simp.sizingMode === "fill_time"
+                ? fillTimeSize({
+                    balance, riskPercent: simp.riskPercent, fillPrice: actualFillPrice, stop,
+                    symbol: pending.symbol, rateMap, commissionPerLot: avgCommissionPerLot, maxLotsPerTrade: simp.maxLotsPerTrade,
+                  }) as any
+                : null,
+            });
             const { error: dryErr } = await supabase.from("pending_orders").update({
               ...pendingFillPatch,
               status: "filled",
+              stop_loss: dryGeo.stop,
+              take_profit: dryGeo.target,
+              fill_sizing: dryGeo.sizing,
               fill_reason: `[DRY RUN — hypothetical] ${pendingFillPatch.fill_reason}`,
-              dry_run_context: { ...((pending as any).dry_run_context ?? {}), fillSizing: fillSizingRecord ?? fillSizing, fillPrice: actualFillPrice },
+              dry_run_context: { ...((pending as any).dry_run_context ?? {}), fillSizing: dryGeo.sizing, fillPrice: actualFillPrice, fillReanchor: dryGeo.record },
             }).eq("id", (pending as any).id).eq("status", pending.status);
+            if (dryGeo.record.status !== "not_needed") {
+              console.log(`[pending] ${pending.symbol} ${pending.direction} dry-run fill re-anchor: ${dryGeo.record.status}${dryGeo.record.reason ? ` (${dryGeo.record.reason})` : ""} — stop ${pending.stop_loss} → ${dryGeo.stop}`);
+            }
             if (dryErr) console.warn(`[pending] dry-run fill record failed for ${pending.order_id}: ${dryErr.message}`);
             pollCtx.branch = "dry_run_fill";
             pollCtx.after = "filled";

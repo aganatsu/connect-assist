@@ -162,7 +162,7 @@ Deno.test("the hunt records a hypothetical fill for dry-run orders and never cla
   const d = scanner.indexOf("if ((pending as any).dry_run === true) {");
   const claim = scanner.indexOf("const claim = await claimRoute2Fill(supabase, {");
   assert(d > 0 && d < claim, "dry-run branch precedes the real claim");
-  const block = scanner.slice(d, d + 1200);
+  const block = scanner.slice(d, scanner.indexOf("continue;", d) + "continue;".length); // the whole dry-run branch
   assert(/status: "filled"/.test(block) && /\[DRY RUN — hypothetical\]/.test(block) && /continue;/.test(block));
   assert(!/claimRoute2Fill/.test(block));
   const z = zcs.indexOf("if ((pending as any).dry_run === true) continue;");

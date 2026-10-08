@@ -218,8 +218,10 @@ Deno.test("wiring: fills carry the signal and the fill-sizing record; dry-run in
   assert(scanner.includes("signal_id: (pending as any).signal_id ?? null,"), "real fill → position carries the order's signal");
   assert(/fill_sizing: fillSizingRecord,/.test(scanner), "real + dry-run fills write fill_sizing (dry-run spreads the same patch)");
   const d = scanner.indexOf("if ((pending as any).dry_run === true) {");
-  assert(scanner.slice(d, d + 400).includes("...pendingFillPatch,"), "the dry-run update includes fill_sizing via the patch");
-  assert(!/insideFloor[^\n]*continue;/.test(scanner), "inside-floor is recorded, never acted on");
+  const dry = scanner.slice(d, scanner.indexOf("continue;", d));
+  assert(dry.includes("...pendingFillPatch,") && dry.includes("fill_sizing: dryGeo.sizing,"), "the dry-run update writes fill_sizing (Step 17-A: the re-anchor-aware record)");
+  // Step 17-A: inside-floor is acted on ONLY for dry-run fills (re-anchor); the live path records it, never acts
+  assert(!/insideFloor[^\n]*continue;/.test(scanner), "inside-floor never skips a fill");
   assert(zcs.includes("signal_id: (pending as any).signal_id ?? null,"), "the (switched-off) second poller is consistent");
 });
 
