@@ -1946,3 +1946,23 @@ Deno.test("D2: the migration aborts (nothing applied) unless service_role keeps 
   assertEquals((await db.query<{ n: number }>(`select count(*)::int n from pg_trigger where tgname = 'a_real_exposure_admission'`)).rows[0].n, 0);
   await db.close();
 });
+
+// ─── Baseline A report: the SQL-editor subset runs against the real schema and never pools cohorts ──
+Deno.test("Baseline A report SQL: Baseline A and historical dry-run rows land in separate cohorts; a pre-unlock real row is excluded", async () => {
+  const db = await freshDb();
+  const sql = Deno.readTextFileSync(new URL("../../../docs/BASELINE_A_REPORT_READONLY.sql", import.meta.url));
+  await insertAttribution(db, { config_version: "1037e6170289f865e4d6618dcf28b94d", decision_at: "2026-10-09T18:00:00Z", symbol: "GBP/USD", entry_source: "zoneMid" },
+    { order_id: "baseA1", order_placed_at: "2026-10-09T18:00:00Z", filled_at: "2026-10-09T18:30:00Z", terminal_at: "2026-10-09T18:30:00Z" });
+  await insertAttribution(db, { dry_run: true, decision_at: "2026-10-08T10:00:00Z", entry_source: "refinedEntry", outcome_kind: "hypothetical",
+    closed_at: "2026-10-08T12:00:00Z", exit_reason: "hypothetical_stop", realized_r_gross: -1, realized_r_net: -1.04, realized_pnl_usd: -499.3 },
+    { order_id: "dry1", fill_kind: "hypothetical", terminal_status: "hypothetical_fill" });
+  await insertAttribution(db, { decision_at: "2026-10-08T11:00:00Z" }, null); // real, pre-unlock, other config → excluded
+  const rows = (await db.query<any>(sql)).rows;
+  const get = (c: string, d: string, v: string) => rows.find((r) => r.cohort === c && r.dimension === d && r.value === v);
+  assertEquals(new Set(rows.map((r) => r.cohort)), new Set(["baseline_a", "historical_dry_run"]));
+  assertEquals([Number(get("baseline_a", "overall", "all").orders), Number(get("baseline_a", "overall", "all").fills), Number(get("baseline_a", "overall", "all").closed)], [1, 1, 0]);
+  const dry = get("historical_dry_run", "overall", "all");
+  assertEquals([Number(dry.orders), Number(dry.closed), Number(dry.win_rate), Number(dry.avg_r_gross), Number(dry.realized_pnl_usd)], [1, 1, 0, -1, -499.3]);
+  assert(get("baseline_a", "entry_source", "zoneMid") && get("historical_dry_run", "entry_source", "refinedEntry") && get("baseline_a", "pair", "GBP/USD"));
+  await db.close();
+});
