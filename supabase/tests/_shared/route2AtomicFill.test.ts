@@ -468,7 +468,15 @@ Deno.test("both pollers fill ONLY through the atomic claim, keyed on the row and
     // No residual two-step fill anywhere in the file — except bot-scanner's
     // step-8 DRY-RUN branch, which marks a hypothetical fill on a dry_run order
     // and never creates a position (the database also refuses one).
-    const stripped = src.replace(/if \(\(pending as any\)\.dry_run === true\) \{[\s\S]*?\n {10}\}/, "");
+    // Likewise the Candidate C shadow branch: a hypothetical fill on a shadow
+    // dry_run order, guarded on bot id AND dry_run in the write itself.
+    if (name === "bot-scanner") {
+      const c = src.match(/if \(isShadow\) \{\s*const shadowSizing[\s\S]*?\n {10}\}/);
+      assert(c, "the shadow fill branch was not found");
+      assert(c[0].includes(`.eq("bot_id", SHADOW_BOT_ID).eq("dry_run", true)`), "the shadow fill write is guarded on bot id and dry_run");
+    }
+    const stripped = src.replace(/if \(\(pending as any\)\.dry_run === true\) \{[\s\S]*?\n {10}\}/, "")
+      .replace(/if \(isShadow\) \{\s*const shadowSizing[\s\S]*?\n {10}\}/, "");
     assert(!/status:\s*"filled"/.test(stripped), `${name} still writes status "filled" outside the claim`);
   }
 });

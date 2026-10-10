@@ -28,7 +28,8 @@ const rowsOut: Record<string, unknown>[] = [];
 for (let from = 0; ; from += 1000) {
   const { data, error } = await db.from("trade_attribution")
     .select("signal_id, order_id, symbol, direction, order_placed_at, filled_at, closed_at, exit_reason, realized_r_gross, realized_r_net, realized_pnl_usd, fill_risk_usd, config_version")
-    .eq("fill_kind", "hypothetical").order("filled_at", { ascending: true }).range(from, from + 999);
+    // bot "smc" only: the Candidate C shadow (bot smc_shadow_zonemid) writes hypothetical fills too
+    .eq("fill_kind", "hypothetical").eq("bot_id", "smc").order("filled_at", { ascending: true }).range(from, from + 999);
   if (error) throw new Error(`trade_attribution: ${error.message}`);
   rowsOut.push(...(data ?? []));
   if (!data || data.length < 1000) break;

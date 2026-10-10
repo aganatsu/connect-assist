@@ -32,6 +32,7 @@ import {
 } from "../../functions/_shared/paperSettlement.ts";
 import { buildAttribution } from "../../functions/_shared/attribution.ts";
 import { ACTIVE_ORDER_STATUSES, exposureFromRows, resetRefusal } from "../../functions/_shared/accountResetGuard.ts";
+import { baseScope as shadowScope, runShadowHook } from "./shadowHookSandbox.ts";
 
 const read = (rel: string) => Deno.readTextFileSync(new URL(rel, import.meta.url));
 const BASELINE = read("../../migrations/20260914000000_baseline_schema.sql");
@@ -1944,6 +1945,100 @@ Deno.test("D2: the migration aborts (nothing applied) unless service_role keeps 
   await assertRejects(() => db.exec(`begin; ${MIGRATION_D2}; commit;`), Error, "D2_ABORTED");
   await db.exec("rollback").catch(() => {});
   assertEquals((await db.query<{ n: number }>(`select count(*)::int n from pg_trigger where tgname = 'a_real_exposure_admission'`)).rows[0].n, 0);
+  await db.close();
+});
+
+// ─── Candidate C live shadow: database isolation (production guards: D1 + D2/D3, 17-C) ──
+// The C order and attribution below are produced by the scanner's own hook
+// source (shadowHookSandbox.ts), so these tests also prove the hook's rows are
+// accepted by route2_place_order exactly as written.
+
+const shadowIntent = () => runShadowHook(shadowScope({ userId: USER })).shadowIntents[0];
+const placeAs = (db: PGlite, attribution: unknown, order: unknown, supersede: unknown[] = []) =>
+  asRole(db, "service_role", `select public.route2_place_order($1::jsonb, $2::jsonb, $3::jsonb) r`,
+    [JSON.stringify(attribution), JSON.stringify(order), JSON.stringify(supersede)]);
+const rowOf = async (db: PGlite, orderId: string) =>
+  (await db.query<any>(`select * from public.pending_orders where order_id = $1`, [orderId])).rows[0];
+
+Deno.test("shadow C: the hook's order is placed beside A's live order (same symbol + direction); duplicates and supersede stay inside C's bot id", async () => {
+  const db = await exposureDb({ d1: true, d2: true });
+  const aAttr = attrPayload({});
+  const aSig = aAttr.signal_id as string;
+  assertEquals((await placeAs(db, aAttr, orderRow({ order_id: "aLive" }))).rows[0].r.outcome, "placed");
+  const aBefore = JSON.stringify(await rowOf(db, "aLive"));
+  const aPlan = await planOf(db, aSig);
+
+  const c1 = shadowIntent();
+  assertEquals([c1.order.symbol, c1.order.direction, c1.order.bot_id, c1.order.dry_run], ["CHF/JPY", "long", "smc_shadow_zonemid", true]);
+  const p1 = await placeAs(db, c1.attribution, c1.order);
+  assertEquals([p1.err, p1.rows[0].r.outcome], ["", "placed"], `C coexists with A's active order: ${JSON.stringify(p1.rows[0]?.r)}`);
+  assertEquals((await db.query<any>(`select bot_id from public.pending_orders where symbol = 'CHF/JPY' and direction = 'long' and status = 'pending' order by bot_id`)).rows.map((r) => r.bot_id),
+    ["smc", "smc_shadow_zonemid"]);
+  const cAttr = await attr(db, c1.attribution.signal_id as string);
+  assertEquals([cAttr.bot_id, cAttr.dry_run, cAttr.entry_source, cAttr.strategy_version, cAttr.config_version], ["smc_shadow_zonemid", true, "zoneMid", "shadow-zonemid.v1", "1037e6170289f865e4d6618dcf28b94d"]);
+
+  // a second C for the same setup: duplicate — reported against C's order, never A's
+  const c2 = shadowIntent();
+  const p2 = (await placeAs(db, c2.attribution, c2.order)).rows[0].r;
+  assertEquals([p2.outcome, p2.existing_order_id], ["duplicate", c1.order.order_id]);
+  // supersede naming A's order as well: only C's order is cancelled
+  const p3 = (await placeAs(db, c2.attribution, c2.order, [{ order_id: "aLive", cancel_reason: "x" }, { order_id: c1.order.order_id, cancel_reason: "moved" }])).rows[0].r;
+  assertEquals([p3.outcome, p3.superseded], ["placed", [c1.order.order_id]]);
+  assertEquals((await rowOf(db, c1.order.order_id as string)).terminal_reason, "CANCELLED_SUPERSEDED");
+  assertEquals(JSON.stringify(await rowOf(db, "aLive")), aBefore, "A's order row untouched");
+  assertEquals(await planOf(db, aSig), aPlan, "A's attribution untouched");
+  await db.close();
+});
+
+Deno.test("shadow C: can never become a position or real exposure — claim, direct insert, dry_run flip, a real order under the shadow bot", async () => {
+  const db = await exposureDb({ d1: true, d2: true });
+  const c = shadowIntent();
+  await placeAs(db, c.attribution, c.order);
+  const id = (await rowOf(db, c.order.order_id as string)).id;
+  await asRole(db, "service_role", `update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now(), confirmation_arm_count = 1 where id = '${id}'`);
+  const claim = await asRole(db, "service_role", `select public.route2_claim_and_fill($1::uuid, $2::uuid, 1, $3::jsonb, $4::jsonb) r`, [id, USER,
+    JSON.stringify({ terminal_reason: "FILLED", fill_price: 190.07, filled_at: new Date().toISOString(), resolved_at: new Date().toISOString() }),
+    JSON.stringify({ user_id: USER, bot_id: "smc_shadow_zonemid", position_id: "cPos", order_id: c.order.order_id, symbol: "CHF/JPY", direction: "long", size: "1",
+      entry_price: "190.07", current_price: "190.07", stop_loss: String(c.stop), take_profit: String(c.target), open_time: new Date().toISOString(), signal_score: "60", position_status: "open" })]);
+  assert(claim.err !== "" || claim.rows[0]?.r.outcome !== "filled", `claim must not fill: ${claim.err} ${JSON.stringify(claim.rows[0]?.r)}`);
+  const direct = await asRole(db, "service_role", `insert into public.paper_positions (user_id, bot_id, position_id, order_id, symbol, direction, size, entry_price, stop_loss, take_profit, current_price, open_time, signal_score, source_pending_order_id)
+    values ('${USER}', 'smc_shadow_zonemid', 'cPos2', 'cPos2', 'CHF/JPY', 'long', 1, 190.07, 189.8, 190.3, 190.07, now(), '60', '${id}')`);
+  // refused twice over: D3 (no paper account for the shadow bot) fires first, the step-8 dry-run guard behind it
+  assert(direct.err.includes("real exposure needs a paper account") || direct.err.includes("dry-run order can never become a position"), direct.err);
+  const flip = await asRole(db, "service_role", `update public.pending_orders set dry_run = false where id = '${id}'`);
+  assert(flip.err.includes("immutable"), flip.err);
+  const real = await asRole(db, "service_role", exOrder("zmREALREAL01", false, "smc_shadow_zonemid", "GBP/USD"));
+  assert(real.err.includes("real exposure needs a paper account"), real.err);
+  assertEquals(await count(db, "public.paper_positions where bot_id = 'smc_shadow_zonemid'"), 0);
+  await db.close();
+});
+
+Deno.test("shadow C: the hunt's fill is hypothetical and resolvable; the Baseline A report and the guarded reset ignore it", async () => {
+  const db = await exposureDb({ d1: true, d2: true });
+  const c = shadowIntent();
+  const sig = c.attribution.signal_id as string;
+  await placeAs(db, c.attribution, c.order);
+  // the shadow branch of the hunt: fill on the planned stop/target, live sizing, no re-anchor
+  await asRole(db, "service_role", `update public.pending_orders set status = 'awaiting_confirmation', zone_touch_time = now() where order_id = '${c.order.order_id}'`);
+  const fill = await asRole(db, "service_role", `update public.pending_orders set status = 'filled', filled_at = now(), fill_price = 190.08, terminal_reason = 'FILLED',
+    confirmation_accepted_at = now(), fill_sizing = '{"lots":2.0,"riskUsdActual":498.0,"riskPercentActual":0.498,"stopDistancePips":25.8,"insideFloor":false}'
+    where order_id = '${c.order.order_id}' and status = 'awaiting_confirmation' and bot_id = 'smc_shadow_zonemid' and dry_run`);
+  assertEquals(fill.err, "");
+  const at = await attr(db, sig);
+  assertEquals([at.fill_kind, at.terminal_status, Number(at.fill_stop_price), Number(at.fill_target_price), at.position_row_id],
+    ["hypothetical", "hypothetical_fill", c.stop, c.target, null]);
+  const closeAt = new Date(Date.now() + 3600e3).toISOString();
+  assertEquals((await db.query<{ r: string }>(`select public.attribution_resolve_hypothetical($1, $2::jsonb) r`,
+    [sig, outcome({ closed_at: closeAt, exit_price: c.stop })])).rows[0].r, "resolved");
+  const report = (await db.query<any>(Deno.readTextFileSync(new URL("../../../docs/BASELINE_A_REPORT_READONLY.sql", import.meta.url)))).rows;
+  assertEquals(report.length, 0, "C rows are in no Baseline A cohort");
+  // an active C order never blocks the guarded reset and is not touched by it
+  const c2 = shadowIntent();
+  await placeAs(db, { ...c2.attribution }, { ...c2.order, symbol: "CHF/JPY", direction: "long" });
+  const before = JSON.stringify(await rowOf(db, c2.order.order_id as string));
+  const r = await guarded(db);
+  assertEquals([r.reset, r.exposure?.activeDryRunOrders], [true, 1]);
+  assertEquals(JSON.stringify(await rowOf(db, c2.order.order_id as string)), before);
   await db.close();
 });
 

@@ -193,7 +193,8 @@ Deno.test("8b · both pollers write the log, on every lifecycle branch", () => {
     assert(/branchTaken: `error:/.test(src), `${name}: a throwing order must still be recorded`);
   }
   // Two pollers with different check-sets — the record must say which acted.
-  assert(/pollerName: "bot-scanner"/.test(SCANNER));
+  // bot-scanner names itself per order: "bot-scanner" for A, the shadow poller for Candidate C.
+  assert(SCANNER.includes(`const pollerName = isShadow ? SHADOW_POLLER_NAME : "bot-scanner";`));
   assert(/pollerName: "zone-confirmation-scanner"/.test(ZCS));
 });
 

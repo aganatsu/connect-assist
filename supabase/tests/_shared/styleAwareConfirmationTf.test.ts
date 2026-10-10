@@ -48,7 +48,9 @@ Deno.test("bot-scanner resolves it rather than hardcoding 5m", () => {
   assert(
     // The optional 4th argument is the management telemetry tag, which is
     // observation-only; the first three are what this test is about.
-    /cachedFetch\(pending\.symbol, confirmTF, confirmRange(, "[a-z0-9_]+")?\)/.test(scanner),
+    // through huntFetch: cachedFetch for A orders, a cache-only peek for Candidate C shadow orders
+    /huntFetch\(pending\.symbol, confirmTF, confirmRange(, "[a-z0-9_]+")?\)/.test(scanner)
+      && scanner.includes("const huntFetch = isShadow ? shadowFetch : cachedFetch;"),
     "and used for the fetch",
   );
 });
