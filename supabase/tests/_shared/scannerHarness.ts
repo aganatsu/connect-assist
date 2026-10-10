@@ -188,13 +188,27 @@ export function syntheticSeries(symbol: string, tdInterval: string, n: number, b
   return values;
 }
 
+/** Stamp fixed OHLC bars so the LAST one is the bar before the one forming at `baseMs` (as syntheticSeries). */
+export function anchoredSeries(bars: { open: number; high: number; low: number; close: number }[], tdInterval: string, baseMs: number) {
+  const step = (STEP_MIN[tdInterval] ?? 5) * 60_000;
+  const last = Math.floor(baseMs / step) * step - step;
+  return bars.map((b, i) => ({
+    datetime: new Date(last - (bars.length - 1 - i) * step).toISOString().replace("T", " ").slice(0, 19),
+    open: String(b.open), high: String(b.high), low: String(b.low), close: String(b.close), volume: "100",
+  }));
+}
+
 /**
  * Replace global fetch for the duration of `fn`. Provider requests get
  * synthetic candles, the credit RPC is granted, everything is recorded with
  * the db's current phase.
  */
+/** OHLC bars (oldest first) that replace the synthetic series for one (symbol, interval). */
+export type SeriesOverride = (tdSymbol: string, tdInterval: string) => { open: number; high: number; low: number; close: number }[] | null;
+
 export async function withStubbedNetwork<T>(
   db: FakeDb, calls: CallRecord[], baseMs: number, priceOf: (s: string) => number, fn: () => Promise<T>,
+  override?: SeriesOverride,
 ): Promise<T> {
   const realFetch = globalThis.fetch;
   globalThis.fetch = ((input: string | URL | Request, _init?: RequestInit) => {
@@ -205,7 +219,9 @@ export async function withStubbedNetwork<T>(
       const sym = u.searchParams.get("symbol") ?? "";
       const iv = u.searchParams.get("interval") ?? "5min";
       const n = Number(u.searchParams.get("outputsize") ?? 200);
-      return Promise.resolve(new Response(JSON.stringify({ status: "ok", values: syntheticSeries(sym, iv, Math.min(n, 500), baseMs, priceOf) })));
+      const fixed = override?.(sym, iv);
+      const values = fixed ? anchoredSeries(fixed, iv, baseMs) : syntheticSeries(sym, iv, Math.min(n, 500), baseMs, priceOf);
+      return Promise.resolve(new Response(JSON.stringify({ status: "ok", values })));
     }
     if (url.includes("/rpc/reserve_api_credit")) {
       calls.push({ kind: "credit", url, phase: db.phase });

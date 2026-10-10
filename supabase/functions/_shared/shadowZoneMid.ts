@@ -333,9 +333,12 @@ export interface ShadowCoverage {
 /**
  * Coverage of the shadow hunt: the share of C order-minutes that were fully
  * observed. A `shadow_no_data` poll is a minute C could not evaluate.
+ * `market_closed_hold` minutes are not evaluable for EITHER arm (no candle-
+ * driven step while FX is shut) and are left out of numerator and denominator.
  * Valid only at ≥ 90% overall AND ≥ 80% for every pair.
  */
-export function shadowCoverage(polls: { symbol: string; branch: string }[]): ShadowCoverage {
+export function shadowCoverage(allPolls: { symbol: string; branch: string }[]): ShadowCoverage {
+  const polls = allPolls.filter((p) => p.branch !== "market_closed_hold");
   const perPair: ShadowCoverage["perPair"] = {};
   let covered = 0;
   for (const p of polls) {

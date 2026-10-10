@@ -46,7 +46,7 @@ Disable with `drain`, then `off`. If C orders must end at once, a service-role u
 
 ## Validity of a C vs A result
 A result is valid only when shadow coverage is **≥ 90% overall and ≥ 80% for every pair**:
-`shadowCoverage(polls)`, where a `shadow_no_data` poll is an unobserved C order-minute.
+`shadowCoverage(polls)`, where a `shadow_no_data` poll is an unobserved C order-minute. `market_closed_hold` minutes (FX shut: no candle-driven step for A or C) are outside the measure — neither numerator nor denominator.
 A pair below 80% is reported separately and excluded from any promotion decision. Then the evaluation gate from the
 design applies:
 - ≥ 100 paired setups over ≥ 20 trading days, ≥ 10 per pair;

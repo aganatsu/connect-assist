@@ -38,6 +38,7 @@ import {
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import { setCreditCallerContext } from "../_shared/apiCreditBudget.ts";
 import { styleConfirmationTimeframe, MIN_CONFIRMATION_CANDLES } from "../_shared/styleTimeframes.ts";
+import { isFxClosedAt } from "../_shared/sessions.ts";
 import {
   SPECS,
   analyzeMarketStructure,
@@ -175,12 +176,20 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // ── 1. Query all orders in "awaiting_confirmation" status ──
-    const { data: huntingOrders, error: queryErr } = await supabase
+    const { data: queriedOrders, error: queryErr } = await supabase
       .from("pending_orders")
       .select("*")
       .eq("bot_id", BOT_ID)
       .eq("status", "awaiting_confirmation")
       .order("placed_at", { ascending: true });
+
+    // Market closed (the shared rule, as bot-scanner's hunt): no confirmation or
+    // fill off post-close bars. Crypto trades through the weekend.
+    const fxClosedNow = isFxClosedAt(Date.now());
+    const huntingOrders = (queriedOrders ?? []).filter((o: any) => !fxClosedNow || SPECS[o.symbol]?.type === "crypto");
+    if (fxClosedNow && (queriedOrders?.length ?? 0) > huntingOrders.length) {
+      console.log(`[zone-confirm] FX market closed — ${(queriedOrders?.length ?? 0) - huntingOrders.length} order(s) held, no confirmation evaluated`);
+    }
 
     if (queryErr) {
       console.error("[zone-confirm] Query error:", queryErr.message);
