@@ -2,7 +2,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import {
   MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, getQuoteToUSDRate, type Candle,
+  SPECS as INSTRUMENT_SPECS,
 } from "../_shared/smcAnalysis.ts";
+import { isFxClosedAt } from "../_shared/sessions.ts";
 import {
   requiredRatePairs, resolveRates, parseRateCache, describeProvenance, rateCacheKey,
   type RateProvenance,
@@ -120,7 +122,17 @@ async function fetchATR(symbol: string): Promise<number> {
   }
 }
 
-async function updatePositionPrices(supabase: any, positions: any[]): Promise<void> {
+/**
+ * FX market shut (the shared rule, sessions.isFxClosedAt) and the position is not
+ * crypto — the same condition as bot-scanner. Providers keep quoting after the
+ * Friday close; no FX position may be refreshed, moved or closed off those quotes.
+ */
+export function fxPriceFrozen(symbol: string, nowMs = Date.now()): boolean {
+  return INSTRUMENT_SPECS[symbol]?.type !== "crypto" && isFxClosedAt(nowMs);
+}
+
+export async function updatePositionPrices(supabase: any, allPositions: any[]): Promise<void> {
+  const positions = (allPositions ?? []).filter((p: any) => !fxPriceFrozen(p.symbol));
   if (!positions || positions.length === 0) return;
   const symbols = [...new Set(positions.map((p: any) => p.symbol))];
   const priceMap: Record<string, number> = {};
@@ -904,7 +916,7 @@ function generatePostMortem(
   };
 }
 
-Deno.serve(async (req) => {
+if (import.meta.main) Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
@@ -973,8 +985,9 @@ Deno.serve(async (req) => {
       // ── Always refresh live prices on status poll ──
       // Without this, positions show stale entry-time prices ($0 PnL) between scanner cycles.
       // Uses the lightweight TwelveData /price endpoint (single quote per symbol).
+      // FX closed: FX positions keep their stored price (no quote fetched, nothing written).
       if (positions && positions.length > 0) {
-        const symbols = [...new Set(positions.map((p: any) => p.symbol))] as string[];
+        const symbols = [...new Set(positions.map((p: any) => p.symbol))].filter((s) => !fxPriceFrozen(s as string)) as string[];
         const priceMap: Record<string, number> = {};
         await Promise.all(symbols.map(async (sym: string) => {
           const price = await fetchLivePrice(sym);
@@ -1025,6 +1038,8 @@ Deno.serve(async (req) => {
         const liveFlag = (k: string) => liveExit[k] ?? liveConfig[k];
         const closedIds: string[] = [];
         for (const pos of (positions || [])) {
+          // FX closed: no engine step (SL/TP, break-even, trailing, partial, time exit) for an FX position.
+          if (fxPriceFrozen(pos.symbol)) continue;
           const currentPrice = parseFloat(pos.current_price);
           const entryPrice = parseFloat(pos.entry_price);
           let sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;

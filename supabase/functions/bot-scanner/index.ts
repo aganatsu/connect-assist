@@ -2509,11 +2509,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   const nyHour = nyNow.t;
   const nyDay = nyNow.nyDay; // 0=Sun … 6=Sat — NY local day, NOT UTC day
   const isFxOpenSundayEvening = nyDay === 0 && nyHour >= 17;
-  const isFxClosedFridayEvening = nyDay === 5 && nyHour >= 17;
   const effectiveDay = isFxOpenSundayEvening ? 1 : nyDay; // pretend Sunday-evening is Monday
   // ── Weekend crypto mode ──
   // FX is shut Fri 17:00 ET → Sun 17:00 ET. When enabled, keep scanning but only crypto.
-  const fxMarketClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || isFxClosedFridayEvening;
+  // The shared rule (sessions.isFxClosedAt): Fri 17:00 → Sun 17:00 ET, DST-aware.
+  // It also gates open-position price refresh, management and breach checks below.
+  const fxMarketClosed = isFxClosedAt(now.getTime());
   let weekendCryptoMode = false;
   if (fxMarketClosed && config.weekendCryptoEnabled !== false && !opts?.isManagementOnly) {
     // INTERSECTED with the configured instruments, not substituted for them.
@@ -2637,8 +2638,16 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   // ── Refresh current_price for all open positions before management ──
   // Without this, management reads stale entry-time prices and can't fire trailing/BE/TP logic.
   // Uses the same fetchCandles chain (MetaAPI→TwelveData→Polygon) as the rest of the scanner.
-  if (openPosArr.length > 0) {
-    const posSymbols: string[] = Array.from(new Set(openPosArr.map((p: any) => p.symbol as string)));
+  //
+  // FX closed: no refresh for FX positions — providers keep quoting after the
+  // Friday close, and a weekend quote written here would drive the breach check
+  // and the Step 13 equity. The stored price stays the last one taken while the
+  // market was open; the first cycle after the Sunday open refreshes it.
+  const refreshablePositions = fxMarketClosed
+    ? openPosArr.filter((p: any) => SPECS[p.symbol]?.type === "crypto")
+    : openPosArr;
+  if (refreshablePositions.length > 0) {
+    const posSymbols: string[] = Array.from(new Set(refreshablePositions.map((p: any) => p.symbol as string)));
     const livePriceMap: Record<string, number> = {};
     // Fetch a minimal 1-day candle for each symbol — last close = current price
     await Promise.all(posSymbols.map(async (sym: string) => {
@@ -2650,7 +2659,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       } catch {}
     }));
     let priceUpdates = 0;
-    for (const pos of openPosArr) {
+    for (const pos of refreshablePositions) {
       const livePrice = livePriceMap[pos.symbol];
       if (livePrice !== undefined && livePrice.toString() !== pos.current_price) {
         await supabase.from("paper_positions").update({ current_price: livePrice.toString() }).eq("id", pos.id);
@@ -2659,7 +2668,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       }
     }
     if (priceUpdates > 0) {
-      console.log(`[scan ${scanCycleId}] Refreshed current_price for ${priceUpdates}/${openPosArr.length} open positions (${posSymbols.length} symbols)`);
+      console.log(`[scan ${scanCycleId}] Refreshed current_price for ${priceUpdates}/${refreshablePositions.length} open positions (${posSymbols.length} symbols)`);
     }
   }
 
@@ -3170,8 +3179,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   // For paper trading (no real broker SL enforcement), we must detect and close here.
   // Runs AFTER price refresh (current_price is fresh) and AFTER rateMap build (PnL conversion available).
   try {
+    // FX closed: no settlement of an FX position off a price (the stored price
+    // is frozen anyway). At the reopen the first refreshed price decides, with
+    // the existing settlement semantics.
     const breachCandidates = openPosArr.filter((p: any) =>
-      (p.stop_loss || p.take_profit) && p.current_price
+      (p.stop_loss || p.take_profit) && p.current_price &&
+      !(fxMarketClosed && SPECS[p.symbol]?.type !== "crypto")
     );
     const breachedIds: string[] = []; // track IDs to splice from openPosArr after loop
     for (const pos of breachCandidates) {
