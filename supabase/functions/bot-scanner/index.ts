@@ -153,6 +153,7 @@ import { createScanCache } from "../_shared/dataCache.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
+  isFxClosedAt,
   normalizeSessionFilter,
   isSessionEnabled,
   type SessionResult,
@@ -3642,6 +3643,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
    */
   const route2PollRows: Record<string, unknown>[] = [];
   const pollAt = new Date().toISOString();
+  // FX market hours for this poll — the shared rule (sessions.isFxClosedAt), the
+  // same Fri 17:00 → Sun 17:00 ET window as the pair loop's market_closed skip.
+  const fxClosedAtPoll = isFxClosedAt(Date.parse(pollAt));
 
   // ── Candidate C shadow orders ──
   // Loaded only when the flag is on/drain, and only AFTER every A order has
@@ -3727,6 +3731,18 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         // need, on a budget that is already refusing fetches.
         const pendingInterval = getEntryInterval(config.entryTimeframe || "15min");
         const pendingRange = getEntryRange(config.entryTimeframe || "15min");
+        // ── Market closed: no candle-driven lifecycle step ──
+        // Providers keep returning bars after the Friday close: order 4324c6b3
+        // touched at 23:50 and confirmed + filled at 23:51 UTC on post-close
+        // USD/JPY quotes while the pair loop said market_closed. While FX is
+        // shut, no order may touch, arm, confirm, fill, or be invalidated off
+        // market data, and nothing is fetched for it. Pure time expiry (above)
+        // still runs. Same condition as the pair loop: everything but crypto.
+        if (fxClosedAtPoll && SPECS[pending.symbol]?.type !== "crypto") {
+          pollCtx.branch = "market_closed_hold";
+          continue;
+        }
+
         // Candidate C: a minute is evaluated only if EVERY series A's code
         // would read for this order is already in the cycle cache (fetched by
         // A). Otherwise the order is left untouched and the gap is recorded —
