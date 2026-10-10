@@ -78,7 +78,9 @@ Deno.test("a missing-candle cycle is reported, not silent", () => {
   // dataCache caches the empty result ("Cache the failure so we don't retry"),
   // so one refused fetch skips the order for the whole cycle. A bare `continue`
   // made that indistinguishable from a healthy no-op.
-  const i = scanner.indexOf("const pendingCandles = await cachedFetch");
+  // `huntFetch` is cachedFetch for every A order (cache-only peek for a Candidate C shadow order).
+  assert(scanner.includes("const huntFetch = isShadow ? shadowFetch : cachedFetch;"));
+  const i = scanner.indexOf("const pendingCandles = await huntFetch");
   // Widened 2026-09-29: the Route 2 poll-log write now sits between the
   // guard and the warning, so 700 bytes no longer reached the message.
   const block = scanner.slice(i, i + 1400);

@@ -52,6 +52,14 @@ export interface ScanCache {
    */
   seed(symbol: string, interval: string, candles: Candle[], source?: string): void;
 
+  /**
+   * Read-only lookup: the RESOLVED candles for a key, or undefined. Never
+   * fetches, never joins an in-flight request, and does not touch the hit/miss
+   * counters — a peek is invisible to stats() and to every get() caller.
+   * Used by the Candidate C shadow, which must not spend provider credits.
+   */
+  peek(symbol: string, interval: string): Candle[] | undefined;
+
   /** Number of unique (symbol, interval) entries currently cached. */
   size(): number;
 
@@ -121,6 +129,10 @@ export function createScanCache(fetchFn: FetchCandlesFn): ScanCache {
     return promise;
   }
 
+  function peek(symbol: string, interval: string): Candle[] | undefined {
+    return resolved.get(makeKey(symbol, interval));
+  }
+
   function size(): number {
     return resolved.size;
   }
@@ -146,5 +158,5 @@ export function createScanCache(fetchFn: FetchCandlesFn): ScanCache {
     return { hits, misses, errors, seeded };
   }
 
-  return { get, seed, size, clear, stats };
+  return { get, peek, seed, size, clear, stats };
 }

@@ -110,6 +110,12 @@ import { placeRoute2Order } from "../_shared/route2Placement.ts";
 import { splitByLevel } from "../_shared/route2SameLevel.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
 import { dryRunFillGeometry } from "../_shared/route2FillReanchor.ts";
+import {
+  SHADOW_BOT_ID, SHADOW_ENV_VAR, SHADOW_POLLER_NAME, SHADOW_STRATEGY_VERSION,
+  isShadowOrder, parseShadowMode, peekAll, shadowBookFromAttribution, shadowEligibleSource,
+  shadowHunts, shadowOrderId, shadowPlaces, shadowRequiredSeries, shadowRoute2Geometry, writeShadowIntents, zoneMidLimit,
+  type ShadowIntent,
+} from "../_shared/shadowZoneMid.ts";
 import { evaluateTpSmallGate } from "../_shared/tpSmallGate.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
@@ -2255,7 +2261,7 @@ if (import.meta.main) Deno.serve(async (req) => {
   }
 });
 
-async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean; isManagementOnly?: boolean }) {
+export async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean; isManagementOnly?: boolean }) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
   const brokerHealthMap: Record<string, BrokerHealth> = {}; // Circuit breaker state per connection (in-memory, resets each invocation)
@@ -2264,6 +2270,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
   const scanCache = createScanCache(fetchCandles);
+
+  // ── Candidate C live shadow (_shared/shadowZoneMid.ts) ──
+  // Env flag, default OFF. Off: nothing below runs — no query, no write.
+  // The shadow reads candles with peek() only: never a provider call.
+  const shadowMode = (() => {
+    try { return parseShadowMode(Deno.env.get(SHADOW_ENV_VAR)); } catch { return "off" as const; }
+  })();
+  const shadowFetch = (sym: string, interval: string, _range?: string, _reason?: string) =>
+    Promise.resolve(scanCache.peek(sym, interval) ?? []);
+  const shadowIntents: ShadowIntent[] = [];
 
   // OBSERVATION ONLY. The wrapper records which call site asked for what and
   // whether the per-cycle cache already had it. It adds no fetch, removes none,
@@ -3627,9 +3643,47 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const route2PollRows: Record<string, unknown>[] = [];
   const pollAt = new Date().toISOString();
 
-  if (activePendingOrders && activePendingOrders.length > 0) {
-    console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
-    for (const pending of activePendingOrders) {
+  // ── Candidate C shadow orders ──
+  // Loaded only when the flag is on/drain, and only AFTER every A order has
+  // been processed (the generator below yields A's list first, unchanged in
+  // order and content, then queries for C). With the flag off the generator
+  // yields exactly A's list and nothing is queried. Every shadow branch below
+  // writes to its own sinks (poll rows, observations), never A's; A's counters
+  // are never touched for a shadow order.
+  const shadowPollRows: Record<string, unknown>[] = [];
+  const shadowObservations: any[] = [];
+  let shadowBook: { symbol: string; direction: string }[] | null = null;
+  const huntOrders = async function* (): AsyncGenerator<any> {
+    if (activePendingOrders) yield* activePendingOrders;
+    if (!shadowHunts(shadowMode)) return;
+    let shadowPendingOrders: any[] = [];
+    try {
+      const { data, error } = await supabase.from("pending_orders").select("*")
+        .eq("user_id", userId).eq("bot_id", SHADOW_BOT_ID).eq("dry_run", true)
+        .in("status", ["pending", "awaiting_confirmation"])
+        .order("placed_at", { ascending: true });
+      if (error) console.warn(`[shadow-zonemid] order load failed (shadow skipped this cycle): ${error.message}`);
+      else shadowPendingOrders = data ?? [];
+    } catch (e: any) {
+      console.warn(`[shadow-zonemid] order load threw (shadow skipped this cycle): ${e?.message}`);
+    }
+    yield* shadowPendingOrders;
+  };
+
+  if ((activePendingOrders && activePendingOrders.length > 0) || shadowHunts(shadowMode)) {
+    if (activePendingOrders && activePendingOrders.length > 0) {
+      console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
+    }
+    for await (const pending of huntOrders()) {
+      // Per-order routing: identity for A (the same arrays, poller name and
+      // fetch as before); the shadow's own sinks and cache-only reads for C.
+      const isShadow = isShadowOrder(pending);
+      const pollSink = isShadow ? shadowPollRows : route2PollRows;
+      const pollerName = isShadow ? SHADOW_POLLER_NAME : "bot-scanner";
+      const thesisObs = isShadow ? shadowObservations : thesisObservations;
+      const touchObs = isShadow ? shadowObservations : touchChecks;
+      const huntObs = isShadow ? shadowObservations : confirmationHunt;
+      const huntFetch = isShadow ? shadowFetch : cachedFetch;
       // Guarantees ONE poll row per order per cycle. The loop has ~14 exit
       // points and the specific branches below only cover the interesting
       // ones; the commonest outcome by far — still pending, price has not
@@ -3640,7 +3694,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // A `finally` is what makes this airtight: every `continue` inside the
       // try runs it on the way out, so a branch added later cannot silently
       // escape the log.
-      const pollMark = route2PollRows.length;
+      const pollMark = pollSink.length;
       const pollCtx: { candles: number; price: number | null; branch: string; after: string } =
         { candles: 0, price: null, branch: "watching_no_change", after: pending.status };
       try {
@@ -3652,12 +3706,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             cancel_reason: "TTL expired",
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
-          route2PollRows.push(buildPollRecord({
-            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+          pollSink.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
             candlesAvailable: 0, currentPrice: null, statusBefore: pending.status,
             branchTaken: "ttl_expiry", statusAfter: "expired",
           }));
-          pendingExpired++;
+          if (!isShadow) pendingExpired++;
           console.log(`[pending] Expired ${pending.symbol} ${pending.direction} limit @ ${pending.entry_price}`);
           continue;
         }
@@ -3673,13 +3727,39 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // need, on a budget that is already refusing fetches.
         const pendingInterval = getEntryInterval(config.entryTimeframe || "15min");
         const pendingRange = getEntryRange(config.entryTimeframe || "15min");
-        const pendingCandles = await cachedFetch(pending.symbol, pendingInterval, pendingRange, "pending_fill_check");
+        // Candidate C: a minute is evaluated only if EVERY series A's code
+        // would read for this order is already in the cycle cache (fetched by
+        // A). Otherwise the order is left untouched and the gap is recorded —
+        // coverage is a validity condition of the C-vs-A comparison.
+        if (isShadow) {
+          if ((pending as any).dry_run !== true) {
+            pollCtx.branch = "shadow_not_dry_run";
+            continue;
+          }
+          const need = shadowRequiredSeries({
+            pendingInterval, status: pending.status,
+            thesisValidationEnabled: (config as any).thesisValidationEnabled !== false,
+            thesisStyleAware: (config as any).thesisDirectionStyleAware === true,
+            isManagementOnly: !!opts?.isManagementOnly, style: resolvedStyle, confirmTF: confirmationTF,
+          });
+          const have = peekAll((sym, iv) => scanCache.peek(sym, iv), pending.symbol, need);
+          if (!have.ok) {
+            pollSink.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
+              candlesAvailable: 0, currentPrice: null, statusBefore: pending.status,
+              branchTaken: "shadow_no_data", statusAfter: pending.status,
+              lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
+            }));
+            continue;
+          }
+        }
+        const pendingCandles = await huntFetch(pending.symbol, pendingInterval, pendingRange, "pending_fill_check");
         if (pendingCandles.length === 0) {
           // A refused fetch skips this order for the cycle. Recorded with
           // candles_available = 0 so it cannot be mistaken for "nothing
           // happened" — that ambiguity is the core replayability defect.
-          route2PollRows.push(buildPollRecord({
-            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+          pollSink.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
             candlesAvailable: 0, currentPrice: null, statusBefore: pending.status,
             branchTaken: "no_candles_skipped", statusAfter: pending.status,
           }));
@@ -3750,7 +3830,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ...(stampTouch ? { zone_touch_time: new Date().toISOString() } : {}),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           pollCtx.branch = "sl_invalidation"; pollCtx.after = "cancelled";
-          pendingCancelled++;
+          if (!isShadow) pendingCancelled++;
           console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — closed bar ${slPrice} past SL ${slLevel}${reachedEntry ? " (had reached entry)" : ""}`);
           continue;
         }
@@ -3771,9 +3851,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const thesisStyleAware = (config as any).thesisDirectionStyleAware === true;
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
             const [tvDaily, tvH4, tvH1] = await Promise.all([
-              cachedFetch(pending.symbol, "1d", "1y", "pending_thesis_htf"),
-              cachedFetch(pending.symbol, "4h", "1mo", "pending_thesis_htf").then(c => c.slice(-LEGACY_H4_WINDOW)),
-              cachedFetch(pending.symbol, "1h", "5d", "pending_thesis_htf"),
+              huntFetch(pending.symbol, "1d", "1y", "pending_thesis_htf"),
+              huntFetch(pending.symbol, "4h", "1mo", "pending_thesis_htf").then(c => c.slice(-LEGACY_H4_WINDOW)),
+              huntFetch(pending.symbol, "1h", "5d", "pending_thesis_htf"),
             ]);
 
             // Under styleAwareDirection the validator uses the same engine and
@@ -3795,10 +3875,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             let thesisStyleCandles: { bias: Candle[] | null; structure: Candle[] | null; confirm: Candle[] | null } | null = null;
             if (thesisStyleAware || !opts?.isManagementOnly) {
               if (resolvedStyle === "scalper") {
-                const tvM15 = await cachedFetch(pending.symbol, "15m", "5d", "pending_thesis_m15");
+                const tvM15 = await huntFetch(pending.symbol, "15m", "5d", "pending_thesis_m15");
                 thesisStyleCandles = { bias: tvH1, structure: tvM15, confirm: pendingCandles };
               } else if (resolvedStyle === "swing_trader") {
-                const tvW = await cachedFetch(pending.symbol, "1w", "2y", "pending_thesis_weekly");
+                const tvW = await huntFetch(pending.symbol, "1w", "2y", "pending_thesis_weekly");
                 thesisStyleCandles = { bias: tvW, structure: tvDaily, confirm: tvH4 };
               } else {
                 thesisStyleCandles = { bias: tvDaily, structure: tvH4, confirm: tvH1 };
@@ -3844,7 +3924,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
             // Recorded whether or not a check is allowed to act, so the firing
             // rate of each is answerable from scan_logs.
-            thesisObservations.push({
+            thesisObs.push({
               symbol: pending.symbol,
               direction: pending.direction,
               acted: !thesisResult.valid,
@@ -3862,10 +3942,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 resolved_at: new Date().toISOString(),
               }).eq("order_id", pending.order_id).eq("user_id", userId);
           pollCtx.branch = "thesis_invalid"; pollCtx.after = "cancelled";
-              pendingCancelled++;
+              if (!isShadow) pendingCancelled++;
               console.log(`[pending] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`);
               // Telegram notification for thesis cancellation
-              if (telegramChatIds.length > 0 && shouldNotify("thesis_invalidated")) {
+              if (!isShadow && telegramChatIds.length > 0 && shouldNotify("thesis_invalidated")) {
                 const msg = `⚠️ <b>Thesis Invalidated — Order Cancelled</b>\n\n` +
                   `<b>Symbol:</b> ${pending.symbol}\n` +
                   `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
@@ -3935,7 +4015,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const tdDistancePips = (pending.direction === "long"
             ? lastCandle.low - entryPrice
             : entryPrice - lastCandle.high) / tdSpec.pipSize;
-          touchChecks.push({
+          touchObs.push({
             symbol: pending.symbol,
             direction: pending.direction,
             orderId: pending.order_id,
@@ -3973,8 +4053,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             : null;
           if (filled && touchVerdict === "ALREADY_CONSUMED_TOUCH") {
             pollCtx.branch = "rearm_suppressed_stale_bar";
-            route2PollRows.push(buildPollRecord({
-              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+            pollSink.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
               candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
               zoneTouchDetected: false, zoneTouchBarTime: lastCandle.datetime ?? null,
               branchTaken: "rearm_suppressed_stale_bar", statusAfter: pending.status,
@@ -4033,8 +4113,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               touch_consumed: true,
               strategy_version: ROUTE2_LIFECYCLE_VERSION,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
-            route2PollRows.push(buildPollRecord({
-              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+            pollSink.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
               candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
               zoneTouchDetected: true, zoneTouchBarTime: lastCandle.datetime ?? null,
               branchTaken: "zone_touched", statusAfter: "awaiting_confirmation",
@@ -4047,13 +4127,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               // never starts — indistinguishable from price never arriving,
               // which is the shape of every dead end so far.
               console.error(`[pending] ZONE TOUCH WRITE FAILED for ${pending.symbol} ${pending.direction}: ${touchErr.message}`);
-              (touchChecks[touchChecks.length - 1] as any).writeError = touchErr.message;
+              (touchObs[touchObs.length - 1] as any).writeError = touchErr.message;
             }
-            pendingConfirmationHunting++;
+            if (!isShadow) pendingConfirmationHunting++;
             console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (5m CHoCH)`);
 
             // Send Telegram notification: zone touched, hunting confirmation
-            if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
+            if (!isShadow && telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
               const emoji = pending.direction === "long" ? "🟡" : "🟡";
               const msg = `${emoji} <b>Zone Touched — Hunting Confirmation</b>\n\n` +
                 `<b>Symbol:</b> ${pending.symbol}\n` +
@@ -4079,7 +4159,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
         // ── Branch B: Order is in "awaiting_confirmation" — check for CHoCH ──
         if (pending.status === "awaiting_confirmation") {
-          pendingConfirmationHunting++;
+          if (!isShadow) pendingConfirmationHunting++;
 
           // Check if impulse is broken (zone invalidation)
           if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
@@ -4092,7 +4172,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
           pollCtx.branch = "impulse_broken"; pollCtx.after = "cancelled";
-            pendingCancelled++;
+            if (!isShadow) pendingCancelled++;
             console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — impulse broken at ${currentPrice}`);
             continue;
           }
@@ -4137,8 +4217,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const resetsHunt = resetsHuntRaw && r2Gate.allowed;
           if (resetsHuntRaw && r2Gate.deferred) {
             console.log(`[pending] ${pending.symbol} ${pending.direction} — ${zoneExit} DEFERRED until ${pending.confirmation_min_observation_until} (V2 min confirmation window)`);
-            route2PollRows.push(buildPollRecord({
-              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+            pollSink.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
               candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
               zoneExit, branchTaken: "reset_deferred_min_window", statusAfter: pending.status,
               touchId: pending.last_consumed_touch_id ?? null,
@@ -4152,7 +4232,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const attempts = (pending.confirmation_attempts || 0) + 1;
             // NOTE confirmation_attempts counts ABANDONMENTS, not hunts. Reading
             // it as hunting activity inverts its meaning.
-            confirmationHunt.push({
+            huntObs.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "reset_zone_exit", zoneExit, currentPrice, zoneLow, zoneHigh, attempts,
             });
@@ -4167,15 +4247,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               hard_invalidation: false,
               confirmation_min_observation_until: null,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
-            route2PollRows.push(buildPollRecord({
-              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+            pollSink.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
               candlesAvailable: pendingCandles.length, currentPrice, statusBefore: pending.status,
               zoneExit, branchTaken: "zone_exit_reset", statusAfter: "pending",
               touchId: pending.last_consumed_touch_id ?? null,
               resetDeferred: false, resetSeverity: r2Gate.severity,
               lifecycleVersion: ROUTE2_LIFECYCLE_VERSION,
             }));
-            pendingConfirmationHunting--;
+            if (!isShadow) pendingConfirmationHunting--;
             console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}, ${zoneExit}), reset to pending (attempt ${attempts})`);
             continue;
           }
@@ -4196,10 +4276,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // right timeframe before hunting on the wrong one.
           const confirmTF = confirmationTF;
           const confirmRange = getEntryRange(confirmTF);
-          const confirmCandles = await cachedFetch(pending.symbol, confirmTF, confirmRange, "pending_confirmation");
+          const confirmCandles = await huntFetch(pending.symbol, confirmTF, confirmRange, "pending_confirmation");
           if (confirmCandles.length < MIN_CONFIRMATION_CANDLES) {
             console.log(`[pending] ${pending.symbol} — insufficient ${confirmTF} candles for confirmation (${confirmCandles.length})`);
-            confirmationHunt.push({
+            huntObs.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "insufficient_candles", candles: confirmCandles.length, confirmTF,
             });
@@ -4232,8 +4312,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // zoneTouchIdx undefined means the hunt is scanning the WHOLE series
             // rather than the window since the touch — the shape of the
             // TwelveData timezone bug, worth seeing if it returns.
-            route2PollRows.push(buildPollRecord({
-              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+            pollSink.push(buildPollRecord({
+              pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
               candlesAvailable: confirmCandles.length, currentPrice, statusBefore: pending.status,
               confirmationChecked: true, confirmationResult: "no_tier_passed",
               branchTaken: "awaiting_confirmation", statusAfter: pending.status,
@@ -4250,7 +4330,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               // holds the authoritative per-check record either way.
             }).eq("order_id", pending.order_id).eq("user_id", userId)
               .eq("status", "awaiting_confirmation");
-            confirmationHunt.push({
+            huntObs.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "no_tier_passed", hasRefZone,
               zoneTouchIdxFound: zoneTouchIdx !== undefined,
@@ -4270,7 +4350,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // A confirmation WAS found and thrown away. If this is the common
             // outcome, the Tier 1 requirement is the binding constraint rather
             // than the market failing to confirm.
-            confirmationHunt.push({
+            huntObs.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "tier_rejected_no_refined_zone", tier: confirmationSignal.tier,
               signalType: confirmationSignal.type, displacement: confirmationSignal.displacement,
@@ -4287,8 +4367,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time,
           // with the same caps as placement (step 12 single owner).
           const huntCaps = resolvePositionCaps((config as any).__rawConfigJson, "hunt_fill", config);
-          const currentOpenCount = openPosArr.length;
-          const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol).length;
+          // Candidate C is capped against its OWN hypothetical book (C fills
+          // not yet closed), never A's positions; A reads openPosArr as before.
+          let capBook: any[] = openPosArr;
+          if (isShadow) {
+            if (shadowBook === null) {
+              const { data: bookRows, error: bookErr } = await supabase.from("trade_attribution")
+                .select("symbol, direction")
+                .eq("user_id", userId).eq("bot_id", SHADOW_BOT_ID)
+                .not("filled_at", "is", null).is("closed_at", null);
+              if (bookErr) {
+                pollCtx.branch = "shadow_book_unavailable";
+                continue;
+              }
+              shadowBook = shadowBookFromAttribution(bookRows);
+            }
+            capBook = shadowBook;
+          }
+          const currentOpenCount = capBook.length;
+          const currentSymbolCount = capBook.filter((p: any) => p.symbol === pending.symbol).length;
           if (currentOpenCount >= huntCaps.maxOpenPositions) {
             console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${huntCaps.maxOpenPositions})`);
             await supabase.from("pending_orders").update({
@@ -4297,11 +4394,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               cancel_reason: `Max open positions reached (${currentOpenCount}/${huntCaps.maxOpenPositions}) at confirmation time`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
-            pendingCancelled++;
+            if (!isShadow) pendingCancelled++;
             // A confirmed setup, killed at the last step. The most expensive
             // outcome in the list: everything worked and the trade still did
             // not happen.
-            confirmationHunt.push({
+            huntObs.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "blocked_max_open_positions", tier: confirmationSignal.tier,
               openCount: currentOpenCount, cap: huntCaps.maxOpenPositions, capsMode: huntCaps.mode,
@@ -4316,8 +4413,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               cancel_reason: `Max per symbol reached (${currentSymbolCount}/${huntCaps.maxPerSymbol}) at confirmation time`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
-            pendingCancelled++;
-            confirmationHunt.push({
+            if (!isShadow) pendingCancelled++;
+            huntObs.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: "blocked_max_per_symbol", tier: confirmationSignal.tier,
               symbolCount: currentSymbolCount, cap: huntCaps.maxPerSymbol, capsMode: huntCaps.mode,
@@ -4333,7 +4430,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // longs and two EUR/USD longs, opened across separate cycles with
           // near-identical entries, all closed at SL — 1,666 of a 3,406
           // drawdown, or 49%, from four duplicated ideas on two symbols.
-          const sameDirOpen = openPosArr.some((p: any) =>
+          const sameDirOpen = capBook.some((p: any) =>
             p.symbol === pending.symbol && p.direction === pending.direction
           );
           if (sameDirOpen && !config.allowSameDirectionStacking) {
@@ -4344,7 +4441,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               cancel_reason: `Same-direction ${pending.direction} position already open at confirmation time`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
-            pendingCancelled++;
+            if (!isShadow) pendingCancelled++;
             continue;
           }
 
@@ -4378,7 +4475,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.warn(`[pending] ${pending.symbol} ${pending.direction} — fill-time sizing unavailable (${fillSizing.reason}); not filling ${pending.order_id} this cycle`);
             pollCtx.branch = "fill_sizing_unavailable";
             pollCtx.after = pending.status;
-            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "FILL_SIZING_UNAVAILABLE", tier: confirmationSignal.tier });
+            huntObs.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "FILL_SIZING_UNAVAILABLE", tier: confirmationSignal.tier });
             continue;
           }
           // Step 15: the fill-sizing record attribution stores (section F). Stop
@@ -4509,12 +4606,35 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.warn(`[pending] ${pending.symbol} ${pending.direction} — account risk gate: ${propFirmGateResult.reason} — not filling ${pending.order_id}`);
             pollCtx.branch = "prop_firm_locked";
             pollCtx.after = pending.status;
-            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "PROP_FIRM_LOCKED", tier: confirmationSignal.tier, reason: propFirmGateResult.reason });
+            huntObs.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "PROP_FIRM_LOCKED", tier: confirmationSignal.tier, reason: propFirmGateResult.reason });
             continue;
           }
 
           // DRY RUN order: record a hypothetical fill at the confirmation price.
           // Never a position — not even after unlock.
+          if (isShadow) {
+            // Candidate C: NO 17-A re-anchor. A's live fills keep the planned
+            // stop and target, so C is recorded on the same terms: the fill at
+            // the confirmation price, the order's stop/target, live fill-time
+            // sizing. Never a position (dry_run = true, refused by the database).
+            const shadowSizing = (fillSizingRecord ?? fillSizing) as Record<string, unknown> | null;
+            const { error: shadowFillErr } = await supabase.from("pending_orders").update({
+              ...pendingFillPatch,
+              status: "filled",
+              fill_sizing: shadowSizing,
+              fill_reason: `[SHADOW C — hypothetical] ${pendingFillPatch.fill_reason}`,
+              dry_run_context: {
+                ...((pending as any).dry_run_context ?? {}), fillSizing: shadowSizing, fillPrice: actualFillPrice,
+                fillReanchor: { status: "not_applied", reason: "shadow_arm_c" },
+              },
+            }).eq("id", (pending as any).id).eq("status", pending.status).eq("bot_id", SHADOW_BOT_ID).eq("dry_run", true);
+            if (shadowFillErr) console.warn(`[shadow-zonemid] fill record failed for ${pending.order_id}: ${shadowFillErr.message}`);
+            else shadowBook?.push({ symbol: pending.symbol, direction: pending.direction });
+            pollCtx.branch = shadowFillErr ? "shadow_fill_write_failed" : "dry_run_fill";
+            pollCtx.after = shadowFillErr ? pending.status : "filled";
+            huntObs.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "DRY_RUN_FILL", tier: confirmationSignal.tier });
+            continue;
+          }
           if ((pending as any).dry_run === true) {
             // Step 17-A (DRY RUN ONLY): a fill inside the pair's floor re-anchors
             // the stop to fill ∓ floor, the target to 1.1R from the fill, and is
@@ -4553,7 +4673,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             if (dryErr) console.warn(`[pending] dry-run fill record failed for ${pending.order_id}: ${dryErr.message}`);
             pollCtx.branch = "dry_run_fill";
             pollCtx.after = "filled";
-            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "DRY_RUN_FILL", tier: confirmationSignal.tier });
+            huntObs.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "DRY_RUN_FILL", tier: confirmationSignal.tier });
             continue;
           }
           // Post-reset lock: no fills at all, not even of an order that
@@ -4562,7 +4682,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.warn(`[pending] ${pending.symbol} ${pending.direction} — entries locked (post-reset), not filling ${pending.order_id}`);
             pollCtx.branch = "entries_locked";
             pollCtx.after = pending.status;
-            confirmationHunt.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "ENTRIES_LOCKED", tier: confirmationSignal.tier });
+            huntObs.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "ENTRIES_LOCKED", tier: confirmationSignal.tier });
             continue;
           }
 
@@ -4581,7 +4701,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             else console.warn(`[pending] ${pending.symbol} ${pending.direction} — ${why}`);
             pollCtx.branch = `fill_${claim.outcome}`;
             pollCtx.after = claim.outcome === "lost_race" ? (claim.currentStatus ?? pending.status) : pending.status;
-            confirmationHunt.push({
+            huntObs.push({
               symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
               outcome: `FILL_${claim.outcome.toUpperCase()}`, tier: confirmationSignal.tier,
             });
@@ -4601,8 +4721,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           });
 
           // Marked filled by the claim, atomically with the insert.
-          route2PollRows.push(buildPollRecord({
-            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+          pollSink.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
             candlesAvailable: confirmCandles.length, currentPrice, statusBefore: pending.status,
             confirmationChecked: true, confirmationResult: confirmationSignal.type,
             confirmationTier: confirmationSignal.tier,
@@ -4611,7 +4731,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
           pendingFilled++;
           tradesPlaced++;
-          confirmationHunt.push({
+          huntObs.push({
             symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id,
             outcome: "FILLED", tier: confirmationSignal.tier, signalType: confirmationSignal.type,
             displacement: confirmationSignal.displacement, hasRefZone,
@@ -4722,16 +4842,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         console.warn(`[pending] Error monitoring ${pending.symbol}: ${e?.message}`);
         // An order that threw was still evaluated. Record the poll, or the
         // gap reads as "this order was never looked at".
-        route2PollRows.push(buildPollRecord({
-          pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+        pollSink.push(buildPollRecord({
+          pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
           candlesAvailable: 0, currentPrice: null, statusBefore: pending.status,
           branchTaken: `error:${String(e?.message ?? "unknown").slice(0, 80)}`,
           statusAfter: pending.status,
         }));
       } finally {
-        if (route2PollRows.length === pollMark) {
-          route2PollRows.push(buildPollRecord({
-            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName: "bot-scanner",
+        if (pollSink.length === pollMark) {
+          pollSink.push(buildPollRecord({
+            pendingId: pending.order_id, pollTimestamp: pollAt, pollerName,
             candlesAvailable: pollCtx.candles, currentPrice: pollCtx.price,
             statusBefore: pending.status, branchTaken: pollCtx.branch,
             statusAfter: pollCtx.after,
@@ -4742,7 +4862,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
-    console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled, ${pendingConfirmationHunting} awaiting confirmation`);
+    if (activePendingOrders && activePendingOrders.length > 0) console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled, ${pendingConfirmationHunting} awaiting confirmation`);
   }
 
   // ── Flush the Route 2 poll log ──
@@ -4753,6 +4873,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const { error: pollErr } = await supabase.from("route2_poll_log").insert(route2PollRows);
     if (pollErr) console.error(`[route2-poll-log] insert failed (${route2PollRows.length} rows): ${pollErr.message}`);
     else console.log(`[route2-poll-log] wrote ${route2PollRows.length} poll rows`);
+  }
+  // Candidate C poll rows: a separate insert AFTER A's, so a shadow row can
+  // never fail A's batch. Own try/catch; never rethrows.
+  if (shadowPollRows.length > 0) {
+    try {
+      const { error: shadowPollErr } = await supabase.from("route2_poll_log").insert(shadowPollRows);
+      const noData = shadowPollRows.filter((r) => r.branch_taken === "shadow_no_data").length;
+      if (shadowPollErr) console.warn(`[shadow-zonemid] poll insert failed (${shadowPollRows.length} rows): ${shadowPollErr.message}`);
+      else console.log(`[shadow-zonemid] hunt: ${shadowPollRows.length} poll rows, ${noData} without cached data`);
+    } catch (e: any) {
+      console.warn(`[shadow-zonemid] poll insert threw: ${e?.message}`);
+    }
   }
 
   // ── Management-Only Early Return ──
@@ -7976,6 +8108,182 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           scanDetails.push(detail);
           continue;
         }
+        // ── Candidate C shadow: C's order from the same inputs ──
+        // Same condition as A's Route 2 branch below, which this precedes
+        // untouched. Pure and synchronous — no I/O, no write to `detail` or
+        // `cap`, nothing A reads afterwards. C applies the distance and R:R
+        // gates to its own geometry; the intent is written after the pair
+        // loop. A failure is logged and dropped; A is unaffected.
+        if (effectiveLimitEnabled && limitEntry && shadowPlaces(shadowMode) && shadowEligibleSource(limitEntrySource) && izData?.bestZone) {
+          try {
+            const cfgVersion = (config as any).__configVersion as string | null;
+            const cLimit = zoneMidLimit(izData.bestZone);
+            const cH1Atr = hourlyCandles.length >= 15 ? calculateATR(hourlyCandles, 14) : null;
+            const cGeo = cLimit === null || !(typeof cfgVersion === "string" && /^[0-9a-f]{32}$/.test(cfgVersion)) ? null : shadowRoute2Geometry({
+              direction: analysis.direction as "long" | "short", limit: cLimit, lastPrice: analysis.lastPrice, h1Atr: cH1Atr,
+              marketSL: sl, tpRatio: config.tpRatio, stopAnchor: simp.stopAnchor,
+              swingSL: typeof slFloorTrace.slBeforeFloor === "number" ? slFloorTrace.slBeforeFloor : null,
+              impulseSL: impulseStopCandidate?.sl ?? null, impulseCapPips: impulseStopCandidate?.capPips ?? null,
+              minSlPips: effectiveMinSlPips, pipSize: spec.pipSize, symbol: pair, rateMap, commissionPerLot: avgCommissionPerLot,
+              orderRRMin: simp.orderRRMin, rrGateMode: simp.rrGateMode, sizingMode: simp.sizingMode, balance,
+              riskPercent: simp.riskPercent, maxLotsPerTrade: simp.maxLotsPerTrade,
+              legacyLots: (entry: number, stop: number) => computePositionSize(
+                {
+                  balance, riskPercent: pairRiskPercent, entryPrice: entry, stopLoss: stop, symbol: pair,
+                  method: (pairConfig as any).positionSizingMethod || "percent_risk",
+                  fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: atrForConsumers,
+                  atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+                  rateMap, commissionPerLot: avgCommissionPerLot,
+                },
+                undefined, volCtx, propFirmCtx,
+              ).lots,
+              halveLegacy: (detail as any).signalSource !== "unified",
+            });
+            if (cGeo && cGeo.ok && cLimit !== null && typeof cfgVersion === "string") {
+              const bz = izData.bestZone;
+              const cPlacedAt = new Date().toISOString();
+              const cExpiresAt = route2ExpiresAt(cPlacedAt);
+              const cSelTF = (detail as any).impulseZone?.selectedTF ?? null;
+              const cSeries = cSelTF === "5m" ? candles : cSelTF === "15m" ? m15Candles : hourlyCandles;
+              const cTelem: Record<string, unknown> = {
+                ...buildRoute2OrderTelemetry({
+                  zoneId: route2ZoneId(pair, cSelTF, analysis.direction, Number(bz.high), Number(bz.low)),
+                  zoneTimeframe: cSelTF,
+                  zoneCreatedAt: locatePoiFormation(cSeries, bz.type ?? null, Number(bz.high), Number(bz.low)),
+                  pendingCreatedAt: cPlacedAt,
+                  entrySource: "zoneMid",
+                  pendingEntryPrice: cLimit,
+                  currentPriceAtCreation: analysis.lastPrice,
+                  h1Atr: cH1Atr,
+                  distanceAtr: cGeo.distanceAtr,
+                  initialStopLoss: cGeo.stop,
+                  initialTakeProfit: cGeo.target,
+                  configHash: String(cfgVersion),
+                  wouldHaveBeenRoute1: priceIsAtValidatedZone && priceOnCorrectSide,
+                  zoneStory: (detail as any).unifiedZone ?? null,
+                }),
+                strategy_version: SHADOW_STRATEGY_VERSION,
+              };
+              const refined = bz.ltfRefined && bz.refinedEntry != null && bz.refinedSL != null;
+              const cShadowCtx = {
+                arm: "C", pairedDecisionId: cap.id ?? null, pairedScanCycleId: scanCycleId,
+                pairedSignalId: null as string | null, aFinalStatus: null as string | null,
+                aLimit: limitEntry.price, aEntrySource: limitEntrySource,
+                aDistanceAtr: pendingDistanceAtr(analysis.lastPrice, limitEntry.price, cH1Atr),
+              };
+              const cOrder: Record<string, unknown> = {
+                user_id: userId,
+                bot_id: SHADOW_BOT_ID,
+                order_id: shadowOrderId(),
+                ...cTelem,
+                symbol: pair,
+                direction: analysis.direction,
+                order_type: "limit",
+                entry_price: cLimit,
+                frozen_strategy_context: buildFrozenDecision({
+                  route: "pending-order", balanceAtEntry: balance, riskPercent: pairRiskPercent, sizeLots: cGeo.size,
+                  entryPrice: cLimit, stopAtEntry: cGeo.stop, pipSize: spec.pipSize, slFloor: slFloorTrace,
+                  sizing: sizingProvenance, tradingStyle: config.tradingStyle?.mode ?? null,
+                  leg: (detail as any).unifiedZone?.impulse
+                    ? {
+                        displacement: (detail as any).unifiedZone.impulse.displacement ?? null,
+                        candleQuality: (detail as any).unifiedZone.impulse.candleQuality ?? null,
+                        sequence: (detail as any).unifiedZone.impulse.sequence ?? null,
+                      }
+                    : null,
+                }),
+                current_price: analysis.lastPrice,
+                stop_loss: cGeo.stop,
+                take_profit: cGeo.target,
+                size: cGeo.size,
+                entry_zone_type: `IZ-${bz.type?.toUpperCase() || "ZONE"}`,
+                entry_zone_low: bz.low,
+                entry_zone_high: bz.high,
+                refined_zone_low: refined ? Math.min(bz.refinedEntry, bz.refinedSL) : null,
+                refined_zone_high: refined ? Math.max(bz.refinedEntry, bz.refinedSL) : null,
+                status: "pending",
+                expiry_minutes: ROUTE2_TTL_MINUTES,
+                expires_at: cExpiresAt,
+                signal_reason: JSON.stringify({ bot: SHADOW_BOT_ID, shadow: { arm: "C", pairedWith: BOT_ID }, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: cGeo.stop, originalTP: cGeo.target, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: cGeo.plannedSizing ? { mode: "fill_time_planned", ...cGeo.plannedSizing } : sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+                signal_score: analysis.score,
+                setup_type: setupClassification.setupType,
+                setup_confidence: setupClassification.confidence,
+                from_watchlist: isPromotedFromStaging || false,
+                staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
+                staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
+                exit_flags: exitFlags,
+                placed_at: cPlacedAt,
+                dry_run: true,
+                dry_run_context: {
+                  switches: simp,
+                  loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
+                  tpTooSmall: (detail as any).tpTooSmall ?? null,
+                  scoreGate: (detail as any).scoreGate ?? null,
+                  ictFVGGate: (detail as any).ictFVGGate ?? null,
+                  orderRR: cGeo.orderRR,
+                  route2Stop: cGeo.route2Stop,
+                  plannedSizing: cGeo.plannedSizing,
+                  unifiedDetected: (detail as any).unifiedDetected ?? null,
+                  unifiedComparison: (detail as any).unifiedComparison ?? null,
+                  legacyWouldAdmit: ((detail as any).loggedOnlyGates ?? []).length === 0
+                    && !((detail as any).scoreGate?.wouldBlock)
+                    && !((detail as any).ictFVGGate?.wouldBlock),
+                  legacyGeometryDiffers: !!(detail as any).unifiedDetected,
+                  shadow: cShadowCtx,
+                },
+                config_hash: cfgVersion,
+              };
+              const pfDecision = propFirmGateResult.decision;
+              const cAttribution = buildAttribution({
+                signalId: crypto.randomUUID(), decisionId: cap.id as string, scanCycleId, userId, botId: SHADOW_BOT_ID,
+                symbol: pair, direction: analysis.direction as "long" | "short", dryRun: true,
+                decisionAt: cPlacedAt, configVersion: cfgVersion, strategyVersion: SHADOW_STRATEGY_VERSION,
+                switches: simp, legacyRiskPercent: pairConfig.riskPerTrade,
+                management: { breakEvenEnabled: pairConfig.breakEvenEnabled, trailingStopEnabled: pairConfig.trailingStopEnabled,
+                  partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
+                caps: resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig),
+                impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
+                riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null,
+                promotedFromWatchlist: isPromotedFromStaging && existingStaged ? {
+                  stagedSetupId: existingStaged.id ?? null, initialScore: parseFloat(existingStaged.initial_score),
+                  cycles: (existingStaged.scan_cycles ?? 0) + 1 } : null,
+                entrySource: "zoneMid", izGateMode,
+                gamePlanEnabled: (config as any).gamePlanEnabled !== false,
+                gamePlanContext: (pairConfig as any)._gamePlanContext ?? null,
+                directionVerdict: (detail as any).directionVerdict ?? null,
+                impulse: { hasZone: !!izData.hasZone, selectedTF: izData.selectedTF ?? null, impulse: izData.impulse ?? null, bestZone: izData.bestZone ?? null },
+                obFvgZone: null,
+                unifiedDetected: (detail as any).unifiedDetected ?? null,
+                unifiedComparison: (detail as any).unifiedComparison ?? null,
+                gateScore: Number.isFinite(analysis.score) ? analysis.score : null,
+                decisionScoreGate: (detail as any).scoreGate ?? null,
+                factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+                gates: gates as any, ictFvgGate: (detail as any).ictFVGGate ?? null, orderRR: cGeo.orderRR as any,
+                loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
+                tpSmallGate: (detail as any).tpTooSmall ?? null,
+                riskGate: propFirmGateResult.enabled ? {
+                  enabled: true, allowed: propFirmGateResult.allowed, reason: propFirmGateResult.reason,
+                  severity: pfDecision?.severity ?? null, trading_day: propFirmGateResult.tradingDay ?? null,
+                  day_start_balance: pfDecision?.dayStartBalance ?? null, equity: pfDecision?.equity ?? null,
+                  daily_loss_usd: pfDecision?.dailyLossUsd ?? null, thresholds: pfDecision?.thresholds ?? null,
+                } : { enabled: false, allowed: true, reason: "no active risk profile" },
+                zoneId: (cTelem as any).zone_id ?? null, entryDepth: (pairConfig as any).zoneEntryDepth ?? null,
+                limitPrice: cLimit, stopPrice: cGeo.stop, targetPrice: cGeo.target, pipSize: spec.pipSize,
+                route2Stop: cGeo.route2Stop as any, plannedSizing: cGeo.plannedSizing as any,
+                balance, expiresAt: cExpiresAt,
+              });
+              shadowIntents.push({
+                symbol: pair, direction: analysis.direction, limit: cLimit, pipSize: spec.pipSize,
+                score: analysis.score, lastPrice: analysis.lastPrice, stop: cGeo.stop, target: cGeo.target, size: cGeo.size,
+                order: cOrder, attribution: cAttribution, shadowCtx: cShadowCtx, cap, detail,
+              });
+            } else if (cGeo && !cGeo.ok) {
+              console.log(`[shadow-zonemid] ${pair} ${analysis.direction}: C not placed — ${cGeo.status} (${cGeo.reason})`);
+            }
+          } catch (e: any) {
+            console.warn(`[shadow-zonemid] ${pair}: intent build failed (A unaffected): ${e?.message}`);
+          }
+        }
         if (effectiveLimitEnabled && limitEntry) {
           // ── ROUTE 2 DISTANCE GUARD (research-registered, 1.5 H1 ATR) ──────
           //
@@ -9366,6 +9674,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   } catch (e: any) {
     decisionFailures++;
     console.warn(`[scan ${scanCycleId}] decision capture write failed (non-fatal): ${e?.message}`);
+  }
+
+  // ── Candidate C shadow: write the queued intents ──
+  // After the pair loop and A's decision capture: every A decision and write
+  // for this cycle is already made. Each intent has its own try/catch and
+  // never rethrows. The same Route 2 placement rules as A — same-level refresh
+  // in place, otherwise supersede + insert through route2_place_order — inside
+  // the shadow bot's own namespace. A's decision rows and `cap` are only read.
+  if (shadowIntents.length > 0) {
+    try {
+      const t = await writeShadowIntents(supabase, userId, shadowIntents);
+      console.log(`[shadow-zonemid] placement: ${shadowIntents.length} intents — ${t.placed} placed, ${t.refreshed} refreshed, ${t.duplicate} duplicate, ${t.failed} failed`);
+    } catch (e: any) {
+      console.warn(`[shadow-zonemid] placement threw (A unaffected): ${e?.message}`);
+    }
   }
 
   // Update counters — scope to this bot's account

@@ -102,8 +102,8 @@ Deno.test("it gates nothing", () => {
 
 Deno.test("both measures are recorded on trades, scans and rejected setups", () => {
   assertEquals(
-    (scanner.match(/legPd: \(analysis as any\)\.legPd \?\? null,/g) ?? []).length, 2,
-    "both entry routes carry it into signal_reason",
+    (scanner.match(/legPd: \(analysis as any\)\.legPd \?\? null,/g) ?? []).length, 3,
+    "both entry routes carry it into signal_reason (and the Candidate C shadow order, a copy of the Route 2 one)",
   );
   assert(
     /\(detail as any\)\.legPd = \(analysis as any\)\.legPd \?\? null;/.test(scanner),

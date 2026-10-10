@@ -33,18 +33,20 @@ const scanner = await Deno.readTextFile(
 Deno.test("the check is recorded on every evaluation, not only on a touch", () => {
   // Recording only successes would show nothing at all, which is the current
   // state of knowledge.
-  const push = scanner.indexOf("touchChecks.push({");
+  const push = scanner.indexOf("touchObs.push({");
   // The arm branch became conditional on the V2 touch classification
   // (`filled && touchVerdict ...`), so anchor on the classification itself.
   const armGate = scanner.indexOf("const touchVerdict = filled",
     scanner.indexOf("const filled = pending.direction"));
+  // touchObs IS touchChecks for every A order (Candidate C shadow orders get their own sink)
+  assert(scanner.includes("const touchObs = isShadow ? shadowObservations : touchChecks;"));
   assert(push > -1, "touchChecks.push missing");
   assert(armGate > -1, "the V2 arm gate was not found");
   assert(push < armGate, "the record must be written BEFORE the arm branch");
 });
 
 Deno.test("both sides of the comparison are captured", () => {
-  const i = scanner.indexOf("touchChecks.push({");
+  const i = scanner.indexOf("touchObs.push({");
   const block = scanner.slice(i, i + 1200);
   for (const f of ["entryPrice", "barLow", "barHigh", "barClose", "filled"]) {
     assert(new RegExp(`${f}[,:]`).test(block), `must record ${f}`);
@@ -52,7 +54,7 @@ Deno.test("both sides of the comparison are captured", () => {
 });
 
 Deno.test("bar freshness is captured, because a stale bar fails silently", () => {
-  const i = scanner.indexOf("touchChecks.push({");
+  const i = scanner.indexOf("touchObs.push({");
   const block = scanner.slice(i, i + 1200);
   for (const f of ["barTime", "barStalenessMin", "interval", "barsInSeries"]) {
     assert(new RegExp(`${f}[,:]`).test(block), `must record ${f}`);

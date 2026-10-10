@@ -46,7 +46,10 @@ Deno.test("every legacy 4H consumer is sliced back to its original window", () =
   // whose result becomes h4Full and is sliced into h4Candles a few lines later.
   // Every other site must slice inline, or it silently hands extra history to
   // structure detection and changes which trades fire.
-  const sites = [...code.matchAll(/cachedFetch\([^)]*"4h"[^)]*\)([^\n]*)/g)];
+  // The pending hunt fetches through `huntFetch` (= cachedFetch for A orders;
+  // a cache-only peek for Candidate C shadow orders), so count both spellings.
+  assert(code.includes("const huntFetch = isShadow ? shadowFetch : cachedFetch;"));
+  const sites = [...code.matchAll(/(?:cachedFetch|huntFetch)\([^)]*"4h"[^)]*\)([^\n]*)/g)];
   assert(sites.length >= 3, `expected the known 4h call sites, found ${sites.length}`);
   const unsliced = sites.filter((s) => !/slice\(-LEGACY_H4_WINDOW\)/.test(s[1]));
   assertEquals(unsliced.length, 1,

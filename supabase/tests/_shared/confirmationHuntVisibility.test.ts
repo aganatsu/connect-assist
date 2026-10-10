@@ -57,8 +57,13 @@ Deno.test("every exit from the hunt is recorded, including the fill", () => {
   assert(/outcome: "FILL_SIZING_UNAVAILABLE"/.test(scanner), "a refused fill-time sizing must be recorded (step 9)");
   // 12 since step 13: a fill refused by the account risk gate.
   assert(/outcome: "PROP_FIRM_LOCKED"/.test(scanner), "a fill refused by the account risk gate must be recorded (step 13)");
+  // Candidate C shadow: the hunt pushes through `huntObs`, which IS
+  // confirmationHunt for every A order (a shadow order gets its own sink), and
+  // C's own hypothetical-fill exit adds one push — 12 A exits + 1 C exit.
+  assert(scanner.includes("const huntObs = isShadow ? shadowObservations : confirmationHunt;"));
+  assertEquals((scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 0, "every hunt push is routed");
   assertEquals(
-    (scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 12,
+    (scanner.match(/huntObs\.push\(\{/g) ?? []).length, 13,
     "one push per exit, and no path left silent",
   );
 });

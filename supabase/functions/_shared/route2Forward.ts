@@ -252,7 +252,7 @@ export function locatePoiFormation(
 export interface PollRecordInput {
   pendingId: string;
   pollTimestamp: string;
-  pollerName: "bot-scanner" | "zone-confirmation-scanner";
+  pollerName: "bot-scanner" | "zone-confirmation-scanner" | "bot-scanner:shadow-zonemid";
   candlesAvailable: number;
   currentPrice: number | null;
   statusBefore: string;

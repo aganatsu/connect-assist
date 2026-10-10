@@ -198,15 +198,18 @@ Deno.test("the style-aware path costs one extra fetch, not three", () => {
   assert(i > -1, "the shadow-candles branch was not found");
   const block = scanner.slice(i, i + 800);
   // Trailing tag is the observation-only telemetry reason, not a behaviour change.
-  assert(/cachedFetch\(pending\.symbol, "15m", "5d"(, "[a-z0-9_]+")?\)/.test(block), "scalper adds 15m");
+  // huntFetch = cachedFetch for A orders (a cache-only peek for Candidate C shadow orders)
+  assert(/huntFetch\(pending\.symbol, "15m", "5d"(, "[a-z0-9_]+")?\)/.test(block), "scalper adds 15m");
   assert(/confirm: pendingCandles/.test(block), "and reuses the candles already fetched");
   assert(/bias: tvH1/.test(block), "and the 1H already fetched above");
 });
 
 Deno.test("observations reach scan detail", () => {
-  assert(/thesisObservations\.push\(/.test(scanner), "each order's checks must be recorded");
+  // thesisObs IS thesisObservations for every A order (Candidate C shadow orders get their own sink)
+  assert(scanner.includes("const thesisObs = isShadow ? shadowObservations : thesisObservations;"));
+  assert(/thesisObs\.push\(/.test(scanner), "each order's checks must be recorded");
   assert(/^      thesisObservations,$/m.test(scanner), "and surfaced in the scan meta");
-  const i = scanner.indexOf("thesisObservations.push(");
+  const i = scanner.indexOf("thesisObs.push(");
   const block = scanner.slice(i, i + 300);
   assert(/acted: !thesisResult\.valid/.test(block), "record whether it actually cancelled");
   assert(/checks: thesisResult\.checks/.test(block), "and every check's verdict");
