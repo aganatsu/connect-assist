@@ -1,0 +1,62 @@
+name: Set Candidate C shadow flag
+
+# Sets SMC_SHADOW_ZONEMID (docs/SHADOW_ZONEMID_V1.md) on the Supabase project, or
+# reports its state without changing it.
+#
+# Same reasoning and the same narrowness as set-shadow-flag.yml: the access token
+# stays in CI, ONE hardcoded secret name, a closed list of values. Not a general
+# "set any secret" workflow.
+#
+#   status — change nothing; report whether the secret exists (names and digests
+#            only — `secrets list` never prints values). Absent = off.
+#   off    — no shadow query, no shadow write.
+#   drain  — no new C placements; existing C orders finish their hunt (≤ 8h).
+#   on     — the full shadow (placement + hunt).
+#
+# Stopping a canary: run `drain`, then `off` once no C order is live.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'SMC_SHADOW_ZONEMID'
+        required: true
+        default: 'status'
+        type: choice
+        options:
+          - 'status'
+          - 'off'
+          - 'drain'
+          - 'on'
+
+concurrency:
+  group: set-shadow-zonemid
+  cancel-in-progress: false
+
+jobs:
+  set-flag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Set SMC_SHADOW_ZONEMID
+        if: inputs.mode != 'status'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          supabase secrets set "SMC_SHADOW_ZONEMID=${{ inputs.mode }}" --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
+      - name: Report
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          line=$(supabase secrets list --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}" | grep -i SMC_SHADOW_ZONEMID || true)
+          if [ -z "$line" ]; then echo "SMC_SHADOW_ZONEMID: absent (= off)"; else echo "SMC_SHADOW_ZONEMID present: $line"; fi
+          # Reference digests of each allowed value, to read the state off the list without printing the value.
+          for v in off drain on; do printf '%s  sha256=%s\n' "$v" "$(printf '%s' "$v" | sha256sum | cut -d' ' -f1)"; done
+          echo "Requested: ${{ inputs.mode }}"
+          if [ "${{ inputs.mode }}" != "status" ] && [ -z "$line" ]; then echo "::error::flag not present after set"; exit 1; fi
