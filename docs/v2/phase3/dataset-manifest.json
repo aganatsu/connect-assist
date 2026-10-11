@@ -1,0 +1,246 @@
+{
+ "provider": "TwelveData",
+ "spec": "STRATEGY_SPEC_V2.0.2_FROZEN.md",
+ "label": "PHASE3_FINAL_PROVIDER_BARS",
+ "start": 1788814800000,
+ "end": 1791579600000,
+ "measuredStart": 1790542800000,
+ "calls": [
+  {
+   "file": "raw/01-1h-2026-09-07.json",
+   "params": {
+    "symbol": "EUR/USD,GBP/USD,USD/JPY,CHF/JPY,NZD/CAD,NZD/CHF",
+    "interval": "1h",
+    "start_date": "2026-09-07 21:00:00",
+    "end_date": "2026-10-09 20:00:00",
+    "timezone": "UTC",
+    "order": "ASC",
+    "outputsize": "5000"
+   },
+   "retrievedAt": "2026-10-11T18:37:48.617Z",
+   "httpStatus": 200,
+   "sha256": "9de2ab711192d96983466f10ae605fa9b45d5bb088794fa50494b3826b399798",
+   "perSeries": {
+    "EUR/USD": {
+     "rows": 768,
+     "kept": 768,
+     "sha256": "f3b0a62d1a455328146eec286b9a563c7f165dcb8793870433105e907344dcd6"
+    },
+    "GBP/USD": {
+     "rows": 768,
+     "kept": 768,
+     "sha256": "bc2ead98bed1ca8053de5dbc139f3d38768801b935cd12337c0d097881f65bc7"
+    },
+    "USD/JPY": {
+     "rows": 768,
+     "kept": 768,
+     "sha256": "cc376c8b6e28737e5dacfdb3cb47d66a79ae7bebae318709dd4397189f980d56"
+    },
+    "CHF/JPY": {
+     "rows": 768,
+     "kept": 768,
+     "sha256": "7b04843493d1d997d5171a6da3360cb0db2095a0b581dc7e4f46e65f363b4fa9"
+    },
+    "NZD/CAD": {
+     "rows": 768,
+     "kept": 768,
+     "sha256": "f33f963a8a0c9f406afce15d304c170d2716f717004b4621dca71e99a85cc288"
+    },
+    "NZD/CHF": {
+     "rows": 768,
+     "kept": 768,
+     "sha256": "e5bc98a1afca942e76c24f6b615055b217e97eb5ac5bace7f8904f8c47861894"
+    }
+   }
+  },
+  {
+   "file": "raw/02-15m-2026-09-07.json",
+   "params": {
+    "symbol": "EUR/USD,GBP/USD,USD/JPY,CHF/JPY,NZD/CAD,NZD/CHF",
+    "interval": "15min",
+    "start_date": "2026-09-07 21:00:00",
+    "end_date": "2026-10-09 20:45:00",
+    "timezone": "UTC",
+    "order": "ASC",
+    "outputsize": "5000"
+   },
+   "retrievedAt": "2026-10-11T18:38:53.934Z",
+   "httpStatus": 200,
+   "sha256": "4b9da8c0ba4d7a076f9a32fb6fccf16d5be4a92e7847cba0ca6bb120cf704f2d",
+   "perSeries": {
+    "EUR/USD": {
+     "rows": 3072,
+     "kept": 3072,
+     "sha256": "b6c9cc1bdb307cfe22a94425cc16baf09eb01031544d583ee8ba1a13fbca3544"
+    },
+    "GBP/USD": {
+     "rows": 3072,
+     "kept": 3072,
+     "sha256": "23917933578ba8aec88c1b4f1eb97e9599322d7b7fef9c40c7ab1a6b6ebb2609"
+    },
+    "USD/JPY": {
+     "rows": 3072,
+     "kept": 3072,
+     "sha256": "413817c6f7b13aa371cbce0196c4712ed9ce3f4c9b2d1e424ac161e6ae5f85a8"
+    },
+    "CHF/JPY": {
+     "rows": 3072,
+     "kept": 3072,
+     "sha256": "5b9f828af7c6174740401847f1d0ffe567ed3a2fdd2f6cc61b2f1ba7f11eaa15"
+    },
+    "NZD/CAD": {
+     "rows": 3072,
+     "kept": 3072,
+     "sha256": "5e72facbafb27314c642b5bd81c676d0892da7726b5c53341916ac613846d21a"
+    },
+    "NZD/CHF": {
+     "rows": 3072,
+     "kept": 3072,
+     "sha256": "6f404ebfefaac032e12e16e04d294df87e6617cc7a2afea2a6259352832d3981"
+    }
+   }
+  },
+  {
+   "file": "raw/03-5m-2026-09-07.json",
+   "params": {
+    "symbol": "EUR/USD,GBP/USD,USD/JPY,CHF/JPY,NZD/CAD,NZD/CHF",
+    "interval": "5min",
+    "start_date": "2026-09-07 21:00:00",
+    "end_date": "2026-09-20 20:55:00",
+    "timezone": "UTC",
+    "order": "ASC",
+    "outputsize": "5000"
+   },
+   "retrievedAt": "2026-10-11T18:39:59.412Z",
+   "httpStatus": 200,
+   "sha256": "b9a63e61bd4db96f6e4cc118174f59e0c6494c8d8b61843be45c4b970a90a81b",
+   "perSeries": {
+    "EUR/USD": {
+     "rows": 3744,
+     "kept": 3744,
+     "sha256": "d7a6cddc31a0396affda08e7091c415e78feb5a58becc28c99f1b291737558c2"
+    },
+    "GBP/USD": {
+     "rows": 3744,
+     "kept": 3744,
+     "sha256": "a51d6c51f2b699662cc1ece16d0cd11f81bddf5d8304f42bce6b2a2b8e7ffb5a"
+    },
+    "USD/JPY": {
+     "rows": 3744,
+     "kept": 3744,
+     "sha256": "6a41a5a45ad814cdc607b37fd8f681802d27cb74ec4436e47c290dfaf980d2b4"
+    },
+    "CHF/JPY": {
+     "rows": 3744,
+     "kept": 3744,
+     "sha256": "8fce36b6f5cc1205d24cf5b3385f51a4efab2d4445e833ab65ccf8336034f0b6"
+    },
+    "NZD/CAD": {
+     "rows": 3744,
+     "kept": 3744,
+     "sha256": "d0dcdcea38201e7499b58f1213923de15ee4f6e1c4fe5a1aed618713474243f6"
+    },
+    "NZD/CHF": {
+     "rows": 3744,
+     "kept": 3744,
+     "sha256": "31c4858e29533bca9f3b8db8efb27e6ca9c7ff3531fad5da1cd2a891526207ed"
+    }
+   }
+  },
+  {
+   "file": "raw/04-5m-2026-09-20.json",
+   "params": {
+    "symbol": "EUR/USD,GBP/USD,USD/JPY,CHF/JPY,NZD/CAD,NZD/CHF",
+    "interval": "5min",
+    "start_date": "2026-09-20 21:00:00",
+    "end_date": "2026-09-27 20:55:00",
+    "timezone": "UTC",
+    "order": "ASC",
+    "outputsize": "5000"
+   },
+   "retrievedAt": "2026-10-11T18:41:07.336Z",
+   "httpStatus": 200,
+   "sha256": "721831406d3333a6999973f1bb6d944fd63dc87c8b12a0de42bf1806d51a1019",
+   "perSeries": {
+    "EUR/USD": {
+     "rows": 2016,
+     "kept": 2016,
+     "sha256": "9290b63fd1e6a6474b61272bd9e51b472d35af7961454cc32de1b178efa95e42"
+    },
+    "GBP/USD": {
+     "rows": 2016,
+     "kept": 2016,
+     "sha256": "fe4e86c00d1842df9a3a0ca3d81b8350f6adea12b86ce127fd63308dc9428b10"
+    },
+    "USD/JPY": {
+     "rows": 2016,
+     "kept": 2016,
+     "sha256": "17a4b48fecaa8462933cfdff6a0a83416809aa35c570687a39f91b15d638354d"
+    },
+    "CHF/JPY": {
+     "rows": 2016,
+     "kept": 2016,
+     "sha256": "dcaeae65df706d5e19c1ef30365ccba53a0864ad03346403899d81b688aa2e7d"
+    },
+    "NZD/CAD": {
+     "rows": 2016,
+     "kept": 2016,
+     "sha256": "cb585eaab586984ff705d95330a3d79c5b09c6e97c2ac25e13228c5993292ea8"
+    },
+    "NZD/CHF": {
+     "rows": 2016,
+     "kept": 2016,
+     "sha256": "2eff88135ea70a5337e9f297c2decfb4a1d4584c2c36829f9172e0e007224a6b"
+    }
+   }
+  },
+  {
+   "file": "raw/05-5m-2026-09-27.json",
+   "params": {
+    "symbol": "EUR/USD,GBP/USD,USD/JPY,CHF/JPY,NZD/CAD,NZD/CHF",
+    "interval": "5min",
+    "start_date": "2026-09-27 21:00:00",
+    "end_date": "2026-10-09 20:55:00",
+    "timezone": "UTC",
+    "order": "ASC",
+    "outputsize": "5000"
+   },
+   "retrievedAt": "2026-10-11T18:42:13.594Z",
+   "httpStatus": 200,
+   "sha256": "1eeea90c19b38de14d7dc8d67e9bbdf86bc26f36b310a111b083377726974b05",
+   "perSeries": {
+    "EUR/USD": {
+     "rows": 3456,
+     "kept": 3456,
+     "sha256": "7f1b3b68e80cf7f553d2bf8cab5aba40a4718655181e5cf1871394bd3e689de6"
+    },
+    "GBP/USD": {
+     "rows": 3456,
+     "kept": 3456,
+     "sha256": "beb27b8f19b5bd746dbaca5ee098d2507940ae776c393aaec4c925bcc8b6014b"
+    },
+    "USD/JPY": {
+     "rows": 3456,
+     "kept": 3456,
+     "sha256": "fd2e2a5049fcc0897e91af26be571b06dfbebc03f17af112d28b10e239f502ca"
+    },
+    "CHF/JPY": {
+     "rows": 3456,
+     "kept": 3456,
+     "sha256": "4e3cfb79ae92199f5cdc2e7c6b458f80b913ea151571fdc5684f134d037a8d7c"
+    },
+    "NZD/CAD": {
+     "rows": 3456,
+     "kept": 3456,
+     "sha256": "33977dc6491ad91225ad61087a1bc1a981299c0df30f8ef23aa5d95bc312785a"
+    },
+    "NZD/CHF": {
+     "rows": 3456,
+     "kept": 3456,
+     "sha256": "3582e84be646c993be27e5173d3d7769ec8205e34936b61c4d530e8a52d13f3a"
+    }
+   }
+  }
+ ],
+ "datasetSha256": "2cc0c4b3c5badf60b909759c083c40384cdef53b1d93bbd90c6a974ef679559f"
+}

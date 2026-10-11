@@ -1,0 +1,32 @@
+EUR/USD 1h  2026-09-07T21:00:00.000Z → 2026-10-09T20:00:00.000Z  present 576/576  MISSING 0  dropped(closed-time) 192
+GBP/USD 1h  2026-09-07T21:00:00.000Z → 2026-10-09T20:00:00.000Z  present 576/576  MISSING 0  dropped(closed-time) 192
+USD/JPY 1h  2026-09-07T21:00:00.000Z → 2026-10-09T20:00:00.000Z  present 576/576  MISSING 0  dropped(closed-time) 192
+CHF/JPY 1h  2026-09-07T21:00:00.000Z → 2026-10-09T20:00:00.000Z  present 576/576  MISSING 0  dropped(closed-time) 192
+NZD/CAD 1h  2026-09-07T21:00:00.000Z → 2026-10-09T20:00:00.000Z  present 576/576  MISSING 0  dropped(closed-time) 192
+NZD/CHF 1h  2026-09-07T21:00:00.000Z → 2026-10-09T20:00:00.000Z  present 576/576  MISSING 0  dropped(closed-time) 192
+EUR/USD 15m 2026-09-07T21:00:00.000Z → 2026-10-09T20:45:00.000Z  present 2304/2304  MISSING 0  dropped(closed-time) 768
+GBP/USD 15m 2026-09-07T21:00:00.000Z → 2026-10-09T20:45:00.000Z  present 2304/2304  MISSING 0  dropped(closed-time) 768
+USD/JPY 15m 2026-09-07T21:00:00.000Z → 2026-10-09T20:45:00.000Z  present 2304/2304  MISSING 0  dropped(closed-time) 768
+CHF/JPY 15m 2026-09-07T21:00:00.000Z → 2026-10-09T20:45:00.000Z  present 2304/2304  MISSING 0  dropped(closed-time) 768
+NZD/CAD 15m 2026-09-07T21:00:00.000Z → 2026-10-09T20:45:00.000Z  present 2304/2304  MISSING 0  dropped(closed-time) 768
+NZD/CHF 15m 2026-09-07T21:00:00.000Z → 2026-10-09T20:45:00.000Z  present 2304/2304  MISSING 0  dropped(closed-time) 768
+EUR/USD 5m  2026-09-07T21:00:00.000Z → 2026-10-09T20:55:00.000Z  present 6912/6912  MISSING 0  dropped(closed-time) 2304
+GBP/USD 5m  2026-09-07T21:00:00.000Z → 2026-10-09T20:55:00.000Z  present 6912/6912  MISSING 0  dropped(closed-time) 2304
+USD/JPY 5m  2026-09-07T21:00:00.000Z → 2026-10-09T20:55:00.000Z  present 6912/6912  MISSING 0  dropped(closed-time) 2304
+CHF/JPY 5m  2026-09-07T21:00:00.000Z → 2026-10-09T20:55:00.000Z  present 6912/6912  MISSING 0  dropped(closed-time) 2304
+NZD/CAD 5m  2026-09-07T21:00:00.000Z → 2026-10-09T20:55:00.000Z  present 6912/6912  MISSING 0  dropped(closed-time) 2304
+NZD/CHF 5m  2026-09-07T21:00:00.000Z → 2026-10-09T20:55:00.000Z  present 6912/6912  MISSING 0  dropped(closed-time) 2304
+provider-wide MISSING 1h: 0
+provider-wide MISSING 15m: 0
+provider-wide MISSING 5m: 0
+2026-09-28  coverage yes  lookback without MISSING yes
+2026-09-29  coverage yes  lookback without MISSING yes
+2026-09-30  coverage yes  lookback without MISSING yes
+2026-10-01  coverage yes  lookback without MISSING yes
+2026-10-02  coverage yes  lookback without MISSING yes
+2026-10-05  coverage yes  lookback without MISSING yes
+2026-10-06  coverage yes  lookback without MISSING yes
+2026-10-07  coverage yes  lookback without MISSING yes
+2026-10-08  coverage yes  lookback without MISSING yes
+2026-10-09  coverage yes  lookback without MISSING yes
+complete eligible days: 10 (need ≥ 10) → PASS
