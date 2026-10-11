@@ -25,15 +25,16 @@ function runScn(mod: (s: Scenario) => void = () => {}, opts: Opts = {}) {
 const at = (r: ReturnType<typeof runScn>, entity: string, event: string) => r.ev().find((e) => e.entity === entity && e.event === event);
 const BASE_SEQ = ["POI:QUALIFIED:FVG", "POI:QUALIFIED:OB", "POI:ARMED:FVG", "SETUP:ARMED", "SETUP:CONFIRMED", "SETUP:ENTERED", "TRADE:EXIT_TP"];
 
-clause(["0.2", "0.4", "3.10", "4.1", "5.2", "6.1", "6.3", "6.4", "7.5", "9", "16"], "full LONG lifecycle: arm on touch, CHoCH, enter at close[k], TP exit; SHORT mirror identical", () => {
+clause(["0.2", "0.4", "3.10", "4.1", "5.2", "5.3", "6.1", "6.2", "6.3", "6.4", "7.5", "9", "16", "SA1"], "full LONG lifecycle: arm on touch, CHoCH, enter at close[k] with the CHoCH-origin stop, TP exit; SHORT mirror identical", () => {
   for (const mirror of [false, true]) {
     const r = runScn((s) => { s.mirror = mirror; });
     assertEquals(r.seq(), BASE_SEQ);
     const m = mirror ? -1 : 1;
-    assertEquals(at(r, "SETUP", "ENTERED")!.data, { entry: P(4.5 * m), sl: P(-4 * m), reaction: P(-0.5 * m), tp: P(20 * m), lots: 5, limitedBy: null });
+    // CHoCH origin = lowest low of (02:30, 03:00] = −0.5 → SL −1.5; lots = 500 / ((6 + 1.5) pips × $10) = 6.66
+    assertEquals(at(r, "SETUP", "ENTERED")!.data, { entry: P(4.5 * m), sl: P(-1.5 * m), reaction: P(-0.5 * m), tp: P(20 * m), lots: 6.66, limitedBy: null });
     assertEquals(at(r, "SETUP", "ARMED")!.t, ny(15, 2, 55));
     assertEquals(at(r, "TRADE", "EXIT_TP")!.data, { exitPrice: P(20 * m), gapDuring: false });
-    assertEquals(r.res.trades[0].netR, (P(20) - P(4.5) - 1500) / (P(4.5) - P(-4)));
+    assertEquals(r.res.trades[0].netR, (P(20) - P(4.5) - 1500) / (P(4.5) - P(-1.5)));
   }
 });
 
@@ -65,17 +66,17 @@ clause(["6.3", "5.1"], "STOP_TOO_TIGHT: a newer protected swing (−1.5) inside 
   assertEquals(at(r, "SETUP", "STOP_TOO_TIGHT")!.data!.entry, P(-1.2));
 });
 
-clause(["4.2", "3.12", "15"], "touch bar closing beyond the distal edge → ARMED_AND_INVALIDATED; the OB touched on the same bar → SPENT_SAME_BAR", () => {
+clause(["4.2", "3.12", "15", "LO1", "SA1"], "LO1: a touch bar closing beyond the far edge does not end the setup; the OB on the same bar → SPENT_SAME_BAR; stop from the CHoCH origin (−4 → −5)", () => {
   const r = runScn((s) => { s.m5.set(ny(15, 2, 50), [2, 2, -4, -3.5]); });
-  assertEquals(r.seq(), ["POI:QUALIFIED:FVG", "POI:QUALIFIED:OB", "POI:SPENT_SAME_BAR:OB", "POI:ARMED:FVG", "SETUP:ARMED", "SETUP:ARMED_AND_INVALIDATED"]);
+  assertEquals(r.seq(), ["POI:QUALIFIED:FVG", "POI:QUALIFIED:OB", "POI:SPENT_SAME_BAR:OB", "POI:ARMED:FVG", "SETUP:ARMED", "SETUP:CONFIRMED", "SETUP:RR_BELOW_MIN"]);
+  assertEquals(at(r, "SETUP", "RR_BELOW_MIN")!.data!.sl, P(-5));          // R:R (15.5 − 1.5) / 9.5 = 1.47
 });
 
-clause(["5.4", "15"], "INVALIDATED on a later close beyond the distal edge (before any CHoCH)", () => {
+clause(["5.4", "15", "LO1", "10.2"], "LO1: a later 5m close beyond the far edge does not end the setup; the OB touched meanwhile → SPENT_PAIR_BUSY; entry with SL −4.6", () => {
   const r = runScn((s) => { s.m5.set(ny(15, 2, 55), [1, 2, -3.6, -3.5]); });
-  const fvgSetup = r.ev().filter((e) => e.entity === "SETUP" && e.id.includes("|FVG|")).map((e) => e.event);
-  assertEquals(fvgSetup, ["ARMED", "INVALIDATED"]);
-  // §15: the pair is free after step 4, so the OB touched on the same bar arms in step 5
-  assertEquals(r.ev().find((e) => e.entity === "SETUP" && e.event === "ARMED" && e.id.includes("|OB|"))!.t, ny(15, 3, 0));
+  assertEquals(r.ev().filter((e) => e.entity === "SETUP").map((e) => e.event), ["ARMED", "CONFIRMED", "ENTERED"]);
+  assert(r.seq().includes("POI:SPENT_PAIR_BUSY:OB"));
+  assertEquals(at(r, "SETUP", "ENTERED")!.data!.sl, P(-4.6));            // CHoCH origin −3.6 − 1 pip
 });
 
 clause(["5.4", "0.8"], "EXPIRED at the last window bar (decision 11:55 NY) without a CHoCH", () => {
@@ -90,12 +91,13 @@ clause(["3.11", "4.1", "0.8"], "touch outside the window → SPENT_OUTSIDE_WINDO
   assert(!r.seq().includes("SETUP:ARMED"));
 });
 
-clause(["2.2", "2.1", "3.11"], "15m opposite break in the last 10 bars → direction NONE → SPENT_DIRECTION", () => {
+clause(["2.2", "2.1", "3.11", "TP1"], "TP1: a 15m opposite break in the last 10 bars no longer blocks arming (D1′ telemetry only)", () => {
   const r = runScn((s) => {
     s.m15.set(ny(15, 1, 45), [2, 2.5, 1.0, 2]);         // 15m swing low 1.0 (neighbours' lows 1.5)
     s.m15.set(ny(15, 2, 30), [2, 2.5, 0.5, 0.8]);       // close 0.8 < 1.0 on slot i+3 → bearish 15m break
   });
-  assertEquals(r.seq().slice(2, 3), ["POI:SPENT_DIRECTION:FVG"]);
+  assertEquals(r.seq(), BASE_SEQ);
+  assert(r.res.events.some((e) => e.entity === "DIR" && e.pair === "EUR/USD" && e.data?.status === "VETOED"));   // still logged as telemetry
 });
 
 const FLIP_H1: [number, OHLC][] = [[33, [9, 10, 7, 8]], [34, [8, 10, 8, 9]], [35, [9, 10, 8, 9]], [36, [9, 9.5, 6, 6.5]]];
@@ -105,19 +107,23 @@ function flip(s: Scenario) {
   s.m5.delete(ny(15, 3, 0)); s.m5.delete(ny(15, 3, 5));
 }
 
-clause(["2.3", "15"], "DIRECTION_FLIP when the 1H bias turns SHORT while armed", () => {
+clause(["2.3", "2.4", "TP1"], "TP1: the 1H bias turning SHORT while armed does not end the setup (it lives to EXPIRED at 11:55)", () => {
   const r = runScn(flip);
-  assertEquals(r.seq().slice(-1), ["SETUP:DIRECTION_FLIP"]);
-  assertEquals(at(r, "SETUP", "DIRECTION_FLIP")!.t, ny(15, 6, 0));
+  assertEquals(r.ev().filter((e) => e.entity === "SETUP").map((e) => e.event), ["ARMED", "EXPIRED"]);
+  assert(r.res.events.some((e) => e.entity === "DIR" && e.pair === "EUR/USD" && e.event === "SHORT" && e.t === ny(15, 6, 0)));
 });
 
-clause(["15", "5.4"], "same bar: INVALIDATED precedes DIRECTION_FLIP", () => {
-  const r = runScn((s) => { flip(s); s.m5.set(ny(15, 5, 55), [2, 2, -4, -3.5]); });
-  assertEquals(r.ev().filter((e) => e.entity === "SETUP").map((e) => e.event), ["ARMED", "INVALIDATED"]);
-  assertEquals(at(r, "SETUP", "INVALIDATED")!.t, ny(15, 6, 0));
+clause(["15", "3.9", "5.4", "LO1"], "same decision time: leg invalidation (step 2) precedes a 5m CHoCH (step 4)", () => {
+  // CHoCH on the 02:55 bar (decision 03:00 = the close of 1H bar 33), and that 1H bar closes below the leg origin (−10)
+  const r = runScn((s) => { s.m5.set(ny(15, 2, 55), [1, 5, -0.5, 4.5]); s.m5.delete(ny(15, 3, 0)); s.m5.delete(ny(15, 3, 5)); s.h1[33] = [9, 10, -11, -10.5]; });
+  assertEquals(r.ev().filter((e) => e.entity === "SETUP").map((e) => e.event), ["ARMED", "LEG_INVALIDATED"]);
+  assertEquals(at(r, "SETUP", "LEG_INVALIDATED")!.t, ny(15, 3, 0));
+  // control: without that 1H close the same bar confirms
+  const c = runScn((s) => { s.m5.set(ny(15, 2, 55), [1, 5, -0.5, 4.5]); s.m5.delete(ny(15, 3, 0)); s.m5.delete(ny(15, 3, 5)); });
+  assertEquals(at(c, "SETUP", "CONFIRMED")!.t, ny(15, 3, 0));
 });
 
-clause(["3.9", "15"], "leg invalidation (1H close below the origin) ends the armed setup and the untouched OB in step 2, before DIRECTION_FLIP", () => {
+clause(["3.9", "15", "LO1"], "leg invalidation (1H close below the origin) ends the armed setup and the untouched OB in step 2", () => {
   const r = runScn((s) => { s.h1[33] = [9, 10, -11, -10.5]; });
   assertEquals(r.seq().slice(-2).sort(), ["POI:LEG_INVALIDATED:OB", "SETUP:LEG_INVALIDATED"].sort());
   assertEquals(at(r, "SETUP", "LEG_INVALIDATED")!.t, ny(15, 3, 0));
@@ -185,11 +191,11 @@ clause(["8.2", "4.1", "5.4"], "feed UNAVAILABLE at the touch → SPENT_FEED_UNAV
 
 clause(["9", "1.7"], "exits: SL and TP in one bar → EXIT_SL; first bar after a MISSING gap opening beyond TP → EXIT_TP at TP, flagged", () => {
   const both = runScn((s) => { s.m5.set(ny(15, 3, 5), [4.5, 21, -5, 20]); });
-  assertEquals(at(both, "TRADE", "EXIT_SL")!.data, { exitPrice: P(-4), gapDuring: false });
+  assertEquals(at(both, "TRADE", "EXIT_SL")!.data, { exitPrice: P(-1.5), gapDuring: false });
   const gapTp = runScn((s) => { s.missing.push({ tf: "5m", t: ny(15, 3, 5) }); s.m5.set(ny(15, 3, 10), [25, 26, 24, 25]); });
   assertEquals(at(gapTp, "TRADE", "EXIT_TP")!.data, { exitPrice: P(20), gapDuring: true });
   const gapSl = runScn((s) => { s.missing.push({ tf: "5m", t: ny(15, 3, 5) }); s.m5.set(ny(15, 3, 10), [-5, 30, -6, 25]); });
-  assertEquals(at(gapSl, "TRADE", "EXIT_SL")!.data, { exitPrice: P(-4), gapDuring: true });
+  assertEquals(at(gapSl, "TRADE", "EXIT_SL")!.data, { exitPrice: P(-1.5), gapDuring: true });
 });
 
 clause(["3.8"], "LOOKBACK_EXPIRED at the 1H close where b leaves the 120 most recent closed 1H bars (expected intervals)", () => {
@@ -228,19 +234,42 @@ function withShortLeg(s: Scenario) {
   s.start = nyLocalToUtc(2026, 9, 9, 17, 0);
   s.h1 = [...pre, ...s.h1];
   s.m5.delete(ny(14, 16, 30));                          // no spike (it would touch the SHORT OB)
+  s.m5.set(ny(15, 2, 30), [2, 2.9, 1.5, 2]);            // protected swing 2.9: stays below the SHORT FVG [3, 5] so it is untouched before k
 }
 
-clause(["6.3", "7.4", "AM1"], "AM1: an opposing POI first touched by bar k still counts for the entry at k → OPPOSING_POI_CONTAINS_ENTRY; its spend follows", () => {
+clause(["6.3", "7.4", "AM1"], "AM1: opposing POIs first touched by bar k still count for the entry at k → OPPOSING_POI_CONTAINS_ENTRY; their touch applies afterwards", () => {
   const r = runScn(withShortLeg);
-  assertEquals(r.ev().filter((e) => e.entity === "SETUP").map((e) => e.event).slice(-2), ["CONFIRMED", "OPPOSING_POI_CONTAINS_ENTRY"]);
-  const shortOb = r.ev().find((e) => e.entity === "POI" && e.event === "QUALIFIED" && e.id.includes("|SHORT|") && e.id.includes("|OB|"))!;
-  const spend = r.ev().find((e) => e.id === shortOb.id && e.event.startsWith("SPENT"))!;
-  assertEquals([spend.event, spend.t], ["SPENT_DIRECTION", ny(15, 3, 5)]);
+  const longSetup = r.ev().filter((e) => e.entity === "SETUP" && e.id.includes("|LONG|")).map((e) => e.event);
+  assertEquals(longSetup, ["ARMED", "CONFIRMED", "OPPOSING_POI_CONTAINS_ENTRY"]);
+  // bar k also touched the SHORT FVG [3,5] and OB [4.2,25]; after the LONG setup ended in step 4, step 5 processes that touch:
+  // the FVG (lowest POI.low) arms, the OB loses the same-bar selection
+  const shortEv = r.ev().filter((e) => e.entity === "POI" && e.id.includes("|SHORT|") && e.event !== "QUALIFIED").map((e) => `${e.event}:${e.id.split("|")[4]}@${e.t === ny(15, 3, 5)}`);
+  assertEquals(shortEv.sort(), ["ARMED:FVG@true", "SPENT_SAME_BAR:OB@true"]);
 });
 
-clause(["6.3", "AM1"], "AM1 for a setup armed and confirmed on the same bar k", () => {
-  const r = runScn((s) => { withShortLeg(s); s.m5.set(ny(15, 2, 50), [2, 5, 0.5, 4.5]); s.m5.delete(ny(15, 2, 55)); });
-  assertEquals(r.seq().slice(-3), ["SETUP:ARMED", "SETUP:CONFIRMED", "SETUP:OPPOSING_POI_CONTAINS_ENTRY"]);
+const conflictBar = (s: Scenario, at = ny(15, 2, 50)) => {
+  withShortLeg(s); s.m5.set(at, [2, 5, 0.5, 4.5]); s.m5.delete(ny(15, 2, 55));
+  if (at !== ny(15, 2, 50)) s.m5.delete(ny(15, 2, 50));
+};
+
+clause(["3.13", "CF1", "3.12", "15", "13"], "CF1: eligible LONG and SHORT POIs of one pair first touched on the same bar → neither arms, both SPENT_CONFLICT; mirror identical", () => {
+  for (const mirror of [false, true]) {
+    const r = runScn((s) => { conflictBar(s); s.mirror = mirror; });
+    const atBar = r.ev().filter((e) => e.t === ny(15, 2, 55) && e.entity !== "DIR").map((e) => `${e.entity}:${e.event}:${e.id.split("|")[1]}/${e.id.split("|")[4]}`).sort();
+    const L = mirror ? "SHORT" : "LONG", S = mirror ? "LONG" : "SHORT";
+    // the selected POIs of each direction conflict; the losing same-direction POI is SPENT_SAME_BAR (3.12 runs first)
+    assertEquals(atBar, [`POI:SPENT_CONFLICT:${L}/FVG`, `POI:SPENT_CONFLICT:${S}/FVG`, `POI:SPENT_SAME_BAR:${S}/OB`].sort());
+    assert(!r.ev().some((e) => e.entity === "SETUP" && e.t === ny(15, 2, 55)));
+  }
+});
+
+clause(["3.13", "CF1", "3.11", "0.8", "11.6"], "CF1: no conflict when both directions are ineligible — outside the window both end SPENT_OUTSIDE_WINDOW; non-TRADABLE both SPENT_DATA_PENDING", () => {
+  const out = runScn((s) => conflictBar(s, ny(15, 1, 30)));
+  const atOut = out.ev().filter((e) => e.t === ny(15, 1, 35) && e.entity === "POI").map((e) => e.event).sort();
+  assertEquals(atOut, ["SPENT_OUTSIDE_WINDOW", "SPENT_OUTSIDE_WINDOW", "SPENT_SAME_BAR"]);
+  const t = ny(15, 2, 55);
+  const pend = runScn(conflictBar, { schedule: { tradable: (p, x) => !(p === "EUR/USD" && x === t), runTime: (_p, x) => x } });
+  assertEquals(pend.ev().filter((e) => e.t === t && e.entity === "POI").map((e) => e.event).sort(), ["SPENT_DATA_PENDING", "SPENT_DATA_PENDING", "SPENT_SAME_BAR"]);
 });
 
 clause(["6.3", "7.4", "AM1"], "an opposing POI already spent before k is no obstacle at k", () => {

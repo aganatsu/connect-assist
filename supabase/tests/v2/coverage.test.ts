@@ -1,4 +1,4 @@
-// Every normative clause of STRATEGY_SPEC_V2.0.2_FROZEN.md has at least one tagged test; every §13 reason is asserted somewhere.
+// Every normative clause of STRATEGY_SPEC_V2.1.1_FROZEN.md has at least one tagged test; every §13 reason is asserted somewhere.
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { clause } from "./helpers/clause.ts";
 
@@ -12,7 +12,7 @@ export const CLAUSES = [
   "8.1", "8.2", "8.3", "8.4", "9", "10.1", "10.2", "10.3",
   "11.1", "11.2", "11.3", "11.4", "11.5", "11.6",
   "12.1", "12.2", "12.3", "12.4", "12.5", "12.6", "12.7", "12.8",
-  "0.12", "13", "14", "15", "16", "OWN", "AM1", "AM2", "AM3", "W1", "B1", "GT", "PS",
+  "0.12", "13", "14", "15", "16", "OWN", "AM1", "AM2", "AM3", "W1", "B1", "GT", "PS", "TP1", "SA1", "LO1", "3.13", "CF1",
 ];
 /** Clauses with no Phase 2 (pure engine) behaviour to test, and why. */
 export const DEFERRED: Record<string, string> = {
@@ -25,10 +25,10 @@ export const DEFERRED: Record<string, string> = {
 };
 const REASONS = [
   "LOOKBACK_EXPIRED", "LEG_INVALIDATED", "DATA_GAP_FRESHNESS_UNKNOWN", "DATA_GAP_PROVIDER_WIDE", "SPENT_OUTSIDE_WINDOW", "SPENT_NEWS_BLOCK",
-  "SPENT_DATA_PENDING", "SPENT_FEED_UNAVAILABLE", "SPENT_DIRECTION", "SPENT_CAP", "SPENT_PAIR_BUSY", "SPENT_SAME_BAR",
-  "ARMED_AND_INVALIDATED", "INVALIDATED", "DIRECTION_FLIP", "NEWS_FEED_UNAVAILABLE", "DATA_PENDING_CONFIRMATION", "NEWS_BLOCKED_CONFIRMATION",
+  "SPENT_DATA_PENDING", "SPENT_FEED_UNAVAILABLE", "SPENT_CAP", "SPENT_PAIR_BUSY", "SPENT_SAME_BAR",
+  "NEWS_FEED_UNAVAILABLE", "DATA_PENDING_CONFIRMATION", "NEWS_BLOCKED_CONFIRMATION",
   "EXPIRED", "DATA_GAP_ARMED", "DATA_GAP_ENTRY", "STOP_TOO_WIDE", "STOP_TOO_TIGHT", "OPPOSING_POI_CONTAINS_ENTRY", "NO_TARGET",
-  "RR_BELOW_MIN", "SIZING_FAILED", "ENTERED", "EXIT_SL", "EXIT_TP", "SPENT_WARMUP",
+  "RR_BELOW_MIN", "SIZING_FAILED", "ENTERED", "EXIT_SL", "EXIT_TP", "SPENT_WARMUP", "SPENT_CONFLICT",
 ];
 
 async function testSources() {

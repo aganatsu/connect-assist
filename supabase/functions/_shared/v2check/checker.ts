@@ -109,6 +109,7 @@ function swingsIn(s: Ser, from: number, L: number): Sw[] {
 function windowFrom(s: Ser, L: number, W: number): number { const r = s.runStart(L); return r < 0 ? -1 : Math.max(r, L - W + 1); }
 
 type D = "LONG" | "SHORT";
+const up0 = (d: D) => d === "LONG";
 function dirAt(S: Record<TFk, Ser>, t: number): { dir: D | "NONE"; status: string; bias: D | "NONE" } {
   const s1 = S["1h"], s15 = S["15m"];
   const L1 = s1.last(t), L15 = s15.last(t);
@@ -306,7 +307,7 @@ export function runChecker(inp: CInput): CEvent[] {
       if (setup[p]) setupStep(p, k, t);
     }
     // step 5
-    const cands: { p: CPair; x: CPoi }[] = [];
+    let cands: { p: CPair; x: CPoi }[] = [];
     const warm = open5 < (inp.measuredStart ?? ds.start);
     for (const p of warm ? group : []) {
       const bar = S[p]["5m"].bar(S[p]["5m"].pos.get(open5)!);
@@ -330,11 +331,15 @@ export function runChecker(inp: CInput): CEvent[] {
         else if (!c.tr) why = "SPENT_DATA_PENDING";
         else if (c.f.ok && blocked(p, c.f.ev, t)) why = "SPENT_NEWS_BLOCK";
         else if (!c.f.ok) why = "SPENT_FEED_UNAVAILABLE";
-        else if (c.dir !== dir) why = "SPENT_DIRECTION";
         else if (setup[p] || trade[p]) why = "SPENT_PAIR_BUSY";
         if (why) kill(t, p, pick, why); else cands.push({ p, x: pick });
       }
     }
+    // CF1: a pair with an eligible LONG and an eligible SHORT on this bar arms neither
+    const count = new Map<CPair, number>();
+    for (const c of cands) count.set(c.p, (count.get(c.p) ?? 0) + 1);
+    for (const c of cands) if (count.get(c.p)! > 1) kill(t, c.p, c.x, "SPENT_CONFLICT");
+    cands = cands.filter((c) => count.get(c.p)! < 2);
     const live = PAIRS.filter((p) => setup[p] || trade[p]).length;
     const slots = 3 - live;
     let winners = cands;
@@ -366,8 +371,7 @@ export function runChecker(inp: CInput): CEvent[] {
       const s = setup[p]!, s5 = S[p]["5m"], bar = s5.bar(k)!, c = ctx.get(p)!;
       const dir = s.poi.dir;
       s.react = dir === "LONG" ? Math.min(s.react, bar.l) : Math.max(s.react, bar.h);
-      if (dir === "LONG" ? bar.c < s.poi.low : bar.c > s.poi.high) return endS(t, p, k === s.armIdx ? "ARMED_AND_INVALIDATED" : "INVALIDATED");
-      if (c.dir !== "NONE" && c.dir !== dir) return endS(t, p, "DIRECTION_FLIP");
+      // V2.1: the leg origin (step 2) is the only price-based setup end — no far-edge close, no direction flip
       if (!c.f.ok) return endS(t, p, "NEWS_FEED_UNAVAILABLE");
       // protected swing from 5m bars after the close of b, confirmed by k−1, unbroken at k−1
       const scope = s5.idxAtOrAfter(s.poi.bClose);
@@ -387,15 +391,19 @@ export function runChecker(inp: CInput): CEvent[] {
         if (!c.tr) return endS(t, p, "DATA_PENDING_CONFIRMATION");
         if (blocked(p, c.f.ev, t)) return endS(t, p, "NEWS_BLOCKED_CONFIRMATION");
         out.push({ t, pair: p, entity: "SETUP", id: s.poi.id, event: "CONFIRMED" });
-        return entry(p, k, t);
+        return entry(p, k, t, prot.i);
       }
       if (inWindow(t) && !(expected(t) && inWindow(t + MIN5))) return endS(t, p, "EXPIRED");
     }
 
-    function entry(p: CPair, k: number, t: number) {
+    function entry(p: CPair, k: number, t: number, protI: number) {
       const s = setup[p]!, s5 = S[p]["5m"], s1 = S[p]["1h"], dir = s.poi.dir, c = ctx.get(p)!;
       const e = s5.bar(k)!.c;
-      const sl = dir === "LONG" ? Math.min(s.poi.low, s.react) - PTS_PER_PIP : Math.max(s.poi.high, s.react) + PTS_PER_PIP;
+      // V2.1 SA1: stop = extreme of the move from the protected swing (exclusive) to the CHoCH bar (inclusive), 1-pip buffer
+      let origin: number | null = up0(dir) ? Infinity : -Infinity;
+      for (let i = protI + 1; i <= k; i++) { const bb = s5.bar(i); if (!bb) { origin = null; break; } origin = up0(dir) ? Math.min(origin!, bb.l) : Math.max(origin!, bb.h); }
+      if (origin === null || k <= protI) return endS(t, p, "DATA_GAP_ENTRY", { entry: s5.bar(k)!.c });
+      const sl = up0(dir) ? origin - PTS_PER_PIP : origin + PTS_PER_PIP;
       const dist = Math.abs(e - sl);
       const L1 = s1.last(t);
       const atr = atr14x14(s1, L1);

@@ -1,8 +1,8 @@
-// V2 frozen constants. Source of truth: ~/strategy-v2/STRATEGY_SPEC_V2.0.2_FROZEN.md.
+// V2 frozen constants. Source of truth: ~/strategy-v2/STRATEGY_SPEC_V2.1.1_FROZEN.md.
 // Nothing in this file may change without a spec amendment.
 
-export const SPEC_VERSION = "2.0.2";
-export const SPEC_SHA256 = "7d64282d5e716137f9a8624fa8d4be6c55a2dd4d7c33ad7b8f82578081786e9e";
+export const SPEC_VERSION = "2.1.1";
+export const SPEC_SHA256 = "3369eda73a27ecb264dd360de8201e5f7ba772264ad3fac915f747e2fad4fb93";
 
 export const PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY", "CHF/JPY", "NZD/CAD", "NZD/CHF"] as const;
 export type Pair = typeof PAIRS[number];

@@ -4,9 +4,9 @@ import { inTradingWindow, isExpected } from "./calendar.ts";
 import { buildStore, type Dataset, firstOpenAtOrAfter, isProviderWide, lastClosed, type Store } from "./barStore.ts";
 import { atrSum } from "./atr.ts";
 import { PAIRS, type Pair, POI_LOOKBACK_1H, SPREAD_PTS, STEP_MS } from "./spec.ts";
-import { type Dir, type Direction, direction } from "./v2Direction.ts";
+import { type Dir, direction } from "./v2Direction.ts";
 import { type Leg, type Poi, legsAt, poisOf } from "./v2Poi.ts";
-import { stopLoss, stopTooTight, stopTooWide } from "./v2Stop.ts";
+import { chochOrigin, stopLoss, stopTooTight, stopTooWide } from "./v2Stop.ts";
 import { selectTarget, type TargetResult } from "./v2Target.ts";
 import { grossR, netR, rrAtLeastMin } from "./v2NetRR.ts";
 import { size } from "./v2Sizing.ts";
@@ -137,7 +137,7 @@ export function runEngine(input: EngineInput): EngineResult {
   function processDecision(t: number, pairs: Pair[]) {
     const k = store.index["5m"].get(t - M5)!;
     const h1 = store.index["1h"].get(t - H1);            // 1H slot closing at t, if expected
-    const ctx = new Map<Pair, { tradable: boolean; dirEff: Direction; feed: Feed; preTouch: PoiRec[] }>();
+    const ctx = new Map<Pair, { tradable: boolean; feed: Feed; preTouch: PoiRec[] }>();
 
     for (const p of PAIRS) {
       if (!pairs.includes(p)) continue;
@@ -146,7 +146,7 @@ export function runEngine(input: EngineInput): EngineResult {
       const raw = direction(S["1h"], ix["1h"], S["15m"], ix["15m"], t);
       const dirKey = `${raw.dir}:${raw.status}`;
       if (dirKey !== st[p].lastDir) { st[p].lastDir = dirKey; emit(t, p, "DIR", p, raw.dir, { status: raw.status, bias: raw.bias }); }
-      const dirEff: Direction = tradable ? raw : { dir: "NONE", status: raw.status, bias: raw.bias };
+      // V2.1 (TP1, Q1 = a): D1′ is telemetry only — logged above, consumed by no trading decision
       const feed = feedFor(p, t);
       const bar = S["5m"].bars[k];
 
@@ -192,7 +192,7 @@ export function runEngine(input: EngineInput): EngineResult {
 
       // AM1: pre-touch state of bar k (after steps 1–2, before any touch/spend of bar k)
       const preTouch = [...st[p].pois.values()].filter((x) => x.alive).map((x) => ({ ...x }));
-      ctx.set(p, { tradable, dirEff, feed, preTouch });
+      ctx.set(p, { tradable, feed, preTouch });
 
       if (!bar) continue;
       // ── Step 3: open-trade exits
@@ -239,11 +239,17 @@ export function runEngine(input: EngineInput): EngineResult {
           !c.tradable ? "SPENT_DATA_PENDING" :
           (c.feed.available && newsBlock(p, c.feed.events, t)) ? "SPENT_NEWS_BLOCK" :
           !c.feed.available ? "SPENT_FEED_UNAVAILABLE" :
-          c.dirEff.dir !== sel.dir ? "SPENT_DIRECTION" :
           (st[p].setup || st[p].trade) ? "SPENT_PAIR_BUSY" : null;
         if (reason) endPoi(t, p, sel, reason);
         else candidates.push({ p, poi: sel });
       }
+    }
+    // §3.13 (CF1): both directions of one pair individually eligible on this bar → neither arms (no tie-break of any kind)
+    for (const p of PAIRS) {
+      const both = candidates.filter((c) => c.p === p);
+      if (both.length < 2) continue;
+      for (const c of both) endPoi(t, p, c.poi, "SPENT_CONFLICT");
+      for (const c of both) candidates.splice(candidates.indexOf(c), 1);
     }
     const free = 3 - liveCount();
     let armed = candidates;
@@ -276,37 +282,35 @@ export function runEngine(input: EngineInput): EngineResult {
     for (const p of PAIRS) if (newly.includes(p)) setupStep(t, p, k, ctx.get(p)!);
   }
 
-  function setupStep(t: number, p: Pair, k: number, c: { tradable: boolean; dirEff: Direction; feed: Feed; preTouch: PoiRec[] }) {
+  function setupStep(t: number, p: Pair, k: number, c: { tradable: boolean; feed: Feed; preTouch: PoiRec[] }) {
     const s = st[p].setup!;
     const s5 = store.series[p]["5m"];
     const bar = s5.bars[k]!;
     s.reaction = s.dir === "LONG" ? Math.min(s.reaction, bar.l) : Math.max(s.reaction, bar.h);
-    // INVALIDATED (on the arm bar: ARMED_AND_INVALIDATED, §4.2)
-    if (s.dir === "LONG" ? bar.c < s.poi.low : bar.c > s.poi.high) {
-      return endSetup(t, p, k === s.armIdx ? "ARMED_AND_INVALIDATED" : "INVALIDATED");
-    }
-    const opposite: Dir = s.dir === "LONG" ? "SHORT" : "LONG";
-    if (c.dirEff.dir === opposite) return endSetup(t, p, "DIRECTION_FLIP");
+    // V2.1: no POI-far-edge invalidation (LO1, §4.2/§5.4) and no DIRECTION_FLIP (TP1, §2.3); LEG_INVALIDATED (step 2) is the only
+    // price-based setup end
     if (!c.feed.available) return endSetup(t, p, "NEWS_FEED_UNAVAILABLE");
     const ps = protectedSwing(structure[p]["5m"], s.dir === "LONG" ? "H" : "L", s.scopeFrom, k);
     if (ps && ps.breakIdx === k) {
       if (!c.tradable) return endSetup(t, p, "DATA_PENDING_CONFIRMATION");
       if (newsBlock(p, c.feed.events, t)) return endSetup(t, p, "NEWS_BLOCKED_CONFIRMATION");
       emit(t, p, "SETUP", s.poi.id, "CONFIRMED", { protectedSwing: s5.grid[ps.i], level: ps.level });
-      return entryStep(t, p, k, c);
+      return entryStep(t, p, k, c, ps.i);
     }
     if (inTradingWindow(t) && !(isExpected(t) && inTradingWindow(t + M5))) return endSetup(t, p, "EXPIRED");
   }
 
-  function entryStep(t: number, p: Pair, k: number, c: { preTouch: PoiRec[] }) {
+  function entryStep(t: number, p: Pair, k: number, c: { preTouch: PoiRec[] }, psIdx: number) {
     const s = st[p].setup!;
     const S = store.series[p];
     const entry = S["5m"].bars[k]!.c;
-    const sl = stopLoss(s.dir, s.poi, s.reaction);
-    const dist = Math.abs(entry - sl);
+    const origin = chochOrigin(s.dir, S["5m"], psIdx, k);                 // §5.3 (SA1)
     const L1 = lastClosed(S["1h"].grid, H1, t);
     const sum = L1 >= 0 ? atrSum(S["1h"], L1) : null;
     const opp: Dir = s.dir === "LONG" ? "SHORT" : "LONG";
+    if (origin === null) return endSetup(t, p, "DATA_GAP_ENTRY", { entry, why: "choch-origin" });
+    const sl = stopLoss(s.dir, origin);                                     // §6.2 (SA1)
+    const dist = Math.abs(entry - sl);
     const base = { entry, sl, reaction: s.reaction };
     if (sum === null) return endSetup(t, p, "DATA_GAP_ENTRY", { ...base, why: "atr" });
     if (stopTooWide(dist, sum)) return endSetup(t, p, "STOP_TOO_WIDE", base);

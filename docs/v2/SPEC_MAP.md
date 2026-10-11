@@ -1,6 +1,6 @@
 # V2 Phase 2 — spec → module → test map
 
-Spec: `STRATEGY_SPEC_V2.0.2_FROZEN.md` (sha256 `7d64282d5e716137f9a8624fa8d4be6c55a2dd4d7c33ad7b8f82578081786e9e`).
+Spec: `STRATEGY_SPEC_V2.1.1_FROZEN.md` (sha256 `3369eda73a27ecb264dd360de8201e5f7ba772264ad3fac915f747e2fad4fb93`). V2.0.2 (PARKED) is reproducible at tag `v2.0.2-parked`.
 Engine: `supabase/functions/_shared/v2/` (pure — no I/O, clock, DB or network). Independent checker: `supabase/functions/_shared/v2check/`.
 Tests: `supabase/tests/v2/` — every test is tagged `[§…]`; `coverage.test.ts` fails if a normative clause has no tagged test.
 Review charts: `scripts/v2/chart.ts`, runner `scripts/v2/replay.ts`.
@@ -32,6 +32,10 @@ Prices are integers (1,000 points per pip), so every threshold comparison is exa
 | 10.1–10.3 | `v2Lifecycle` step 5 ranking | lifecycle: cap ranking, exit frees slot on the same bar |
 | 11.6 | `v2Lifecycle` schedule (`tradable`, `runTime`) | lifecycle: SPENT_DATA_PENDING, DATA_PENDING_CONFIRMATION, late run; fidelity: random schedules |
 | 12.1–12.5, 12.7 | `v2Evaluation` | evaluation; fidelity |
+| TP1 (2.1–2.4, 4.1, 11.6) | `v2Lifecycle`: no direction check at arming, no DIRECTION_FLIP; D1′ logged as DIR telemetry only | lifecycle: 15m veto ignored, 1H flip ignored |
+| SA1 (5.3, 6.2, 6.3a) | `v2Stop.chochOrigin`, `stopLoss`; `v2Lifecycle.entryStep` | stop_rr_sizing: CHoCH origin; lifecycle: every entry check with the new SL |
+| LO1 (4.2, 5.4, 13, 15) | `v2Lifecycle.setupStep`: no far-edge invalidation; LEG_INVALIDATED (step 2) is the only price-based setup end | lifecycle: far-edge close survives, leg invalidation precedes CHoCH |
+| CF1 (3.13) | `v2Lifecycle` step 5: both directions of a pair eligible on one bar → both SPENT_CONFLICT, before 10.3 ranking | lifecycle: conflict (mirrored), ineligible bars are not conflicts |
 | 0.12, W1 | `EngineInput.measuredStart`; `v2Lifecycle` step 5 warm-up branch (SPENT_WARMUP) | lifecycle: W1 ×3; fidelity: warm-up |
 | GT (7.1a) | `v2Target.sweepState` (SWEPT → UNKNOWN → VALID) | target: swept-before-gap, valid-at-gap, swept-after-gap; lifecycle: GT at entry |
 | PS (2.0, 5.1) | `v2Structure.protectedSwing` (swing bar ≥ b close; left context may precede) | structure: PS scope, missing left context |

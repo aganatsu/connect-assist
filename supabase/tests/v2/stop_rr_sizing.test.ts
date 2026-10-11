@@ -1,7 +1,8 @@
 import { assert, assertAlmostEquals, assertEquals, assertFalse } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { clause } from "./helpers/clause.ts";
 import { D } from "./helpers/series.ts";
-import { stopLoss, stopTooTight, stopTooWide } from "../../functions/_shared/v2/v2Stop.ts";
+import { chochOrigin, stopLoss, stopTooTight, stopTooWide } from "../../functions/_shared/v2/v2Stop.ts";
+import { mkSeries } from "./helpers/series.ts";
 import { grossR, netR, rr, rrAtLeastMin } from "../../functions/_shared/v2/v2NetRR.ts";
 import { dollarPnl, size } from "../../functions/_shared/v2/v2Sizing.ts";
 import { COMMISSION_USD_PER_LOT, COST_PTS, PAIRS, PIP, QUOTE_TO_USD, RESEARCH_RATES, SPREAD_PTS } from "../../functions/_shared/v2/spec.ts";
@@ -17,11 +18,16 @@ clause(["0.1", "6.5"], "frozen cost table; commission pips back-compute to ≈ $
   assertEquals(RESEARCH_RATES, { USDJPY: 158.31985, USDCAD: 1.42552, USDCHF: 0.83022 });
 });
 
-clause(["6.2"], "SL = min(POI.low, reaction low) − 1 pip (LONG); max(POI.high, reaction high) + 1 pip (SHORT); may lie beyond distal", () => {
-  assertEquals(stopLoss("LONG", { low: D(-3), high: D(1) }, D(-0.5)), D(-4));
-  assertEquals(stopLoss("LONG", { low: D(-3), high: D(1) }, D(-6)), D(-7));
-  assertEquals(stopLoss("SHORT", { low: D(-1), high: D(3) }, D(0.5)), D(4));
-  assertEquals(stopLoss("SHORT", { low: D(-1), high: D(3) }, D(6)), D(7));
+clause(["5.3", "6.2", "SA1"], "SA1: CHoCH origin = extreme of the 5m bars in (ps, k] (k included); SL = origin ∓ 1 pip; no POI fallback; MISSING → not computable", () => {
+  const s5 = mkSeries([[0, 1, -1, 0], [0, 1, -3, 0], [0, 1, -2, 0], [0, 4, -1, 3], [3, 5, -0.5, 4.5]], "5m");
+  const px = (pips: number) => Math.round((1.16 + pips * 0.0001) * 1e7);
+  assertEquals(chochOrigin("LONG", s5, 0, 4), px(-3));                    // bars 1..4
+  assertEquals(chochOrigin("LONG", s5, 1, 4), px(-2));                    // the protected swing bar itself is excluded
+  assertEquals(chochOrigin("SHORT", s5, 0, 3), px(4));
+  assertEquals(chochOrigin("LONG", s5, 4, 4), null);                      // empty range
+  assertEquals(chochOrigin("LONG", mkSeries([[0, 1, -1, 0], null, [0, 1, -2, 0]], "5m"), 0, 2), null);
+  assertEquals(stopLoss("LONG", D(-3)), D(-4));
+  assertEquals(stopLoss("SHORT", D(4)), D(5));
 });
 
 clause(["6.3"], "STOP_TOO_WIDE at > 1.5×ATR (equal passes); STOP_TOO_TIGHT at < 3×spread (equal passes)", () => {
