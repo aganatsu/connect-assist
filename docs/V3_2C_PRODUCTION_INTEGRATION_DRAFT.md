@@ -172,7 +172,7 @@ canonical 1H store (first-observed valid closed bars; revisions → telemetry; 2
 - on the 1H grid;
 - inside FX hours (frozen `fxOpen`).
 
-An invalid bar is MISSING: logged, and its D/4H bucket is skipped by the frozen aggregation. Revisions go to `structure_bar_revisions`. **Price grid:** the 2025 epoch data holds float32 artefacts (e.g. 0.82209003). Canonicalise by rounding to the pair's price grid (5 decimals; 3 for JPY), symmetric in sign, as H2's IMPLEMENTATION_LOG #1 did. This is recorded in the store's provenance.
+An invalid bar is MISSING: logged, and its D/4H bucket is skipped by the frozen aggregation. Revisions go to `structure_bar_revisions`. **Price grid (amended 2026-10-15, decision D29):** all six pairs are rounded to 5 decimal places before canonical storage (the provider's quoted precision, JPY included), which also normalizes the 2025 float32 artefacts (e.g. 0.82586002 → 0.82586).
 
 **8.2 Historical FX closure calendar 2024/25 (D21), data-derived** (`CLOSURES.txt`: hours inside nominal FX hours where **all six** pairs lack a 1H bar):
 

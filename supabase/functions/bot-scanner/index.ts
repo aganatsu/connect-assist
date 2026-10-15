@@ -150,6 +150,7 @@ import { buildFrozenDecision } from "../_shared/frozenDecision.ts";
 import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
+import { liveWriterConfig, writeLiveStructureBars } from "../_shared/structure/structureBarsWriter.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -5335,6 +5336,11 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   // stages filled in. Observational only; every write is a plain assignment.
   const decisionCaptures: DecisionCapture[] = [];
 
+  // V3.2c PR2: canonical 1H structure-bar writer, DEFAULT OFF (STRUCTURE_BARS_LIVE_WRITE / STRUCTURE_BARS_RELEASE_AT).
+  // Observational only: it reuses the 1H candles this loop already fetched (zero provider calls), is awaited with a
+  // bounded timeout, never throws, and its result reaches no gate, score, entry or decision (console telemetry only).
+  const structureBarsCfg = liveWriterConfig();
+
   for (const pair of scanOrder) {
     const cap = newCapture(scanCycleId, userId, BOT_ID, pair, null);
     // Step 15: the decision row's id, known before any write (rows are flushed
@@ -5398,6 +5404,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     // Style-aware: scalper needs 15m for structure TF, swing needs weekly for bias TF
     const needsM15 = resolvedStyle === "scalper" && entryInterval !== "15m";
     const needsWeekly = resolvedStyle === "swing_trader" || pairConfig.ictHTFEnabled !== false;
+    const structureBarsFetchStartedAt = structureBarsCfg.enabled ? Date.now() : 0;
     const fetchPromises: Promise<Candle[]>[] = [
       cachedFetch(pair, entryInterval, entryRange),
       cachedFetch(pair, "1d", "1y"),
@@ -5423,6 +5430,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     const h4Offset = multiTFRegimeEnabled ? 1 : 0;
     // 1H candles always fetched (index = 2 + h4Offset)
     const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
+    if (structureBarsCfg.enabled) {
+      const sb = await writeLiveStructureBars(supabase, pair, hourlyCandles, { cfg: structureBarsCfg, fetchStartedAtMs: structureBarsFetchStartedAt });
+      console.log(`[structure-bars] ${pair} ${JSON.stringify(sb)}`);
+    }
     // 15m candles for scalper structure TF (only fetched when needsM15)
     const m15Offset = needsM15 ? 1 : 0;
     const m15Candles: Candle[] = needsM15 ? (fetched[3 + h4Offset] || []) : [];
