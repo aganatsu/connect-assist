@@ -1,0 +1,439 @@
+{
+ "note": "synthetic deterministic series; golden produced by the frozen research V3.2c copy",
+ "engine": "v3.2c-frozen-20261013",
+ "series": {
+  "SYN-A": {
+   "hours": 5755,
+   "hoursSha256": "1fba60f82c896770ada5bdc09441121d65b6703295a8c59594f552217c69aa4e"
+  },
+  "SYN-B": {
+   "hours": 5755,
+   "hoursSha256": "4d6acb3a5b88f1b2c654958b8ad4148175a65d914087ae3942594fd211b25deb"
+  }
+ },
+ "runs": {
+  "SYN-A|D": {
+   "bars": 237,
+   "skippedBuckets": [
+    {
+     "key": "2025-04-07",
+     "hours": 22
+    },
+    {
+     "key": "2025-06-18",
+     "hours": 23
+    },
+    {
+     "key": "2025-09-22",
+     "hours": 22
+    }
+   ],
+   "events": 37,
+   "eventsSha256": "78242a9ab337a03cc8259225d40aebc0552d39984cb55aeac5b88ac8517a39bf",
+   "snapshotsSha256": "013d2ebcea22be80cdf451655640169f53ded8ae5669167197a29d39ebaf96bb",
+   "eventTypes": {
+    "RESET": 3,
+    "SEED": 1,
+    "QUALIFY": 3,
+    "FREEZE": 3,
+    "DEEPEN": 23,
+    "CONFIRM": 1,
+    "PUSH": 1,
+    "BOS": 1,
+    "FLIP": 1
+   },
+   "final": {
+    "trend": "bull",
+    "P": {
+     "index": 121,
+     "price": 0.87149
+    },
+    "F": {
+     "index": 186,
+     "price": 1.05616
+    },
+    "stack": 1,
+    "pending": null
+   }
+  },
+  "SYN-A|4H": {
+   "bars": 1437,
+   "skippedBuckets": [
+    {
+     "key": "2025-04-07#0",
+     "hours": 2
+    },
+    {
+     "key": "2025-06-18#4",
+     "hours": 3
+    },
+    {
+     "key": "2025-09-22#0",
+     "hours": 2
+    }
+   ],
+   "events": 167,
+   "eventsSha256": "80cd7e5b702ffab6e7600af02e6e0f2122a003c874d31744bb177a782dfe6f81",
+   "snapshotsSha256": "062600c8dff27b993ebeeb54d3e29e75d64f25b57b8237a2da8c4d30d13cc751",
+   "eventTypes": {
+    "RESET": 1,
+    "SEED": 1,
+    "QUALIFY": 15,
+    "FREEZE": 1,
+    "DEEPEN": 108,
+    "CONFIRM": 10,
+    "PUSH": 10,
+    "STRUCTURAL_ONLY": 6,
+    "POP": 8,
+    "CONFIRM_FAILED": 7
+   },
+   "final": {
+    "trend": "bear",
+    "P": {
+     "index": 16,
+     "price": 1.08681
+    },
+    "F": {
+     "index": 741,
+     "price": 0.87149
+    },
+    "stack": 3,
+    "pending": null
+   }
+  },
+  "SYN-A|1H": {
+   "bars": 5755,
+   "skippedBuckets": [],
+   "events": 832,
+   "eventsSha256": "bb161b03359fa39fb49c0d58a78b3ab0e5a6e5feffafd402481696ead34a8ff9",
+   "snapshotsSha256": "d8f1b907996563ee5e88b9e704e0dc8d5a87cea1d231f4c58dbd2c14ffb78ed9",
+   "eventTypes": {
+    "RESET": 9,
+    "SEED": 1,
+    "QUALIFY": 115,
+    "FREEZE": 8,
+    "DEEPEN": 355,
+    "CONFIRM": 78,
+    "PUSH": 78,
+    "POP": 70,
+    "STRUCTURAL_ONLY": 67,
+    "CONFIRM_FAILED": 42,
+    "BOS": 3,
+    "FLIP": 4,
+    "PENDING": 1,
+    "PROMOTE": 1
+   },
+   "final": {
+    "trend": "bear",
+    "P": {
+     "index": 5475,
+     "price": 0.99785
+    },
+    "F": null,
+    "stack": 1,
+    "pending": null
+   }
+  },
+  "SYN-B|D": {
+   "bars": 237,
+   "skippedBuckets": [
+    {
+     "key": "2025-04-07",
+     "hours": 22
+    },
+    {
+     "key": "2025-06-18",
+     "hours": 23
+    },
+    {
+     "key": "2025-09-22",
+     "hours": 22
+    }
+   ],
+   "events": 2,
+   "eventsSha256": "f0aa245264d7735bf97023844498913f0db687259e0f3dddf13b8a9bae755676",
+   "snapshotsSha256": "d7b6fc99c63380a2295a6611211a7807532956172b863d232c8a5a94acf918be",
+   "eventTypes": {
+    "RESET": 1,
+    "SEED": 1
+   },
+   "final": {
+    "trend": "bull",
+    "P": {
+     "index": 25,
+     "price": 150.70849
+    },
+    "F": null,
+    "stack": 1,
+    "pending": null
+   }
+  },
+  "SYN-B|4H": {
+   "bars": 1437,
+   "skippedBuckets": [
+    {
+     "key": "2025-04-07#0",
+     "hours": 2
+    },
+    {
+     "key": "2025-06-18#4",
+     "hours": 3
+    },
+    {
+     "key": "2025-09-22#0",
+     "hours": 2
+    }
+   ],
+   "events": 74,
+   "eventsSha256": "501287e88c3239bd80c95a312e0e0c9da768e055d3b52c6df16d6850dca39c19",
+   "snapshotsSha256": "16b090c2f63ca55923fee6602d90d9b4259811f327e9623f31d23f57aa726aa5",
+   "eventTypes": {
+    "RESET": 2,
+    "SEED": 1,
+    "QUALIFY": 4,
+    "FREEZE": 2,
+    "DEEPEN": 58,
+    "CONFIRM": 2,
+    "PUSH": 2,
+    "POP": 1,
+    "CONFIRM_FAILED": 1,
+    "FLIP": 1
+   },
+   "final": {
+    "trend": "bull",
+    "P": {
+     "index": 223,
+     "price": 156.68932
+    },
+    "F": {
+     "index": 1041,
+     "price": 185.66558
+    },
+    "stack": 2,
+    "pending": null
+   }
+  },
+  "SYN-B|1H": {
+   "bars": 5755,
+   "skippedBuckets": [],
+   "events": 497,
+   "eventsSha256": "8d01ed1ae31c2ed3d2500b446d7a0ac577afe6539c5c4561f5344a8134693610",
+   "snapshotsSha256": "8fbbbc2ee8c4b532144ee3587b45e147e182db868b9b6914ef1d4d7420d79d08",
+   "eventTypes": {
+    "RESET": 9,
+    "SEED": 1,
+    "QUALIFY": 48,
+    "FREEZE": 8,
+    "CONFIRM": 32,
+    "PUSH": 32,
+    "STRUCTURAL_ONLY": 24,
+    "POP": 29,
+    "DEEPEN": 288,
+    "FLIP": 4,
+    "CONFIRM_FAILED": 14,
+    "PENDING": 2,
+    "FLIP_BIAS": 2,
+    "PROMOTE": 2,
+    "BOS": 2
+   },
+   "final": {
+    "trend": "bull",
+    "P": {
+     "index": 5290,
+     "price": 169.74034
+    },
+    "F": null,
+    "stack": 1,
+    "pending": null
+   }
+  }
+ },
+ "seedSwings": [
+  [
+   13,
+   "low",
+   1.09164
+  ],
+  [
+   22,
+   "high",
+   1.09485
+  ],
+  [
+   26,
+   "low",
+   1.08967
+  ],
+  [
+   30,
+   "high",
+   1.09215
+  ],
+  [
+   51,
+   "low",
+   1.08212
+  ],
+  [
+   66,
+   "high",
+   1.08681
+  ],
+  [
+   93,
+   "high",
+   1.07478
+  ],
+  [
+   110,
+   "low",
+   1.06538
+  ],
+  [
+   114,
+   "high",
+   1.06808
+  ],
+  [
+   119,
+   "low",
+   1.06358
+  ],
+  [
+   128,
+   "high",
+   1.06568
+  ],
+  [
+   158,
+   "low",
+   1.04919
+  ],
+  [
+   165,
+   "high",
+   1.052
+  ],
+  [
+   188,
+   "low",
+   1.03996
+  ],
+  [
+   197,
+   "high",
+   1.04287
+  ],
+  [
+   207,
+   "high",
+   1.04477
+  ],
+  [
+   212,
+   "low",
+   1.04161
+  ],
+  [
+   221,
+   "high",
+   1.05008
+  ],
+  [
+   228,
+   "low",
+   1.04574
+  ],
+  [
+   234,
+   "high",
+   1.04988
+  ],
+  [
+   240,
+   "low",
+   1.04463
+  ],
+  [
+   248,
+   "high",
+   1.04802
+  ],
+  [
+   250,
+   "low",
+   1.04443
+  ],
+  [
+   255,
+   "high",
+   1.04843
+  ],
+  [
+   259,
+   "low",
+   1.04528
+  ],
+  [
+   279,
+   "high",
+   1.05315
+  ],
+  [
+   282,
+   "low",
+   1.05001
+  ],
+  [
+   288,
+   "high",
+   1.05485
+  ],
+  [
+   302,
+   "low",
+   1.0486
+  ],
+  [
+   309,
+   "high",
+   1.05515
+  ],
+  [
+   320,
+   "low",
+   1.05261
+  ],
+  [
+   336,
+   "high",
+   1.06018
+  ],
+  [
+   340,
+   "low",
+   1.0565
+  ],
+  [
+   356,
+   "low",
+   1.05927
+  ],
+  [
+   376,
+   "high",
+   1.06981
+  ],
+  [
+   381,
+   "low",
+   1.06658
+  ],
+  [
+   383,
+   "high",
+   1.0703
+  ]
+ ],
+ "seedAtr": 0.0013692857142857237
+}
