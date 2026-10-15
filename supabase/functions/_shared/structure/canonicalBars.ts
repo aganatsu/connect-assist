@@ -106,11 +106,14 @@ export interface RejectionRow {
 export interface WritePlan { inserts: CanonicalRow[]; revisions: RevisionRow[]; rejections: RejectionRow[]; counts: Record<string, number> }
 
 /**
- * Turn evaluations into writes, given the canonical values already stored ({bar_time ISO → {hash, ohlc}}).
+ * Turn ONE SYMBOL's evaluations into writes, given that symbol's canonical values already stored ({bar_time ISO → {hash, ohlc}}).
  * New bar → insert (append-only, first valid settled observation wins). Existing bar, same value → nothing.
  * Existing bar, different value → revision row; the canonical row is never touched.
+ * Throws on a mixed-symbol batch: `existing` and the in-batch duplicate check are keyed by bar_time.
  */
 export function planWrites(evals: Evaluation[], existing: Map<string, { hash: string; open: number; high: number; low: number; close: number }>, source: BarSource): WritePlan {
+  const symbols = new Set(evals.map((e) => (e.kind === "candidate" ? e.row.symbol : e.obs.symbol)));
+  if (symbols.size > 1) throw new Error(`planWrites takes one symbol per call; got ${[...symbols].join(", ")}`);
   const counts: Record<string, number> = {};
   const bump = (k: string) => { counts[k] = (counts[k] ?? 0) + 1; };
   const inserts: CanonicalRow[] = [], revisions: RevisionRow[] = [], rejections: RejectionRow[] = [];

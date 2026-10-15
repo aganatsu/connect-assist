@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   candleTimeMs, EPOCH_MS, evaluateObservation, fxOpenNY, H1_MS, MIN_LIVE_RELEASE_MS, type Observation, planWrites, priceDecimals,
   RESEARCH_IMPORT_END_MS, roundToGrid, SETTLE_MS, type SourceSpan, valueHash,
@@ -110,4 +110,10 @@ Deno.test("NY D/4H compatibility: canonical rows → frozen aggregation → iden
   };
   assertEquals(canon.length, raw.length, "every synthetic FX-open bar is canonical");
   for (const tf of ["D", "4H", "1H"] as const) assertEquals(run(canon, tf), run(raw, tf), tf);
+});
+
+Deno.test("planWrites refuses a mixed-symbol batch (its bar_time keys are per symbol)", () => {
+  const a = evaluateObservation(obs(), LIVE), b = evaluateObservation(obs({ symbol: "GBP/USD", o: 1.3, h: 1.3009, l: 1.2993, c: 1.3002 }), LIVE);
+  assertThrows(() => planWrites([a, b], new Map(), "scanner_live"), Error, "one symbol per call");
+  assertEquals(planWrites([b], new Map(), "scanner_live").inserts.length, 1);
 });
