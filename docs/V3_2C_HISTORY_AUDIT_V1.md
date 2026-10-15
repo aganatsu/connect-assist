@@ -35,7 +35,7 @@ not read. Scripts and outputs live outside the repo in `~/strategy-v2/v32c-integ
 
 - About 1,880 bars per pair fall outside FX hours (provider weekend hours); the frozen aggregation drops them.
 - EUR/USD 5m in the unseen-2024 set has corrupt bars from 2024-07-16 to 2025-03-28 (open / close outside high–low). In-range corruption cannot be detected.
-- The 2025 set carries float32 price artefacts (e.g. `0.82209003`). The canonical store rounds them to the pair's price grid (5 dp; 3 dp for JPY), symmetric in sign.
+- The 2025 set carries float32 price artefacts (e.g. `0.82209003`). The canonical store rounds all six pairs to 5 decimal places, symmetric in sign (decision D29, 2026-10-15; the provider quotes JPY pairs to 5 decimals too).
 
 ## 3. Epoch (D19)
 

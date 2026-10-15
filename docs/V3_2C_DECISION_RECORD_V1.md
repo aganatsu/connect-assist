@@ -69,3 +69,43 @@
 - The current in-memory candle cache is **isolate-local and short-lived** (90 s intraday TTL).
 - Day / swing may require intervals that the scalper profile does not already fetch.
 - **This must be measured during shadow, before Baseline B activation.** It does not block PR0 / PR1 and is not addressed in PR0.
+
+## Addendum — 2026-10-15 (PR2 decisions; approver: repository owner)
+
+- **D9 (amended)**
+  - **New rule:** the canonical 1H bar is the **first valid observation made at least 15 minutes after that bar's close**.
+    - Before +15 minutes, an observation may be logged but cannot become canonical.
+    - At or after +15 minutes, the first valid observation wins permanently.
+    - Later differing observations are revision telemetry only and never rewrite canonical history.
+  - **Why it changed:**
+    - first observations differed from settled values on 7.8–12.3% of measured bars, by up to 7.2 pips;
+    - first observations ≥ 15 minutes after close matched the settled / research values on 100% of the measured sample;
+    - V3.2c is path-dependent, so freezing preliminary candles creates structural drift.
+  - **Caveat:** +15 minutes is the canonical settlement delay selected from that evidence. It is **not** a provider guarantee and remains telemetry-monitored.
+- **D29 — canonical price grid**
+  - **Rule:** all six FX pairs are rounded to **5 decimal places** before canonical storage.
+  - **Rationale:**
+    - the provider quotes all six pairs, JPY included, to 5 decimals;
+    - 3-decimal JPY rounding would change the majority of JPY historical bars and the validated USD/JPY V3.2c structure;
+    - 5 dp preserves JPY research parity;
+    - 5 dp removes 2025 float32 storage artefacts (0.82586002 → 0.82586). Float32 noise is not preserved merely to reproduce accidental exact-price ties.
+  - **Recorded effects:**
+    - USD/JPY and CHF/JPY retain research-equivalent V3.2c structure under 5 dp;
+    - NZD/CAD and NZD/CHF may show small historical structural differences, because their float32 artefacts are intentionally normalized out;
+    - **this is an accepted canonical-data cleanup, not a strategy-rule change.**
+- **D30 — canonical history source (Q2)**
+  - **Source:** 2025-04-16 21:00Z → 2026-10-09 21:00Z comes from the approved local research history (dataset sha256 verified, 5-dp rounding, provenance `research_import`, dry run before write).
+  - **Guard:** any source row at or after 2026-10-09 21:00Z refuses the dataset.
+  - **Overlap:** overlapping `smc_scan_bars` observations are comparison / revision telemetry only and never overwrite imported bars.
+  - **After the boundary:** canonical bars come from settled live scanner observations.
+  - **Reserved window:** 2026-10-12 → 10-23 stays untouched until the V2.1.1 OOS run completes.
+- **D31 — scanner writer (Q3)**
+  - **Placement:** the canonical-bar writer lives in bot-scanner, reusing the 1H candles it already fetched (zero additional TwelveData calls).
+  - **Default:** OFF.
+  - **Isolation:**
+    - logically isolated from every trading decision;
+    - persistence is a bounded, awaited, best-effort operation (no unawaited fire-and-forget promise);
+    - failures are logged as telemetry and can neither fail the scan nor alter a decision;
+    - rows are batched;
+    - scanner decision-equivalence OFF vs ON is test-proven.
+  - **Timing:** the writer stays OFF until the V2.1.1 reserved OOS run is complete.
