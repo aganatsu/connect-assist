@@ -68,7 +68,11 @@ Deno.serve(async (req) => {
       const ok = checkTransition(mode, to, unlock);
       if (!ok.ok) return respond({ error: ok.reason, mode }, 409);
       const at = new Date(now).toISOString();
-      const { error: e1 } = await db.from("structure_mode").upsert({ user_id: userId, bot_id: BOT_ID, mode: to, set_at: at }, { onConflict: "user_id,bot_id" });
+      // Update in place when the row exists, insert otherwise. Not an upsert: ON CONFLICT DO UPDATE would also rewrite user_id /
+      // bot_id, and the migration grants the service role UPDATE on (mode, set_at) only — the key columns stay immutable.
+      const { error: e1 } = row
+        ? await db.from("structure_mode").update({ mode: to, set_at: at }).eq("user_id", userId).eq("bot_id", BOT_ID)
+        : await db.from("structure_mode").insert({ user_id: userId, bot_id: BOT_ID, mode: to, set_at: at });
       if (e1) throw new Error(e1.message);
       const { error: e2 } = await db.from("structure_mode_log").insert({ user_id: userId, bot_id: BOT_ID, from_mode: mode, to_mode: to, note: typeof body.note === "string" ? body.note.slice(0, 500) : null });
       if (e2) throw new Error(e2.message);
