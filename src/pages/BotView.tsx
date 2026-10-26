@@ -40,6 +40,8 @@ import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel, fmtBarTime } from "@/components/ZoneStoryPanel";
+import { V3StoryPanel } from "@/components/V3StoryPanel";
+import { V3ShadowOrders } from "@/components/V3ShadowOrders";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -849,6 +851,7 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="pending-orders" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <PendingOrdersPanel />
+                <V3ShadowOrders />
               </TabsContent>
               <TabsContent value="game-plan" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <GamePlanPanel />
@@ -1830,6 +1833,7 @@ function ScanSignalDetail({ signal: d, minZoneScore = 4 }: { signal: any; minZon
         <div className="px-1 pb-2 space-y-1.5">
           {/* Zone Story — consolidated impulse + unified zone narrative */}
           <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
+          <V3StoryPanel symbol={d.pair} />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -2022,6 +2026,7 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
 
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
       <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
+      <V3StoryPanel symbol={d.pair} />
       {/* V2 structural order blocks — SHADOW MODE, numbers only */}
       {Array.isArray(d.structuralOrderBlocksV2) && d.structuralOrderBlocksV2.length > 0 && (
         // <details> rather than component state: this panel re-renders on every
