@@ -102,3 +102,17 @@ Deno.test("switch + shadow: the owner reads only their own rows; nothing for ano
   await assertRejects(() => db.query(`select * from public.structure_mode`), Error, "permission denied");
   await db.exec(`reset role;`);
 });
+
+Deno.test("switch row as the service role: update (mode, set_at) and insert work; an upsert that rewrites the key columns is refused", async () => {
+  // Reproduces the 2026-10-26 production error ("permission denied for table structure_mode") the structure-mode function hit
+  // with supabase-js upsert(): PostgREST's ON CONFLICT DO UPDATE sets every payload column, including user_id / bot_id.
+  const db = await freshDb();
+  await db.exec(`set role service_role;`);
+  await db.query(`insert into public.structure_mode (user_id, bot_id, mode, set_at) values ($1, 'smc', 'OFF', now())`, [U1]);
+  await db.query(`update public.structure_mode set mode = 'SHADOW', set_at = now() where user_id = $1 and bot_id = 'smc'`, [U1]);
+  assertEquals((await db.query(`select mode from public.structure_mode where user_id = $1`, [U1])).rows, [{ mode: "SHADOW" }]);
+  await assertRejects(() => db.query(`insert into public.structure_mode (user_id, bot_id, mode, set_at) values ($1, 'smc', 'OFF', now())
+    on conflict (user_id, bot_id) do update set user_id = excluded.user_id, bot_id = excluded.bot_id, mode = excluded.mode, set_at = excluded.set_at`, [U1]), Error, "permission denied");
+  await db.query(`insert into public.structure_mode_log (user_id, bot_id, from_mode, to_mode) values ($1, 'smc', 'OFF', 'SHADOW')`, [U1]);
+  await db.exec(`reset role;`);
+});

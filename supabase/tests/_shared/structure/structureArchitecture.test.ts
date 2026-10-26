@@ -71,3 +71,9 @@ Deno.test("Impulse-on-V3 shadow code never touches a trading table and never wri
     assertEquals(cfgWrites.length, 0, `${f.replace(FN, "")} writes bot_configs`);
   }
 });
+
+Deno.test("structure-mode saves the switch with update-or-insert, never an upsert (the service role may update mode / set_at only)", () => {
+  const src = Deno.readTextFileSync(`${FN}structure-mode/index.ts`);
+  assert(!/from\("structure_mode"\)\s*\.upsert\(/.test(src), "an upsert rewrites user_id / bot_id and is refused by the column grant");
+  assert(src.includes(`db.from("structure_mode").update({ mode: to, set_at: at })`));
+});
