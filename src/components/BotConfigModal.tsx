@@ -15,6 +15,7 @@ import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarCha
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
+import { StructureEngineSection } from "@/components/StructureEngineSection";
 
 // Index of every searchable setting in the modal — used by the search bar to filter
 // tabs and to highlight matching fields. Keep keywords broad so users can find
@@ -827,6 +828,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                 {effectiveActiveTab === "strategy" && (
                   <div className="space-y-5">
                     <SectionHeader title="Strategy Settings" description="Configure how the bot identifies trade setups" />
+                    <StructureEngineSection />
                     <FieldGroup label="Auto Scan Interval" description="How often the bot scans for new setups. Manual scans always run on demand regardless of this setting.">
                       <div className="flex items-center gap-4">
                         <select

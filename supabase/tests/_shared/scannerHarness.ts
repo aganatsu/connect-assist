@@ -58,6 +58,7 @@ class FakeQuery {
   private selectOpts: any = null;
   private orderBy: { col: string; asc: boolean }[] = [];
   private limitN: number | null = null;
+  private offsetN = 0;
   private mode: "many" | "single" | "maybe" = "many";
 
   constructor(private db: FakeDb, private table: string) {}
@@ -97,7 +98,7 @@ class FakeQuery {
   contains(c: string, v: unknown) { return this.add(`${c}=cs.${JSON.stringify(v)}`, () => true); }
   order(col: string, o?: { ascending?: boolean }) { this.orderBy.push({ col, asc: o?.ascending !== false }); return this; }
   limit(n: number) { this.limitN = n; return this; }
-  range(a: number, b: number) { this.limitN = b - a + 1; return this; }
+  range(a: number, b: number) { this.offsetN = a; this.limitN = b - a + 1; return this; } // PostgREST: rows a..b inclusive
   single() { this.mode = "single"; return this; }
   maybeSingle() { this.mode = "maybe"; return this; }
   abortSignal() { return this; }
@@ -112,7 +113,7 @@ class FakeQuery {
     for (const o of [...this.orderBy].reverse()) {
       out.sort((a, b) => (a[o.col] === b[o.col] ? 0 : (a[o.col] > b[o.col] ? 1 : -1) * (o.asc ? 1 : -1)));
     }
-    if (this.limitN != null) out = out.slice(0, this.limitN);
+    if (this.limitN != null) out = out.slice(this.offsetN, this.offsetN + this.limitN);
     out = out.map((r) => structuredClone(r));
     if (this.mode === "single") {
       return out.length === 1 ? { data: out[0], error: null } : { data: null, error: { code: "PGRST116", message: `${out.length} rows` } };

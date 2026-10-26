@@ -1,9 +1,10 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 /**
- * Architecture guarantees after PR2 / PR3:
- *   1. The ONLY production entrypoint (supabase/functions/<fn>/index.ts) that reaches the vendored V3.2c module, even transitively,
- *      is the PR3 state service `v32c-state`. In particular bot-scanner does not.
+ * Architecture guarantees after PR2 / PR3 / Impulse-on-V3 step 3:
+ *   1. The ONLY production entrypoints (supabase/functions/<fn>/index.ts) that reach the vendored V3.2c module, even transitively,
+ *      are the PR3 state service `v32c-state` and the Impulse-on-V3 shadow `iov3-shadow` (it reads the engine version label through
+ *      v32cState.ts). bot-scanner reaches neither V3.2c nor the shadow modules (_shared/iov3).
  *   2. The bot-scanner call site of the canonical-bar writer is exactly the default-off, observational block: its
  *      result is only logged and feeds no decision. Changing that wiring must update this test deliberately.
  */
@@ -12,7 +13,7 @@ const importsOf = (file: string): string[] =>
   [...Deno.readTextFileSync(file).matchAll(/(?:^|\n)\s*(?:import|export)\s[^;]*?from\s+["'](\.{1,2}\/[^"']+)["']/g)].map((m) => m[1]);
 const resolve = (from: string, spec: string) => new URL(spec, `file://${from}`).pathname;
 
-Deno.test("only v32c-state reaches _shared/structure/v32c (transitive import graph); bot-scanner does not", () => {
+Deno.test("only v32c-state and iov3-shadow reach _shared/structure/v32c; bot-scanner reaches neither it nor _shared/iov3", () => {
   const reachers = new Set<string>();
   let scannerReachesWriter = false;
   for (const e of Deno.readDirSync(FN)) {
@@ -25,12 +26,13 @@ Deno.test("only v32c-state reaches _shared/structure/v32c (transitive import gra
       if (seen.has(f)) continue;
       seen.add(f);
       if (f.includes("/_shared/structure/v32c/")) { reachers.add(e.name); continue; }
+      if (e.name === "bot-scanner" && f.includes("/_shared/iov3/")) reachers.add("bot-scanner→iov3");
       if (e.name === "bot-scanner" && f.endsWith("/_shared/structure/canonicalBars.ts")) scannerReachesWriter = true;
       if (!f.endsWith(".ts")) continue;
       for (const s of importsOf(f)) stack.push(resolve(f, s));
     }
   }
-  assertEquals([...reachers], ["v32c-state"]);
+  assertEquals([...reachers].sort(), ["iov3-shadow", "v32c-state"]);
   assert(scannerReachesWriter, "the traversal really follows bot-scanner → structureBarsWriter → canonicalBars");
 });
 
@@ -44,4 +46,28 @@ Deno.test("bot-scanner wiring: default-off guard, awaited bounded call, result o
       console.log(\`[structure-bars] \${pair} \${JSON.stringify(sb)}\`);
     }`), "the call site block is exactly the observational one");
   assertEquals(src.match(/\bsb\b/g)?.length, 2, "the writer result is used only by the log line");
+});
+
+Deno.test("bot-scanner wiring (5m writer, Impulse-on-V3 option A): default-off guard, scalper 5m only, result only logged", () => {
+  const src = Deno.readTextFileSync(`${FN}bot-scanner/index.ts`);
+  assertEquals(src.match(/writeLiveStructureBars5m\(/g)?.length, 1, "exactly one call site");
+  assert(src.includes("const structureBars5mCfg = liveWriter5mConfig();"));
+  assert(src.includes("const structureBars5mFetchStartedAt = structureBars5mCfg.enabled ? Date.now() : 0;"));
+  assert(src.includes(`    if (structureBars5mCfg.enabled && entryInterval === "5m") {
+      const sb5 = await writeLiveStructureBars5m(supabase, pair, candles, { cfg: structureBars5mCfg, fetchStartedAtMs: structureBars5mFetchStartedAt });
+      console.log(\`[structure-bars-5m] \${pair} \${JSON.stringify(sb5)}\`);
+    }`), "the call site block is exactly the observational one");
+  assertEquals(src.match(/\bsb5\b/g)?.length, 2, "the writer result is used only by the log line");
+});
+
+Deno.test("Impulse-on-V3 shadow code never touches a trading table and never writes the bot config", () => {
+  const files = [...Deno.readDirSync(`${FN}_shared/iov3`)].map((e) => `${FN}_shared/iov3/${e.name}`)
+    .concat([`${FN}iov3-shadow/index.ts`, `${FN}structure-mode/index.ts`]);
+  const forbidden = ["pending_orders", "positions", "paper_accounts", "paper_trades", "trade_history", "broker_connections", "signals"];
+  for (const f of files) {
+    const src = Deno.readTextFileSync(f);
+    for (const t of forbidden) assert(!src.includes(`from("${t}")`), `${f.replace(FN, "")} touches ${t}`);
+    const cfgWrites = [...src.matchAll(/from\("bot_configs"\)[^;]*?\.(insert|update|upsert|delete)\(/g)];
+    assertEquals(cfgWrites.length, 0, `${f.replace(FN, "")} writes bot_configs`);
+  }
 });

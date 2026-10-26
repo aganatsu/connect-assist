@@ -151,6 +151,7 @@ import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } fro
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import { liveWriterConfig, writeLiveStructureBars } from "../_shared/structure/structureBarsWriter.ts";
+import { liveWriter5mConfig, writeLiveStructureBars5m } from "../_shared/structure/structureBarsWriter5m.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -5340,6 +5341,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   // Observational only: it reuses the 1H candles this loop already fetched (zero provider calls), is awaited with a
   // bounded timeout, never throws, and its result reaches no gate, score, entry or decision (console telemetry only).
   const structureBarsCfg = liveWriterConfig();
+  // Impulse-on-V3 shadow (owner decision 2026-10-26, option A): canonical 5m bars from the 5m entry candles this loop already
+  // fetches, DEFAULT OFF (STRUCTURE_BARS_5M_LIVE_WRITE). Observational exactly like the 1H writer above: zero provider calls,
+  // awaited with a bounded timeout, never throws, and its result reaches no gate, score, entry or decision (console only).
+  const structureBars5mCfg = liveWriter5mConfig();
 
   for (const pair of scanOrder) {
     const cap = newCapture(scanCycleId, userId, BOT_ID, pair, null);
@@ -5405,6 +5410,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     const needsM15 = resolvedStyle === "scalper" && entryInterval !== "15m";
     const needsWeekly = resolvedStyle === "swing_trader" || pairConfig.ictHTFEnabled !== false;
     const structureBarsFetchStartedAt = structureBarsCfg.enabled ? Date.now() : 0;
+    const structureBars5mFetchStartedAt = structureBars5mCfg.enabled ? Date.now() : 0;
     const fetchPromises: Promise<Candle[]>[] = [
       cachedFetch(pair, entryInterval, entryRange),
       cachedFetch(pair, "1d", "1y"),
@@ -5433,6 +5439,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     if (structureBarsCfg.enabled) {
       const sb = await writeLiveStructureBars(supabase, pair, hourlyCandles, { cfg: structureBarsCfg, fetchStartedAtMs: structureBarsFetchStartedAt });
       console.log(`[structure-bars] ${pair} ${JSON.stringify(sb)}`);
+    }
+    if (structureBars5mCfg.enabled && entryInterval === "5m") {
+      const sb5 = await writeLiveStructureBars5m(supabase, pair, candles, { cfg: structureBars5mCfg, fetchStartedAtMs: structureBars5mFetchStartedAt });
+      console.log(`[structure-bars-5m] ${pair} ${JSON.stringify(sb5)}`);
     }
     // 15m candles for scalper structure TF (only fetched when needsM15)
     const m15Offset = needsM15 ? 1 : 0;
