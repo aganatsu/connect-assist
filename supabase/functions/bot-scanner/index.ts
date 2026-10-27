@@ -152,6 +152,7 @@ import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import { liveWriterConfig, writeLiveStructureBars } from "../_shared/structure/structureBarsWriter.ts";
 import { liveWriter5mConfig, writeLiveStructureBars5m } from "../_shared/structure/structureBarsWriter5m.ts";
+import { recordStructureBarsWhileFull } from "../_shared/structure/recordWhileFull.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -5061,6 +5062,11 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       scan_details: [],
     };
     await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
+    // Structure-bar recorders keep running while full (owner approval 2026-10-26): the per-pair loop that normally feeds them is
+    // skipped here. Observational only — default-off writers, telemetry logged, never thrown, reaches no decision.
+    const fullRec = await recordStructureBarsWhileFull(supabase, config.instruments, (s, i, r) => cachedFetch(s, i, r, "structure_record"),
+      { entryInterval: getEntryInterval(config.entryTimeframe), nowMs: Date.now() });
+    if (Object.keys(fullRec).length) console.log(`[structure-bars-while-full] ${JSON.stringify(fullRec)}`);
     return new Response(JSON.stringify({ ok: true, mode: "management_only", reason: summaryPayload.reason, management_actions: summaryPayload.management_actions }), { headers: { "Content-Type": "application/json" } });
   }
   console.log(`[scan ${scanCycleId}] Positions: ${currentOpenCount}/${maxOpen} — room for ${maxOpen - currentOpenCount} new entries, proceeding with full scan`);

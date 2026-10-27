@@ -44,6 +44,7 @@ export type FetchReason =
   | "pending_thesis_m15"
   | "pending_thesis_weekly"
   | "pending_confirmation"
+  | "structure_record"   // canonical 1H / 5m structure-bar recorders while the scanner is at its position cap
   | "untagged";
 
 export interface FetchRecord {

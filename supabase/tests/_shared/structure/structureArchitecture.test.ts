@@ -77,3 +77,13 @@ Deno.test("structure-mode saves the switch with update-or-insert, never an upser
   assert(!/from\("structure_mode"\)\s*\.upsert\(/.test(src), "an upsert rewrites user_id / bot_id and is refused by the column grant");
   assert(src.includes(`db.from("structure_mode").update({ mode: to, set_at: at })`));
 });
+
+Deno.test("bot-scanner wiring (recorders while full): only in the max-positions branch, result only logged", () => {
+  const src = Deno.readTextFileSync(`${FN}bot-scanner/index.ts`);
+  assertEquals(src.match(/recordStructureBarsWhileFull\(/g)?.length, 1, "exactly one call site");
+  assert(src.includes(`    const fullRec = await recordStructureBarsWhileFull(supabase, config.instruments, (s, i, r) => cachedFetch(s, i, r, "structure_record"),
+      { entryInterval: getEntryInterval(config.entryTimeframe), nowMs: Date.now() });
+    if (Object.keys(fullRec).length) console.log(\`[structure-bars-while-full] \${JSON.stringify(fullRec)}\`);
+    return new Response(JSON.stringify({ ok: true, mode: "management_only"`), "inside the max-positions early return, right before it");
+  assertEquals(src.match(/\bfullRec\b/g)?.length, 3, "the result is used only by the log line");
+});
