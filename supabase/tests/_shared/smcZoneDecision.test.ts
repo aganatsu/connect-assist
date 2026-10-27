@@ -164,3 +164,17 @@ Deno.test("absent direction yields a null bundle, not an empty one", () => {
 Deno.test("the contract label is declared once and matches the snapshot's", () => {
   assertEquals(ZONE_DECISION_CONTRACT, "smc-zone-impulse-control-v1");
 });
+
+Deno.test("scalper is 1H-only: no 15m / 5m fallback; lowerTfFallback restores it for replays; other styles unchanged", () => {
+  // owner decision 2026-10-27. Flat bars: no zone anywhere, so the reason text shows which selection rule ran.
+  const run = (style: "scalper" | "day_trader", lowerTfFallback?: boolean) => decideZone({
+    symbol: "EUR/USD", style, series: series(), direction: "long", lastPrice: 1.0005, htfConfluence: null, liquidityPools: [],
+    minSlPips: 10, maxSlPips: 80, tpRatio: 1.5, entryDepth: 1, pipSize: 0.0001, strictATRMult: undefined, fibMaxRetracement: undefined,
+    originOBRetest: undefined, impulseZoneEnabled: true, lowerTfFallback,
+  });
+  const reason = (r: ReturnType<typeof run>) => String(r.impulseZone?.reason ?? "");
+  assert(reason(run("scalper")).includes("No 1H zone (15m / 5m fallback off)"), reason(run("scalper")));
+  assert(!reason(run("scalper", true)).includes("fallback off"), "replays of pre-10-27 decisions keep the old waterfall");
+  assert(!reason(run("day_trader")).includes("fallback off"), "day trader keeps its D → 4H → 1H waterfall");
+  assertEquals(run("scalper").impulseZone?.selectedTF, null);
+});

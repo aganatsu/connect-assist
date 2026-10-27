@@ -1448,6 +1448,12 @@ export interface ZoneEngineOptions {
    * zones at fib 1.0 (re-tests of the block that caused the impulse). Default false.
    */
   originOBRetest?: boolean;
+  /**
+   * Multi-TF only: the TOP slot alone may supply the zone — no fallback to the mid / low slots when it has none. The mid / low
+   * results are still computed and returned (the Zone Story shows what they saw) but never become the pick. Default false.
+   * Scalper sets it (owner decision 2026-10-27: 1H only, no 15m / 5m fallback).
+   */
+  topTfOnly?: boolean;
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────
@@ -1534,6 +1540,21 @@ export function findBestEntryZoneMultiTF(
   // ── FALLBACK: Run 1H and 4H (existing logic) ──
   // Always run 1H
   const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options);
+
+  // Top slot only: no fallback (the lower slots are reported, never picked)
+  if (options?.topTfOnly) {
+    return {
+      bestZone: null,
+      selectedTF: null,
+      reason: dailyResult
+        ? `No ${labels.top} zone (${labels.mid} / ${labels.low} fallback off): ${dailyResult.reason}`
+        : `${labels.top} not available (insufficient candles); ${labels.mid} / ${labels.low} fallback off`,
+      h1Result,
+      h4Result: h4Candles.length >= 20 ? findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options) : null,
+      dailyResult,
+      allZones: dailyResult ? [...dailyResult.allZones] : [],
+    };
+  }
 
   // Run 4H only if sufficient candles
   let h4Result: ZoneEngineResult | null = null;

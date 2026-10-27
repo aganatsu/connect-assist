@@ -1248,3 +1248,30 @@ Deno.test("findBestEntryZone — pipSize option correctly scales distancePips fo
     assert(resultGold.bestZone.distancePips < 50000, `Gold distancePips should be < 50000, got ${resultGold.bestZone.distancePips}`);
   }
 });
+
+Deno.test("findBestEntryZoneMultiTF — topTfOnly: a lower-slot zone is reported but never picked when the top slot has none", () => {
+  // Scalper 1H-only (owner decision 2026-10-27): flat top slot (no impulse), a valid impulse in the low slot
+  const flatTop: Candle[] = [];
+  for (let i = 0; i < 30; i++) flatTop.push(makeCandle(1.0, 1.001, 0.999, 1.0, i));
+  const low = generateBullishImpulseCandles(50);
+  const labels = { top: "1H", mid: "15m", low: "5m" };
+  const waterfall = findBestEntryZoneMultiTF(low, [], low, "bullish", 1.03, undefined, undefined, flatTop, labels);
+  assert(waterfall.bestZone, `fixture: the old waterfall falls back to the low slot (${waterfall.reason})`);
+  assertEquals(waterfall.selectedTF, "5m");
+  const topOnly = findBestEntryZoneMultiTF(low, [], low, "bullish", 1.03, undefined, { topTfOnly: true }, flatTop, labels);
+  assertEquals(topOnly.bestZone, null);
+  assertEquals(topOnly.selectedTF, null);
+  assert(topOnly.reason.includes("No 1H zone (15m / 5m fallback off)"), topOnly.reason);
+  assert(topOnly.h1Result.bestZone, "the low slot's own result is still reported (Zone Story)");
+  assertEquals(topOnly.allZones.length, topOnly.dailyResult!.allZones.length, "no lower-slot zones in the combined list");
+});
+
+Deno.test("findBestEntryZoneMultiTF — topTfOnly: a top-slot zone is picked exactly as before", () => {
+  const top = generateBullishImpulseCandles(50);
+  const labels = { top: "1H", mid: "15m", low: "5m" };
+  const before = findBestEntryZoneMultiTF(top, top, top, "bullish", 1.03, undefined, undefined, top, labels);
+  const after = findBestEntryZoneMultiTF(top, top, top, "bullish", 1.03, undefined, { topTfOnly: true }, top, labels);
+  assert(before.bestZone, before.reason);
+  assertEquals(after.selectedTF, "1H");
+  assertEquals(after.bestZone, before.bestZone);
+});
