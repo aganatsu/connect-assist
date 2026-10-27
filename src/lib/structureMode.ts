@@ -10,6 +10,7 @@ export type ShadowArm = "A" | "B";
 export const ARM_LABEL: Record<ShadowArm, string> = { A: "Big leg (A)", B: "Scalp leg (B)" };
 export interface StructureStatus {
   mode: StructureMode; setAt: string; v3LatestClose: string | null;
+  arm?: ShadowArm | null; onSince?: string | null; killReason?: string | null; rightA?: number; rightB?: number;
   unlock: { met: boolean; onAvailable: boolean; daysInShadow: number; right: number; plumbingClean: boolean; reason: string };
   summary: ShadowSummary | null;   // Shadow A (V3 external leg)
   summaryB?: ShadowSummary | null; // Shadow B (V3 outer internal leg)
@@ -17,7 +18,7 @@ export interface StructureStatus {
 export interface ShadowSummary { placed: number; filled: number; wins: number; losses: number; open: number; voided: number; cancelled: number; netR: number }
 export const structureModeApi = {
   status: () => invokeFunction<StructureStatus>("structure-mode", { action: "status" }),
-  set: (mode: StructureMode) => invokeFunction<{ ok?: boolean; error?: string; mode: StructureMode }>("structure-mode", { action: "set", mode }),
+  set: (mode: StructureMode, arm?: ShadowArm) => invokeFunction<{ ok?: boolean; error?: string; mode: StructureMode; cancelledOrders?: number }>("structure-mode", { action: "set", mode, arm }),
   feedback: (cohortId: string, orderId: string, verdict: "right" | "wrong", note?: string) =>
     invokeFunction<{ ok?: boolean; error?: string }>("structure-mode", { action: "feedback", cohortId, orderId, verdict, note }),
 };

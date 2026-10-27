@@ -73,10 +73,11 @@ Deno.test("switch: OFF↔SHADOW always; ON only when available AND (≥ 7 days o
   assertEquals(checkTransition("SHADOW", "SHADOW", ok).ok, false);
 });
 
-Deno.test("switch: in step 3 ON is unavailable whatever the evidence (step 4 builds it)", () => {
-  const u = evaluateUnlock({ ...base, mode: "SHADOW", nowMs: 30 * 86_400_000, rightCount: 50 });
-  assertEquals(u.onAvailable, false);
-  assertEquals(checkTransition("SHADOW", "ON", u), { ok: false, reason: "ON is being built (step 4)" });
+Deno.test("switch: step 4b makes ON available — yet it still unlocks only by the rule (default evidence: none)", () => {
+  const u = evaluateUnlock({ ...base, mode: "SHADOW", nowMs: 86_400_000, rightCount: 0 });
+  assertEquals(u.onAvailable, true);
+  assertEquals(checkTransition("SHADOW", "ON", u).ok, false);
+  assertEquals(checkTransition("SHADOW", "ON", evaluateUnlock({ ...base, mode: "SHADOW", nowMs: 86_400_000, rightCount: UNLOCK_RIGHT })), { ok: true });
 });
 
 Deno.test("summary: counts placed / filled / wins / losses / open / voided and sums net R", () => {

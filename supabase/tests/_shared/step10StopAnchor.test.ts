@@ -81,7 +81,7 @@ Deno.test("dry-run orders record both stop geometries, floor, cap, distances and
   for (const f of ["limitEntry: limitEntry.price", "targetPips:", "belowFloor:", "floorPips: effectiveMinSlPips", "capPips: impulseStopCandidate?.capPips ?? null"]) {
     assert(rec.includes(f), `route2Stop records ${f}`);
   }
-  const d = scanner.indexOf("dry_run_context: dryRunActive ? {");
+  const d = scanner.indexOf("dry_run_context: dryRunActive ? {", i); // the legacy Route 2 row (V3 ON's row comes earlier and records its own)
   const ctx = scanner.slice(d, d + 1800);
   assert(/route2Stop: \(detail as any\)\.route2Stop \?\? null,/.test(ctx));
   assert(/plannedSizing: \(detail as any\)\.plannedSizing \?\? null,/.test(ctx));
