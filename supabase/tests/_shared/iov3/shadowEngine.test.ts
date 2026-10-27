@@ -112,3 +112,10 @@ Deno.test("gates: day and session filters (owner decision D2) are applied at the
   const all = run(initShadowState(START), START + 5 * H, { enabledSessions: ["asian", "london", "newyork", "offhours"], enabledDays: [1, 2, 3, 4, 5] });
   assert(all.decisions.every((d) => !d.reason.startsWith("session_not_enabled") && d.reason !== "day_not_enabled"));
 });
+
+Deno.test("engine: arm B order ids carry |B| (arm A ids unchanged, so stored A rows and research parity are untouched)", () => {
+  const a = run(initShadowState(START), END), b = run(initShadowState(START), END, { arm: "B" });
+  const ids = (r: typeof a) => r.events.filter((e) => e.type === "placed").map((e) => (e as { order: { id: string } }).order.id);
+  assert(ids(a).length > 0 && ids(a).every((id) => !id.includes("|B|")));
+  assertEquals(ids(b), ids(a).map((id) => id.replace("|", "|B|")), "same market + same leg feed → same orders, only the id differs");
+});

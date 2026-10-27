@@ -2,7 +2,7 @@
  * structure-mode — the OFF / SHADOW / ON switch shown in Bot Config → Strategy (Impulse-on-V3 step 3, owner decisions 2026-10-26).
  *
  * Signed-in owner only (their JWT; the row is keyed by their user id).
- *   {action: "status"}                         → mode, unlock state, V3 freshness, shadow summary for the current SHADOW period
+ *   {action: "status"}                         → mode, unlock state, V3 freshness, shadow summaries (A = external leg, B = internal leg)
  *   {action: "set", mode: "OFF"|"SHADOW"|"ON"}  → validated switch (ON only when unlocked and available), logged
  *   {action: "feedback", cohortId, orderId, verdict: "right"|"wrong", note?} → the owner's chart check of one shadow order
  * The value is stored in structure_mode, NOT in bot_configs.config_json, so SHADOW does not change config_version (cohort).
@@ -54,10 +54,13 @@ Deno.serve(async (req) => {
       if (ids.length) {
         const { count } = await db.from("iov3_shadow_audit").select("*", { count: "exact", head: true }).in("cohort_id", ids).in("kind", ["mismatch", "error"]);
         shadowAudit = count ?? 0;
-        const { data: fb } = await db.from("iov3_shadow_feedback").select("order_id,verdict,at").eq("user_id", userId).in("cohort_id", ids).order("at");
-        const latest = new Map<string, string>();
-        for (const f of fb ?? []) latest.set(f.order_id, f.verdict);
-        right = [...latest.values()].filter((v) => v === "right").length;
+        const { data: fb } = await db.from("iov3_shadow_feedback").select("order_id,arm,verdict,at").eq("user_id", userId).in("cohort_id", ids).order("at");
+        const latest = new Map<string, { arm: string; verdict: string }>();
+        for (const f of fb ?? []) latest.set(f.order_id, { arm: f.arm, verdict: f.verdict });
+        // step 4 chooses the arm ON trades; until then ON unlocks on the better-checked arm
+        const perArm = { A: 0, B: 0 } as Record<string, number>;
+        for (const v of latest.values()) if (v.verdict === "right") perArm[v.arm] = (perArm[v.arm] ?? 0) + 1;
+        right = Math.max(perArm.A, perArm.B);
       }
       return { unlock: evaluateUnlock({ mode, setAtMs: Date.parse(setAt), nowMs: now, rightCount: right, v3AuditSince: v3Audit, shadowAuditSince: shadowAudit }), cohortIds: ids };
     };
@@ -65,12 +68,13 @@ Deno.serve(async (req) => {
     if (body.action === "status" || !body.action) {
       const { unlock, cohortIds } = await unlockNow();
       const { data: fresh } = await db.from("structure_v3_snapshots").select("symbol,known_at").eq("tf", "1H").order("known_at", { ascending: false }).limit(1);
-      let summary = null;
+      let summary = null, summaryB = null;
       if (cohortIds.length) {
-        const { data: ev } = await db.from("iov3_shadow_events").select("order_id,type,payload").in("cohort_id", cohortIds).limit(5000);
-        summary = summarize(ev ?? []);
+        const { data: ev } = await db.from("iov3_shadow_events").select("order_id,arm,type,payload").in("cohort_id", cohortIds).limit(10000);
+        summary = summarize((ev ?? []).filter((e: { arm: string }) => e.arm === "A"));
+        summaryB = summarize((ev ?? []).filter((e: { arm: string }) => e.arm === "B"));
       }
-      return respond({ mode, setAt, unlock, v3LatestClose: fresh?.[0]?.known_at ?? null, summary });
+      return respond({ mode, setAt, unlock, v3LatestClose: fresh?.[0]?.known_at ?? null, summary, summaryB });
     }
 
     if (body.action === "set") {
@@ -97,7 +101,8 @@ Deno.serve(async (req) => {
       if (!verdict || typeof body.orderId !== "string" || typeof body.cohortId !== "string") return respond({ error: "feedback needs cohortId, orderId and verdict right|wrong" }, 400);
       const { count } = await db.from("iov3_shadow_events").select("*", { count: "exact", head: true }).eq("cohort_id", body.cohortId).eq("order_id", body.orderId).eq("user_id", userId).eq("type", "placed");
       if (!count) return respond({ error: "no such shadow order for this account" }, 404);
-      const { error } = await db.from("iov3_shadow_feedback").insert({ cohort_id: body.cohortId, order_id: body.orderId, user_id: userId, verdict, note: typeof body.note === "string" ? body.note.slice(0, 1000) : null });
+      const arm = body.orderId.includes("|B|") ? "B" : "A";          // Shadow B order ids carry "|B|" (shadowEngine)
+      const { error } = await db.from("iov3_shadow_feedback").insert({ cohort_id: body.cohortId, order_id: body.orderId, arm, user_id: userId, verdict, note: typeof body.note === "string" ? body.note.slice(0, 1000) : null });
       if (error) throw new Error(error.message);
       return respond({ ok: true });
     }

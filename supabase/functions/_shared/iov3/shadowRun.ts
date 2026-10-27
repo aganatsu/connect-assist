@@ -76,7 +76,10 @@ export function canonical5m(rows: { bar_time: string; open: number; high: number
   return { bars, processUntil };
 }
 
-export interface PairData { h1: Bar[]; m5: Bar[]; m5ProcessUntil: number; v3: Map<number, V3Leg>; ctx4h: { t: number; trend: string | null }[] }
+export type Arm = "A" | "B";
+export const ARMS: readonly Arm[] = ["A", "B"];
+/** v3 = the external leg (Shadow A); v3b = the outer internal leg (Shadow B). */
+export interface PairData { h1: Bar[]; m5: Bar[]; m5ProcessUntil: number; v3: Map<number, V3Leg>; v3b: Map<number, V3Leg>; ctx4h: { t: number; trend: string | null }[] }
 /** Everything one pair needs from `fromMs` (state horizon) to `untilMs`: all canonical 1H bars, 5m from 2 days before. */
 export async function loadPairData(db: Client, pair: string, fromMs: number, untilMs: number, nowMs = untilMs + M5_MISSING_AFTER_MS + M5_WRITE_GRACE_MS + M5): Promise<PairData> {
   type B1 = { bar_time: string; open: number; high: number; low: number; close: number };
@@ -86,35 +89,41 @@ export async function loadPairData(db: Client, pair: string, fromMs: number, unt
   const m5From = iso(fromMs - 3 * 86_400_000); // ≥ 300 FX-open 5m bars back from the first decision / confirmation window, across a weekend
   const m5s = canonical5m(await pages<B5>((f) => db.from("structure_bars_5m").select("bar_time,open,high,low,close,observed_at").eq("symbol", pair)
     .gte("bar_time", m5From).lte("bar_time", iso(untilMs)).order("bar_time").range(f, f + 999), `5m ${pair}`), nowMs, fromMs);
-  type S = { tf: string; known_at: string; trend: string | null; p_time: string | null; p_price: number | null; x_time: string | null; x_price: number | null };
-  const snaps = await pages<S>((f) => db.from("structure_v3_snapshots").select("tf,known_at,trend,p_time,p_price,x_time,x_price").eq("symbol", pair).eq("engine_version", V32C_ENGINE_VERSION)
+  type S = { tf: string; known_at: string; trend: string | null; p_time: string | null; p_price: number | null; x_time: string | null; x_price: number | null;
+    il_time: string | null; il_price: number | null; il_x_time: string | null; il_x_price: number | null };
+  const snaps = await pages<S>((f) => db.from("structure_v3_snapshots").select("tf,known_at,trend,p_time,p_price,x_time,x_price,il_time,il_price,il_x_time,il_x_price").eq("symbol", pair).eq("engine_version", V32C_ENGINE_VERSION)
     .in("tf", ["1H", "4H"]).gte("known_at", iso(fromMs - 7 * 86_400_000)) /* ≥ 1 week: the 4H trend in force across a weekend / holiday */.lte("known_at", iso(untilMs)).order("tf").order("known_at").range(f, f + 999), `v3 ${pair}`);
-  const v3 = new Map<number, V3Leg>(), ctx4h: PairData["ctx4h"] = [];
+  const v3 = new Map<number, V3Leg>(), v3b = new Map<number, V3Leg>(), ctx4h: PairData["ctx4h"] = [];
+  const num = (v: number | null) => (v === null ? null : Number(v)), ms = (v: string | null) => (v ? Date.parse(v) : null);
   for (const s of snaps) {
-    if (s.tf === "1H") v3.set(Date.parse(s.known_at), { trend: (s.trend as V3Leg["trend"]) ?? null, pTime: s.p_time ? Date.parse(s.p_time) : null, pPrice: s.p_price === null ? null : Number(s.p_price), xTime: s.x_time ? Date.parse(s.x_time) : null, xPrice: s.x_price === null ? null : Number(s.x_price) });
-    else ctx4h.push({ t: Date.parse(s.known_at), trend: s.trend });
+    if (s.tf !== "1H") { ctx4h.push({ t: Date.parse(s.known_at), trend: s.trend }); continue; }
+    const trend = (s.trend as V3Leg["trend"]) ?? null, T = Date.parse(s.known_at);
+    v3.set(T, { trend, pTime: ms(s.p_time), pPrice: num(s.p_price), xTime: ms(s.x_time), xPrice: num(s.x_price) });
+    // rows written before Shadow B existed carry no internal leg: "no structure" for B at that hour (deterministic, never waits)
+    v3b.set(T, s.il_time ? { trend, pTime: ms(s.il_time), pPrice: num(s.il_price), xTime: ms(s.il_x_time), xPrice: num(s.il_x_price) } : { trend: null, pTime: null, pPrice: null, xTime: null, xPrice: null });
   }
   ctx4h.sort((a, b) => a.t - b.t);
-  return { h1, m5: m5s.bars, m5ProcessUntil: m5s.processUntil, v3, ctx4h };
+  return { h1, m5: m5s.bars, m5ProcessUntil: m5s.processUntil, v3, v3b, ctx4h };
 }
 
 /** Pure: advance one (cohort, pair) from `state` to `untilMs` on loaded data. Shared by the cron run and the audit replay. */
-export function step(params: ShadowParams, state: ShadowState, d: PairData, untilMs: number) {
+export function step(params: ShadowParams, state: ShadowState, d: PairData, untilMs: number, arm: Arm = "A") {
   const ctx4hAt = (t: number) => { let r: string | null = null; for (const x of d.ctx4h) { if (x.t <= t) r = x.trend; else break; } return r; };
-  return advance(state, { h1: d.h1, m5: d.m5, v3At: (T) => d.v3.get(T), ctx4hAt, params, until: untilMs });
+  const legs = arm === "B" ? d.v3b : d.v3;
+  return advance(state, { h1: d.h1, m5: d.m5, v3At: (T) => legs.get(T), ctx4hAt, params: { ...params, arm }, until: untilMs });
 }
 
-export function decisionRow(c: Cohort, pair: string, x: ShadowDecision, ctx4h: string | null) {
-  return { cohort_id: c.id, pair, t: iso(x.t), user_id: c.user_id, dir: x.dir, reason: x.reason, price: x.price,
+export function decisionRow(c: Cohort, pair: string, x: ShadowDecision, ctx4h: string | null, arm: Arm = "A") {
+  return { cohort_id: c.id, arm, pair, t: iso(x.t), user_id: c.user_id, dir: x.dir, reason: x.reason, price: x.price,
     leg: x.leg ? { trend: x.leg.trend, swing_time: x.leg.pTime === null ? null : iso(x.leg.pTime), swing_price: x.leg.pPrice, extreme_time: x.leg.xTime === null ? null : iso(x.leg.xTime), extreme_price: x.leg.xPrice } : null,
     leg_bars: x.legBars, zone: x.zone, order_plan: x.order, ctx4h };
 }
-export function eventRow(c: Cohort, pair: string, e: ShadowEvent) {
+export function eventRow(c: Cohort, pair: string, e: ShadowEvent, arm: Arm = "A") {
   const order_id = e.type === "placed" ? e.order.id : e.type === "filled" ? e.position.id : e.id;
-  return { cohort_id: c.id, pair, order_id, type: e.type, t: iso(e.t), user_id: c.user_id, payload: e };
+  return { cohort_id: c.id, arm, pair, order_id, type: e.type, t: iso(e.t), user_id: c.user_id, payload: e };
 }
 
-export interface PairRunResult { cohort: string; pair: string; skipped?: string; decisions: number; events: number; asOf?: string; open?: string | null }
+export interface PairRunResult { cohort: string; arm: Arm; pair: string; skipped?: string; decisions: number; events: number; asOf?: string; open?: string | null }
 
 export async function runShadowForPair(db: Client, pair: string, nowMs: number): Promise<PairRunResult[]> {
   const { data: modes, error } = await db.from("structure_mode").select("user_id,bot_id,mode,set_at").in("mode", ["SHADOW", "ON"]);
@@ -125,18 +134,19 @@ export async function runShadowForPair(db: Client, pair: string, nowMs: number):
     const params = c.params[pair];
     if (!params || "reason" in params) {
       const reason = params && "reason" in params ? params.reason : "no parameters";
-      await db.from("iov3_shadow_audit").upsert({ cohort_id: c.id, pair, kind: "refused", ref: reason, detail: { reason } }, { onConflict: "cohort_id,pair,kind,ref", ignoreDuplicates: true });
-      out.push({ cohort: c.id, pair, skipped: reason, decisions: 0, events: 0 });
+      await db.from("iov3_shadow_audit").upsert({ cohort_id: c.id, arm: "A", pair, kind: "refused", ref: reason, detail: { reason } }, { onConflict: "cohort_id,arm,pair,kind,ref", ignoreDuplicates: true });
+      for (const arm of ARMS) out.push({ cohort: c.id, arm, pair, skipped: reason, decisions: 0, events: 0 });
       continue;
     }
-    const { data: sRows, error: se } = await db.from("iov3_shadow_state").select("seq,state").eq("cohort_id", c.id).eq("pair", pair).order("seq", { ascending: false }).limit(1);
-    if (se) throw new Error(`state: ${se.message}`);
-    const seq = sRows?.[0]?.seq ?? 0, state: ShadowState = sRows?.[0]?.state ?? initShadowState(Date.parse(c.first_decision_at));
-    const fromMs = Math.min(state.lastScanT, state.last5mT);
+    const states = new Map<Arm, { seq: number; state: ShadowState }>();
+    for (const arm of ARMS) {
+      const { data: sRows, error: se } = await db.from("iov3_shadow_state").select("seq,state").eq("cohort_id", c.id).eq("arm", arm).eq("pair", pair).order("seq", { ascending: false }).limit(1);
+      if (se) throw new Error(`state: ${se.message}`);
+      states.set(arm, { seq: sRows?.[0]?.seq ?? 0, state: sRows?.[0]?.state ?? initShadowState(Date.parse(c.first_decision_at)) });
+    }
+    const fromMs = Math.min(...[...states.values()].flatMap((x) => [x.state.lastScanT, x.state.last5mT]));
     const data = await loadPairData(db, pair, fromMs, nowMs, nowMs);
     const until = Math.min(nowMs - 60_000, data.m5ProcessUntil);        // only final (settled or definitively missing) 5m bars
-    if (until <= state.lastScanT && until <= state.last5mT + M5) { out.push({ cohort: c.id, pair, decisions: 0, events: 0 }); continue; }
-    const r = step(params, state, data, until);
     const ctxAt = (t: number) => { let v: string | null = null; for (const x of data.ctx4h) { if (x.t <= t) v = x.trend; else break; } return v; };
     const put = async (table: string, rows: unknown[], onConflict: string) => {
       for (let i = 0; i < rows.length; i += 500) {
@@ -144,13 +154,18 @@ export async function runShadowForPair(db: Client, pair: string, nowMs: number):
         if (e) throw new Error(`${table} ${pair}: ${e.message}`);
       }
     };
-    await put("iov3_shadow_decisions", r.decisions.map((x) => decisionRow(c, pair, x, ctxAt(x.t))), "cohort_id,pair,t");
-    await put("iov3_shadow_events", r.events.map((e) => eventRow(c, pair, e)), "cohort_id,order_id,type,t");
-    if (JSON.stringify(r.state) !== JSON.stringify(state)) {
-      // a concurrent run that already wrote seq+1 wins; the rows above are deterministic, so its duplicates were ignored
-      await put("iov3_shadow_state", [{ cohort_id: c.id, pair, seq: seq + 1, user_id: c.user_id, as_of: iso(until), state: r.state }], "cohort_id,pair,seq");
+    for (const arm of ARMS) {
+      const { seq, state } = states.get(arm)!;
+      if (until <= state.lastScanT && until <= state.last5mT + M5) { out.push({ cohort: c.id, arm, pair, decisions: 0, events: 0 }); continue; }
+      const r = step(params, state, data, until, arm);
+      await put("iov3_shadow_decisions", r.decisions.map((x) => decisionRow(c, pair, x, ctxAt(x.t), arm)), "cohort_id,arm,pair,t");
+      await put("iov3_shadow_events", r.events.map((e) => eventRow(c, pair, e, arm)), "cohort_id,order_id,type,t");
+      if (JSON.stringify(r.state) !== JSON.stringify(state)) {
+        // a concurrent run that already wrote seq+1 wins; the rows above are deterministic, so its duplicates were ignored
+        await put("iov3_shadow_state", [{ cohort_id: c.id, arm, pair, seq: seq + 1, user_id: c.user_id, as_of: iso(until), state: r.state }], "cohort_id,arm,pair,seq");
+      }
+      out.push({ cohort: c.id, arm, pair, decisions: r.decisions.length, events: r.events.length, asOf: iso(until), open: r.state.pos ? `position ${r.state.pos.id}` : r.state.pend ? `order ${r.state.pend.id}` : null });
     }
-    out.push({ cohort: c.id, pair, decisions: r.decisions.length, events: r.events.length, asOf: iso(until), open: r.state.pos ? `position ${r.state.pos.id}` : r.state.pend ? `order ${r.state.pend.id}` : null });
   }
   return out;
 }

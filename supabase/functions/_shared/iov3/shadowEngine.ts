@@ -38,6 +38,7 @@ export interface ShadowParams {
   enabledSessions: string[] | null; // null = no session gate (research)
   enabledDays: number[] | null;     // NY weekday numbers; null = no day gate (research)
   voidOnGap: boolean;
+  arm?: "A" | "B";                  // which V3 leg feeds it (A = external, B = outer internal); B's order ids carry "|B|"
 }
 export interface Bar { t: number; o: number; h: number; l: number; c: number }
 export interface V3Leg { trend: "bull" | "bear" | null; pTime: number | null; pPrice: number | null; xTime: number | null; xPrice: number | null }
@@ -179,7 +180,7 @@ export function advance(state0: ShadowState, inp: AdvanceInput): { state: Shadow
     d.order = { entry, sl: geo.sl, tp: geo.tp, riskPips: +geo.riskPips.toFixed(1), stopSource: geo.source };
     if (st.pend && Math.abs(st.pend.entry - entry) <= pip) { d.reason = "same_level_kept"; continue; }
     if (st.pend) cancel(T, "superseded");
-    const order: Pending = { id: `${p.pair}|${new Date(T).toISOString()}`, dir, entry, sl: geo.sl, tp: geo.tp, zl: zp.low, zh: zp.high, zoneType: zp.type, origin, placed: T, touchT: null, legBars: d.legBars ?? 0, stopSource: geo.source };
+    const order: Pending = { id: p.arm === "B" ? `${p.pair}|B|${new Date(T).toISOString()}` : `${p.pair}|${new Date(T).toISOString()}`, dir, entry, sl: geo.sl, tp: geo.tp, zl: zp.low, zh: zp.high, zoneType: zp.type, origin, placed: T, touchT: null, legBars: d.legBars ?? 0, stopSource: geo.source };
     st.pend = order; d.reason = "placed";
     events.push({ type: "placed", t: T, order: structuredClone(order) });
   }

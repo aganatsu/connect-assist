@@ -8,7 +8,7 @@ import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224
 import { PGlite } from "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js";
 
 const read = (f: string) => Deno.readTextFileSync(new URL(`../../../migrations/${f}`, import.meta.url));
-const PR2 = read("20261015000000_structure_bars_1h.sql"), M5 = read("20261027120000_structure_bars_5m.sql"), SHADOW = read("20261028000000_iov3_shadow.sql");
+const PR2 = read("20261015000000_structure_bars_1h.sql"), PR3 = read("20261027000000_structure_v3_state.sql"), M5 = read("20261027120000_structure_bars_5m.sql"), SHADOW = read("20261028000000_iov3_shadow.sql"), ARMB = read("20261027200000_iov3_shadow_arm_b.sql");
 const PGLITE_DIST = "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist";
 let assets: Promise<{ wasmModule: WebAssembly.Module; fsBundle: Blob }> | null = null;
 const pgliteAssets = () => assets ??= (async () => ({
@@ -32,7 +32,8 @@ async function freshDb(): Promise<any> {
       create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
       grant execute on function auth.uid() to authenticated;
       insert into auth.users values ('${U1}'), ('${U2}');`);
-    await db.exec(PR2); await db.exec(M5); await db.exec(SHADOW);
+    // applied in production order: the arm-B migration was applied after the shadow tables existed
+    await db.exec(PR2); await db.exec(PR3); await db.exec(M5); await db.exec(SHADOW); await db.exec(ARMB);
     return db;
   } finally {
     if (desc) Object.defineProperty(g, "process", desc); else delete g.process;
@@ -115,4 +116,18 @@ Deno.test("switch row as the service role: update (mode, set_at) and insert work
     on conflict (user_id, bot_id) do update set user_id = excluded.user_id, bot_id = excluded.bot_id, mode = excluded.mode, set_at = excluded.set_at`, [U1]), Error, "permission denied");
   await db.query(`insert into public.structure_mode_log (user_id, bot_id, from_mode, to_mode) values ($1, 'smc', 'OFF', 'SHADOW')`, [U1]);
   await db.exec(`reset role;`);
+});
+
+Deno.test("arm B: per-arm keys (same pair + hour for A and B), arm CHECK, existing rows default to A, snapshots accept the internal leg", async () => {
+  const db = await freshDb();
+  await db.query(`insert into public.iov3_shadow_cohorts (id, user_id, bot_id, started_at, first_decision_at, params, params_hash, engine_version)
+                  values ('c1', $1, 'smc', now(), now(), '{}', 'h', 'v')`, [U1]);
+  await db.query(`insert into public.iov3_shadow_decisions (cohort_id, pair, t, user_id, reason) values ('c1', 'EUR/USD', '2026-10-27 05:00+00', $1, 'no_pois')`, [U1]);
+  await db.query(`insert into public.iov3_shadow_decisions (cohort_id, arm, pair, t, user_id, reason) values ('c1', 'B', 'EUR/USD', '2026-10-27 05:00+00', $1, 'placed')`, [U1]);
+  assertEquals((await db.query(`select arm, reason from public.iov3_shadow_decisions order by arm`)).rows, [{ arm: "A", reason: "no_pois" }, { arm: "B", reason: "placed" }]);
+  await assertRejects(() => db.query(`insert into public.iov3_shadow_decisions (cohort_id, arm, pair, t, user_id, reason) values ('c1', 'C', 'EUR/USD', now(), $1, 'x')`, [U1]), Error, "violates check constraint");
+  await db.query(`insert into public.iov3_shadow_state (cohort_id, arm, pair, seq, user_id, as_of, state) values ('c1', 'A', 'EUR/USD', 1, $1, now(), '{}'), ('c1', 'B', 'EUR/USD', 1, $1, now(), '{}')`, [U1]);
+  await db.query(`insert into public.structure_v3_snapshots (symbol, tf, known_at, bar_time, engine_version, trend, state_hash, il_time, il_price, il_x_time, il_x_price)
+                  values ('NZD/CHF', '1H', '2026-10-27 01:00+00', '2026-10-27 00:00+00', 'v', 'bull', 'h', '2026-10-02 12:00+00', 0.46338, '2026-10-27 00:00+00', 0.47142)`);
+  assertEquals((await db.query(`select il_price::float8 p from public.structure_v3_snapshots`)).rows, [{ p: 0.46338 }]);
 });

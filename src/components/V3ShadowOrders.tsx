@@ -7,7 +7,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { recentEvents, foldOrders, myFeedback, statusText, fmtUtc, priceFmt, pipsBetween, structureModeApi, type ShadowOrder } from "@/lib/structureMode";
+import { recentEvents, foldOrders, myFeedback, statusText, fmtUtc, priceFmt, pipsBetween, structureModeApi, ARM_LABEL, type ShadowOrder } from "@/lib/structureMode";
 
 export function V3ShadowOrders() {
   const qc = useQueryClient();
@@ -42,6 +42,7 @@ export function V3ShadowOrders() {
       <div key={`${o.cohortId}|${o.orderId}`} className="border border-info/30 bg-info/5 p-2 space-y-1 text-[10px]">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge variant="outline" className="text-[9px] border-info/50 text-info">SHADOW</Badge>
+          <Badge variant="outline" className="text-[9px]">{ARM_LABEL[o.arm]}</Badge>
           <span className="font-semibold text-xs">{o.pair}</span>
           <span className={o.dir === "long" ? "text-success font-bold" : "text-destructive font-bold"}>{o.dir === "long" ? "BUY LIMIT" : "SELL LIMIT"}</span>
           <span className="text-muted-foreground">placed {fmtUtc(o.placedAt)} UTC</span>

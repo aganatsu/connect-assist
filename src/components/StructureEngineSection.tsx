@@ -67,12 +67,12 @@ export function StructureEngineSection() {
         <div className="text-[10px] font-mono text-muted-foreground space-y-0.5">
           <div>V3 data: last 1H close {fmtUtc(s.v3LatestClose)} UTC{v3Age != null && v3Age > 2.5 ? " — not fresh (weekend, or check the V3 state service)" : ""}</div>
           {mode !== "OFF" && <div>{mode} since {fmtUtc(s.setAt)} UTC ({s.unlock.daysInShadow.toFixed(1)} days)</div>}
-          {s.summary && (
-            <div>
-              Shadow: {s.summary.placed} orders · {s.summary.filled} filled · {s.summary.wins} TP / {s.summary.losses} SL · {s.summary.open} open
-              {s.summary.voided ? ` · ${s.summary.voided} void (data gap)` : ""} · net {s.summary.netR > 0 ? "+" : ""}{s.summary.netR.toFixed(2)}R
+          {([["Big leg (A)", s.summary], ["Scalp leg (B)", s.summaryB]] as const).map(([label, sm]) => sm && (
+            <div key={label}>
+              {label}: {sm.placed} orders · {sm.filled} filled · {sm.wins} TP / {sm.losses} SL · {sm.open} open
+              {sm.voided ? ` · ${sm.voided} void (data gap)` : ""} · net {sm.netR > 0 ? "+" : ""}{sm.netR.toFixed(2)}R
             </div>
-          )}
+          ))}
           {mode !== "ON" && <div>ON: {s.unlock.reason} · setups marked ✓: {s.unlock.right}</div>}
         </div>
       )}

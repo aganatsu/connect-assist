@@ -131,3 +131,21 @@ Deno.test("run: appends, verifies on re-run, logs a repaint without overwriting,
   assert(stale.stale.stale && db.rows("structure_v3_audit").some((a) => a.kind === "stale"), JSON.stringify(stale.stale));
   await assertRejects(() => runV3StateForPair(db.client(), "BTC/USD", { nowMs: now, materializeFrom: 0 }), Error, "not a structure pair");
 });
+
+Deno.test("state: the outer internal leg (Shadow B) is the stack's second leg (or the only one), with its extreme since the origin", () => {
+  const { bars } = aggregate("1H", HOURS);
+  const cfg = frozenV32cConfig("1H");
+  let s = initState(), checked = 0, nested = 0;
+  const snaps = new Map(FULL.snapshots["1H"].map((x) => [x.known_at, x]));
+  for (const b of bars) {
+    s = step(cfg, s, b).state;
+    const snap = snaps.get(new Date(b.closeTime).toISOString())!;
+    if (!s.trend || !s.stack.length) { assertEquals(snap.il_time, null); continue; }
+    const leg = s.stack.length > 1 ? s.stack[1] : s.stack[0];
+    const bull = s.trend === "bull";
+    const seg = s.bars.slice(leg.origin.index), ext = bull ? Math.max(...seg.map((x) => x.h)) : Math.min(...seg.map((x) => x.l));
+    assertEquals([snap.il_time, snap.il_price, snap.il_x_price], [new Date(s.bars[leg.origin.index].t).toISOString(), leg.origin.price, ext]);
+    checked++; if (s.stack.length > 1) nested++;
+  }
+  assert(checked > 300 && nested >= 5, `${checked} checked, ${nested} with a nested internal leg`);
+});
