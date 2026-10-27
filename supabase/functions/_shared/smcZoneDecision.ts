@@ -172,6 +172,8 @@ export interface ZoneDecisionInput {
   fibMaxRetracement: number | undefined;
   originOBRetest: boolean | undefined;
   impulseZoneEnabled: boolean;
+  /** Scalper only: true restores the 15m / 5m fallback (historical replays of decisions made before 2026-10-27). Default off. */
+  lowerTfFallback?: boolean;
 }
 
 export interface ZoneDecisionResult {
@@ -212,6 +214,9 @@ export function decideZone(input: ZoneDecisionInput): ZoneDecisionResult {
       pipSize: input.pipSize,
       fibMaxRetracement: input.fibMaxRetracement,
       originOBRetest: input.originOBRetest,
+      // Scalper: 1H only — no 15m / 5m fallback (owner decision 2026-10-27; the six-month replay had both below 1H).
+      // `lowerTfFallback: true` reproduces the old waterfall for historical replays.
+      topTfOnly: input.style === "scalper" && input.lowerTfFallback !== true,
     },
     slots.daily,
     slots.confirm,
