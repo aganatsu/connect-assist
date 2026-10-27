@@ -145,7 +145,7 @@ Deno.test("same level: refreshed in place — same order_id and signal_id, no st
   }
   assert(!/\.insert\(|\.rpc\(|placeRoute2Order\(/.test(c), "the same-level block places nothing");
   assert(/cap\.signal_id = samePriceOrders\[0\]\?\.signal_id \?\? null;/.test(c), "the decision links to the EXISTING signal_id (none minted)");
-  const after = scanner.slice(scanner.indexOf('action: "refreshed_in_place"'), scanner.indexOf("await placeRoute2Order(supabase,"));
+  const after = scanner.slice(scanner.indexOf('action: "refreshed_in_place"'), scanner.indexOf("await placeRoute2Order(supabase, { attribution: route2Attribution,")); // the legacy placement (V3 ON places earlier in the file)
   assert(/continue;/.test(after), "no placement (no new order, no new signal_id) on the same-level path");
 });
 

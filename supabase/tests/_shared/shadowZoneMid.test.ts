@@ -278,7 +278,7 @@ Deno.test("pin: every A-facing side effect in the hunt is routed or guarded for 
     assertEquals(guarded, all, `${counter}: ${guarded}/${all} guarded`);
   }
   const telegram = huntBody.match(/if \([^)]*shouldNotify\("(thesis_invalidated|zone_touched)"\)\)/g) ?? [];
-  assertEquals(telegram.length, 2);
+  assertEquals(telegram.length, 3); // thesis invalidated, V3 trend flipped (Impulse-on-V3 ON), zone touched — each guarded below
   for (const t of telegram) assert(t.startsWith("if (!isShadow && "), t);
   // the routing itself is identity for A
   for (const line of [

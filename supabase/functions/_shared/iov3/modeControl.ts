@@ -8,8 +8,8 @@
 //   ON → OFF / SHADOW: always allowed.
 export type Mode = "OFF" | "SHADOW" | "ON";
 export const MODES: readonly Mode[] = ["OFF", "SHADOW", "ON"];
-/** Step 3 ships the switch with ON visible but unavailable; step 4 (ON wiring in the scanner) flips this. */
-export const ON_AVAILABLE = false;
+/** Step 4b wires ON into the scanner (onMode.ts / onSwitch.ts). ON still unlocks only by the rule below. */
+export const ON_AVAILABLE = true;
 export const UNLOCK_DAYS = 7, UNLOCK_RIGHT = 5;
 
 export interface UnlockInput { mode: Mode; setAtMs: number; nowMs: number; rightCount: number; v3AuditSince: number; shadowAuditSince: number; onAvailable?: boolean }
