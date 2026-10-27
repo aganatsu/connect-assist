@@ -1282,9 +1282,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </FieldGroup>
 
                       <div className="grid grid-cols-2 gap-4">
-                        <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">
-                          <Input type="number" value={config.risk?.maxConcurrentTrades ?? 5} onChange={e => updateField('risk', 'maxConcurrentTrades', parseFloat(e.target.value) || 0)} min={1} max={20} className="h-9 text-sm" />
-                        </FieldGroup>
+                        {/* With simplification.capsMode "unified" the scanner enforces ONLY simplification.maxOpenPositions
+                            (positionCaps.resolvePositionCaps); risk.maxConcurrentTrades is ignored. Show and edit the cap in force. */}
+                        {config.simplification?.capsMode === "unified" ? (
+                          <FieldGroup label="Max Concurrent Trades" description={`Maximum open positions at once — the cap the bot enforces (unified caps). Per pair: ${config.simplification?.maxPerSymbol ?? 1}.`}>
+                            <Input type="number" value={config.simplification?.maxOpenPositions ?? 3} onChange={e => updateField('simplification', 'maxOpenPositions', Math.min(50, Math.max(1, Math.round(Number(e.target.value)) || 1)))} min={1} max={50} className="h-9 text-sm" />
+                          </FieldGroup>
+                        ) : (
+                          <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">
+                            <Input type="number" value={config.risk?.maxConcurrentTrades ?? 5} onChange={e => updateField('risk', 'maxConcurrentTrades', parseFloat(e.target.value) || 0)} min={1} max={20} className="h-9 text-sm" />
+                          </FieldGroup>
+                        )}
                         <FieldGroup label="Min R:R Ratio" description="Gate: rejects trades below this R:R. (Exit tab's R:R Ratio sets the TP target; this is the minimum to pass the gate.)">
                           <Input type="number" value={config.risk?.minRR ?? 1.5} onChange={e => updateField('risk', 'minRR', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
                         </FieldGroup>
