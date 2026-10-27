@@ -1439,7 +1439,7 @@ export async function runSafetyGates(
   // Legacy fallback preserved for when verdict computation fails.
   if (directionVerdict) {
     if (directionVerdict.shouldBlock) {
-      gates.push({ passed: false, reason: `Direction BLOCKED: ${directionVerdict.blockReason} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+      gates.push({ gateKey: "direction_verdict", passed: false, reason: `Direction BLOCKED: ${directionVerdict.blockReason} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
     } else if (directionVerdict.verdict !== "neutral" && directionVerdict.verdict !== direction) {
       // The verdict disagrees with the direction being traded.
       //
@@ -1451,12 +1451,12 @@ export async function runSafetyGates(
       // "Direction OK: SHORT (conf: 60%, agreement: 67%)" on a LONG trade. All
       // four closed at stop, -1,110 of a -2,546 week. The system had the right
       // answer, said so in the gate reason, and traded the opposite way.
-      gates.push({
+      gates.push({ gateKey: "direction_verdict",
         passed: false,
         reason: `Direction CONFLICT: verdict is ${directionVerdict.verdict.toUpperCase()} but entry is ${direction.toUpperCase()} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)`,
       });
     } else {
-      gates.push({ passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, adj: ${directionVerdict.scoreAdjustment >= 0 ? "+" : ""}${directionVerdict.scoreAdjustment.toFixed(2)}, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+      gates.push({ gateKey: "direction_verdict", passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, adj: ${directionVerdict.scoreAdjustment >= 0 ? "+" : ""}${directionVerdict.scoreAdjustment.toFixed(2)}, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
     }
   } else if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
     // Legacy fallback: original Gate 1 logic when verdict unavailable
@@ -1466,13 +1466,13 @@ export async function runSafetyGates(
     const hardVeto = config.htfBiasHardVeto;
     if (hardVeto) {
       if (htfTrend !== entryBias) {
-        gates.push({ passed: false, reason: `[legacy] HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked` });
+        gates.push({ gateKey: "htf_bias", passed: false, reason: `[legacy] HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked` });
       } else {
-        gates.push({ passed: true, reason: `[legacy] HTF bias aligned (hard veto): Daily ${htfTrend}` });
+        gates.push({ gateKey: "htf_bias", passed: true, reason: `[legacy] HTF bias aligned (hard veto): Daily ${htfTrend}` });
       }
     } else {
       if (htfTrend !== "ranging" && htfTrend !== entryBias) {
-        gates.push({ passed: false, reason: `[legacy] HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
+        gates.push({ gateKey: "htf_bias", passed: false, reason: `[legacy] HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
       } else if (htfTrend === "ranging" && analysis.regimeInfo) {
         const regBias = analysis.regimeInfo.bias;
         const regConf = analysis.regimeInfo.confidence ?? 0;
@@ -1480,16 +1480,16 @@ export async function runSafetyGates(
           (regBias === "bullish" && direction === "short") ||
           (regBias === "bearish" && direction === "long");
         if (entryOpposesRegime && regConf >= 0.60) {
-          gates.push({ passed: false, reason: `[legacy] HTF regime veto: Daily ranging but regime is ${regBias} (${(regConf * 100).toFixed(0)}% conf) — ${direction} entry blocked` });
+          gates.push({ gateKey: "htf_bias", passed: false, reason: `[legacy] HTF regime veto: Daily ranging but regime is ${regBias} (${(regConf * 100).toFixed(0)}% conf) — ${direction} entry blocked` });
         } else {
-          gates.push({ passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend} (regime: ${regBias} ${(regConf * 100).toFixed(0)}%)` });
+          gates.push({ gateKey: "htf_bias", passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend} (regime: ${regBias} ${(regConf * 100).toFixed(0)}%)` });
         }
       } else {
-        gates.push({ passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend}` });
+        gates.push({ gateKey: "htf_bias", passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend}` });
       }
     }
   } else {
-    gates.push({ passed: true, reason: "HTF check skipped" });
+    gates.push({ gateKey: "htf_bias", passed: true, reason: "HTF check skipped" });
   }
 
   // Gate 2: Premium/Discount zone filter
@@ -1536,11 +1536,11 @@ export async function runSafetyGates(
       : "";
 
     if (config.onlyBuyInDiscount && direction === "long" && pdZone === "premium") {
-      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (premium > 55%, need discount < 45% to buy)${rawStr}${legStr}` });
+      gates.push({ gateKey: "premium_discount", passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (premium > 55%, need discount < 45% to buy)${rawStr}${legStr}` });
     } else if (config.onlySellInPremium && direction === "short" && pdZone === "discount") {
-      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (discount < 45%, need premium > 55% to sell)${rawStr}${legStr}` });
+      gates.push({ gateKey: "premium_discount", passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}%${rangeStr} (discount < 45%, need premium > 55% to sell)${rawStr}${legStr}` });
     } else {
-      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%${rangeStr})${rawStr}${legStr}` });
+      gates.push({ gateKey: "premium_discount", passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%${rangeStr})${rawStr}${legStr}` });
     }
   }
 
@@ -1549,7 +1549,7 @@ export async function runSafetyGates(
   // This prevents the bot from taking trades where the CONVICTION timeframe shows zero structural support.
   // Previously used entry-TF which was too noisy and over-filtered valid trades on forex.
   if (!config.structuralConvictionEnabled) {
-    gates.push({ passed: true, reason: `Structural Conviction: DISABLED by config` });
+    gates.push({ gateKey: "conviction", passed: true, reason: `Structural Conviction: DISABLED by config` });
   } else {
     // Use conviction-TF candles if provided, otherwise fall back to entry-TF analysis
     let s2f: { overallRate: number; bullishRate: number; bearishRate: number } | undefined;
@@ -1574,15 +1574,15 @@ export async function runSafetyGates(
     const s2fBlockThreshold = direction === "short" ? config.structuralConvictionS2FShort : config.structuralConvictionS2FLong;
     const oppositeBlockThreshold = direction === "short" ? config.structuralConvictionOppositeShort : config.structuralConvictionOppositeLong;
     if (directionRate === 0 && s2fOverall < s2fBlockThreshold && oppositeRate > 0) {
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
+      gates.push({ gateKey: "conviction", passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
     } else if (directionRate === 0 && oppositeRate > oppositeBlockThreshold) {
       // Softer block: 0% in direction + strong opposite (configurable per direction).
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
+      gates.push({ gateKey: "conviction", passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
     } else if (directionRate > 0 && oppositeRate > 0 && oppositeRate / directionRate >= 2.5) {
       // Bidirectional enhancement: block when opposing fractals are 2.5× or more than supporting.
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
+      gates.push({ gateKey: "conviction", passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
     } else {
-      gates.push({ passed: true, reason: `Structural Conviction [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
+      gates.push({ gateKey: "conviction", passed: true, reason: `Structural Conviction [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
     }
   }
 
@@ -1618,29 +1618,29 @@ export async function runSafetyGates(
 
   // Gate 4: Instrument enabled
   if (!config.instruments.includes(symbol)) {
-    gates.push({ passed: false, reason: `${symbol} not in enabled instruments` });
+    gates.push({ gateKey: "instrument_enabled", passed: false, reason: `${symbol} not in enabled instruments` });
   } else {
-    gates.push({ passed: true, reason: `${symbol} enabled` });
+    gates.push({ gateKey: "instrument_enabled", passed: true, reason: `${symbol} enabled` });
   }
 
   // Gate 4: Max open positions. Caps come from the single owner (step 12);
   // `config` here is the pair-overridden copy, used only in legacy mode.
   const caps = resolvePositionCaps((config as any).__rawConfigJson, "placement", config);
   if (openPositions.length >= caps.maxOpenPositions) {
-    gates.push({ passed: false, reason: `Max positions (${caps.maxOpenPositions}) reached` });
+    gates.push({ gateKey: "max_positions", passed: false, reason: `Max positions (${caps.maxOpenPositions}) reached` });
   } else {
-    gates.push({ passed: true, reason: `${openPositions.length}/${caps.maxOpenPositions} positions` });
+    gates.push({ gateKey: "max_positions", passed: true, reason: `${openPositions.length}/${caps.maxOpenPositions} positions` });
   }
 
   // Gate 5: same-direction duplicate check (its own rule), then max per symbol
   const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
   const sameDirectionExists = openPositions.some(p => p.symbol === symbol && p.direction === direction);
   if (sameDirectionExists && !config.allowSameDirectionStacking) {
-    gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate (enable stacking to allow)` });
+    gates.push({ gateKey: "per_symbol", passed: false, reason: `Already ${direction} on ${symbol} — no duplicate (enable stacking to allow)` });
   } else if (symbolPositions >= caps.maxPerSymbol) {
-    gates.push({ passed: false, reason: `Max ${caps.maxPerSymbol} positions for ${symbol} reached` });
+    gates.push({ gateKey: "per_symbol", passed: false, reason: `Max ${caps.maxPerSymbol} positions for ${symbol} reached` });
   } else {
-    gates.push({ passed: true, reason: `${symbolPositions}/${caps.maxPerSymbol} for ${symbol}${sameDirectionExists ? " (stacking allowed)" : ""}` });
+    gates.push({ gateKey: "per_symbol", passed: true, reason: `${symbolPositions}/${caps.maxPerSymbol} for ${symbol}${sameDirectionExists ? " (stacking allowed)" : ""}` });
   }
 
   // Gate 6: Portfolio heat (actual risk per position)
@@ -1664,16 +1664,16 @@ export async function runSafetyGates(
   }
   const totalRiskPercent = balance > 0 ? (totalRiskDollars / balance) * 100 : 0;
   if (totalRiskPercent >= config.portfolioHeat) {
-    gates.push({ passed: false, reason: `Portfolio heat ${totalRiskPercent.toFixed(1)}% >= ${config.portfolioHeat}% limit` });
+    gates.push({ gateKey: "portfolio_heat", passed: false, reason: `Portfolio heat ${totalRiskPercent.toFixed(1)}% >= ${config.portfolioHeat}% limit` });
   } else {
-    gates.push({ passed: true, reason: `Portfolio heat ${totalRiskPercent.toFixed(1)}%` });
+    gates.push({ gateKey: "portfolio_heat", passed: true, reason: `Portfolio heat ${totalRiskPercent.toFixed(1)}%` });
   }
 
   // Gate 7: Daily loss limit
   // Consolidation: When prop firm gate is active, it already enforces stricter daily loss
   // thresholds with graduated severity. Skip redundant check.
   if (propFirmActive) {
-    gates.push({ passed: true, reason: `Daily loss delegated to prop firm gate (stricter thresholds)` });
+    gates.push({ gateKey: "daily_loss", passed: true, reason: `Daily loss delegated to prop firm gate (stricter thresholds)` });
   } else {
     const todayStr = new Date().toISOString().slice(0, 10);
     const dailyPnlBase = parseFloat(account.daily_pnl_base || account.balance || "10000");
@@ -1681,9 +1681,9 @@ export async function runSafetyGates(
     const dailyLoss = actualBase - balance;
     const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
     if (dailyLossPercent >= config.maxDailyLoss) {
-      gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
+      gates.push({ gateKey: "daily_loss", passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
     } else {
-      gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
+      gates.push({ gateKey: "daily_loss", passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
     }
   }
 
@@ -1691,14 +1691,14 @@ export async function runSafetyGates(
   // Consolidation: When prop firm gate is active, it already enforces stricter drawdown
   // thresholds (trailing or fixed). Skip redundant check.
   if (propFirmActive) {
-    gates.push({ passed: true, reason: `Drawdown delegated to prop firm gate (stricter thresholds)` });
+    gates.push({ gateKey: "drawdown", passed: true, reason: `Drawdown delegated to prop firm gate (stricter thresholds)` });
   } else {
     const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
     const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
     if (drawdownPercent >= config.maxDrawdown) {
-      gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
+      gates.push({ gateKey: "drawdown", passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
     } else {
-      gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
+      gates.push({ gateKey: "drawdown", passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
     }
   }
 
@@ -1713,9 +1713,9 @@ export async function runSafetyGates(
   if (config.smtOppositeVeto !== false) {
     const smtFactor = analysis.factors?.find((f: any) => f.name === "SMT Divergence");
     if (smtFactor && smtFactor.detail && smtFactor.detail.includes("opposite to signal direction")) {
-      gates.push({ passed: false, reason: `SMT divergence opposite — vetoed` });
+      gates.push({ gateKey: "smt", passed: false, reason: `SMT divergence opposite — vetoed` });
     } else {
-      gates.push({ passed: true, reason: `SMT veto: no opposition detected` });
+      gates.push({ gateKey: "smt", passed: true, reason: `SMT veto: no opposition detected` });
     }
   }
 
@@ -1755,9 +1755,9 @@ export async function runSafetyGates(
     const hoursPerCandle = tfHours[config.entryTimeframe] || 1;
     const requiredHours = candleCount * hoursPerCandle;
     if (hoursSinceMidnight < requiredHours) {
-      gates.push({ passed: false, reason: `OR not complete: ${hoursSinceMidnight.toFixed(1)}/${requiredHours.toFixed(1)}h elapsed` });
+      gates.push({ gateKey: "opening_range", passed: false, reason: `OR not complete: ${hoursSinceMidnight.toFixed(1)}/${requiredHours.toFixed(1)}h elapsed` });
     } else {
-      gates.push({ passed: true, reason: `OR complete: ${requiredHours}h elapsed` });
+      gates.push({ gateKey: "opening_range", passed: true, reason: `OR complete: ${requiredHours}h elapsed` });
     }
   }
 
@@ -1767,18 +1767,18 @@ export async function runSafetyGates(
     // Only apply legacy kill zone check when ICT KZ is disabled.
     const ictKZActive = config.ictKillZoneEnabled && config.ictKillZoneGateMode !== "off";
     if (ictKZActive) {
-      gates.push({ passed: true, reason: `Kill zone delegated to ICT KZ (mode=${config.ictKillZoneGateMode})` });
+      gates.push({ gateKey: "kill_zone", passed: true, reason: `Kill zone delegated to ICT KZ (mode=${config.ictKillZoneGateMode})` });
     } else {
       const assetProfile = getAssetProfile(symbol);
       if (!assetProfile.skipSessionGate) {
         const sess = analysis.cachedSession || detectSession(config);
         if (!sess.isKillZone) {
-          gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
+          gates.push({ gateKey: "kill_zone", passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
         } else {
-          gates.push({ passed: true, reason: `In ${sess.name} kill zone` });
+          gates.push({ gateKey: "kill_zone", passed: true, reason: `In ${sess.name} kill zone` });
         }
       } else {
-        gates.push({ passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
+        gates.push({ gateKey: "kill_zone", passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
       }
     }
   }
@@ -1799,12 +1799,12 @@ export async function runSafetyGates(
       const lastClose = new Date(recentTrades[0].closed_at).getTime();
       const elapsed = (Date.now() - lastClose) / 60000;
       if (elapsed < config.cooldownMinutes) {
-        gates.push({ passed: false, reason: `Cooldown: ${Math.ceil(config.cooldownMinutes - elapsed)}min remaining for ${symbol}` });
+        gates.push({ gateKey: "cooldown", passed: false, reason: `Cooldown: ${Math.ceil(config.cooldownMinutes - elapsed)}min remaining for ${symbol}` });
       } else {
-        gates.push({ passed: true, reason: `Cooldown passed (${Math.floor(elapsed)}min since last)` });
+        gates.push({ gateKey: "cooldown", passed: true, reason: `Cooldown passed (${Math.floor(elapsed)}min since last)` });
       }
     } else {
-      gates.push({ passed: true, reason: "No recent trades — cooldown OK" });
+      gates.push({ gateKey: "cooldown", passed: true, reason: "No recent trades — cooldown OK" });
     }
   }
 
@@ -1824,16 +1824,16 @@ export async function runSafetyGates(
         const hoursSinceLast = (Date.now() - lastLossTime) / (1000 * 60 * 60);
         const resetHours = Number((config as any).consecutiveLossPauseHours) > 0 ? Number((config as any).consecutiveLossPauseHours) : 4;
         if (hoursSinceLast >= resetHours) {
-          gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses but auto-reset after ${resetHours}h cooldown (${Math.floor(hoursSinceLast)}h elapsed)` });
+          gates.push({ gateKey: "consecutive_losses", passed: true, reason: `${consecutiveLosses} consecutive losses but auto-reset after ${resetHours}h cooldown (${Math.floor(hoursSinceLast)}h elapsed)` });
         } else {
           const remaining = Math.ceil((resetHours - hoursSinceLast) * 60);
-          gates.push({ passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit — auto-resets in ${remaining}min` });
+          gates.push({ gateKey: "consecutive_losses", passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit — auto-resets in ${remaining}min` });
         }
       } else {
-        gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses` });
+        gates.push({ gateKey: "consecutive_losses", passed: true, reason: `${consecutiveLosses} consecutive losses` });
       }
     } else {
-      gates.push({ passed: true, reason: "No trade history for consecutive loss check" });
+      gates.push({ gateKey: "consecutive_losses", passed: true, reason: "No trade history for consecutive loss check" });
     }
   }
 
@@ -1847,9 +1847,9 @@ export async function runSafetyGates(
     const grossLoss = trades.reduce((sum: number, t: any) => sum + Math.min(0, parseFloat(t.pnl || "0")), 0);
     const netLoss = Math.min(0, netPnl); // only trigger if net negative
     if (Math.abs(netLoss) >= config.protectionMaxDailyLossDollar) {
-      gates.push({ passed: false, reason: `Daily net P&L -$${Math.abs(netLoss).toFixed(2)} >= $${config.protectionMaxDailyLossDollar} limit (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
+      gates.push({ gateKey: "daily_dollar_loss", passed: false, reason: `Daily net P&L -$${Math.abs(netLoss).toFixed(2)} >= $${config.protectionMaxDailyLossDollar} limit (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
     } else {
-      gates.push({ passed: true, reason: `Daily net P&L $${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
+      gates.push({ gateKey: "daily_dollar_loss", passed: true, reason: `Daily net P&L $${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
     }
   }
 
@@ -1910,15 +1910,15 @@ export async function runSafetyGates(
         );
         if (veto.vetoed) {
           // Softened: gate passes but -2.0 penalty is applied downstream to effectiveScore (line ~3756)
-          gates.push({ passed: true, reason: `FOTSI WARNING (-2.0 penalty applied to effectiveScore): ${veto.reason}` });
+          gates.push({ gateKey: "fotsi", passed: true, reason: `FOTSI WARNING (-2.0 penalty applied to effectiveScore): ${veto.reason}` });
         } else {
-          gates.push({ passed: true, reason: veto.reason });
+          gates.push({ gateKey: "fotsi", passed: true, reason: veto.reason });
         }
       } else {
-        gates.push({ passed: true, reason: "FOTSI Gate: non-forex pair — skipped" });
+        gates.push({ gateKey: "fotsi", passed: true, reason: "FOTSI Gate: non-forex pair — skipped" });
       }
     } else {
-      gates.push({ passed: true, reason: "FOTSI Gate: data unavailable — skipped" });
+      gates.push({ gateKey: "fotsi", passed: true, reason: "FOTSI Gate: data unavailable — skipped" });
     }
   }
 
@@ -1935,11 +1935,11 @@ export async function runSafetyGates(
     const minPips = typeof config.atrFilterMin === "number" ? config.atrFilterMin : 0;
     const maxPips = typeof config.atrFilterMax === "number" ? config.atrFilterMax : 0;
     if (minPips > 0 && atrPips < minPips) {
-      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips below minimum ${minPips}` });
+      gates.push({ gateKey: "atr_range", passed: false, reason: `ATR ${atrPips.toFixed(1)} pips below minimum ${minPips}` });
     } else if (maxPips > 0 && atrPips > maxPips) {
-      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips above maximum ${maxPips}` });
+      gates.push({ gateKey: "atr_range", passed: false, reason: `ATR ${atrPips.toFixed(1)} pips above maximum ${maxPips}` });
     } else {
-      gates.push({ passed: true, reason: `ATR ${atrPips.toFixed(1)} pips within range` });
+      gates.push({ gateKey: "atr_range", passed: true, reason: `ATR ${atrPips.toFixed(1)} pips within range` });
     }
   }
 
@@ -2035,23 +2035,23 @@ export async function runSafetyGates(
 
     if (hedgeHits.length > 0) {
       // Hedges bet against yourself on correlated pairs — always block, regardless of cap.
-      gates.push({
+      gates.push({ gateKey: "correlation",
         passed: false,
         reason: `Hedge conflict on correlated pair(s) blocked (threshold ${threshold}): ${hedgeHits.map(h => h.detail).join("; ")}`,
       });
     } else if (doublingHits.length >= maxCorrelatedPos) {
       // Same-direction correlated exposure exceeds the concentration cap.
-      gates.push({
+      gates.push({ gateKey: "correlation",
         passed: false,
         reason: `Correlated same-direction cap hit (threshold ${threshold}): ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
       });
     } else if (doublingHits.length > 0) {
-      gates.push({
+      gates.push({ gateKey: "correlation",
         passed: true,
         reason: `Correlated same-direction positions: ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
       });
     } else {
-      gates.push({ passed: true, reason: `No correlated conflicts (threshold ${threshold})` });
+      gates.push({ gateKey: "correlation", passed: true, reason: `No correlated conflicts (threshold ${threshold})` });
     }
   }
 
@@ -2059,11 +2059,11 @@ export async function runSafetyGates(
   if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
     if (config.tier1GateEnabled === false) {
-      gates.push({ passed: true, reason: `Tier 1 gate DISABLED by config (${ts.tier1Count} core factors present)` });
+      gates.push({ gateKey: "tier1", passed: true, reason: `Tier 1 gate DISABLED by config (${ts.tier1Count} core factors present)` });
     } else if (!ts.tier1GatePassed) {
-      gates.push({ passed: false, reason: ts.tier1GateReason });
+      gates.push({ gateKey: "tier1", passed: false, reason: ts.tier1GateReason });
     } else {
-      gates.push({ passed: true, reason: ts.tier1GateReason });
+      gates.push({ gateKey: "tier1", passed: true, reason: ts.tier1GateReason });
     }
   }
 
@@ -2071,13 +2071,13 @@ export async function runSafetyGates(
   // When verdict is available, regime check is already incorporated into the verdict's
   // confidence calculation and veto logic. Gate always passes to avoid double-blocking.
   if (directionVerdict) {
-    gates.push({ passed: true, reason: `Regime gate: subsumed by Direction Verdict (regime context: ${directionVerdict.sources.find(s => s.name === "regime")?.detail || "N/A"})` });
+    gates.push({ gateKey: "regime", passed: true, reason: `Regime gate: subsumed by Direction Verdict (regime context: ${directionVerdict.sources.find(s => s.name === "regime")?.detail || "N/A"})` });
   } else if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
     if (!ts.regimeGatePassed) {
-      gates.push({ passed: false, reason: ts.regimeGateReason });
+      gates.push({ gateKey: "regime", passed: false, reason: ts.regimeGateReason });
     } else {
-      gates.push({ passed: true, reason: ts.regimeGateReason || "Regime gate: OK" });
+      gates.push({ gateKey: "regime", passed: true, reason: ts.regimeGateReason || "Regime gate: OK" });
     }
   }
 
@@ -2085,7 +2085,7 @@ export async function runSafetyGates(
   // Real spread check happens at execution time via broker API.
   if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
-    gates.push({ passed: true, reason: `[Info] ${ts.spreadGateReason || "Spread data unavailable"}` });
+    gates.push({ gateKey: "spread_info", passed: true, reason: `[Info] ${ts.spreadGateReason || "Spread data unavailable"}` });
   }
 
   return gates;
@@ -7467,7 +7467,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         if (gpGateMode === "off") {
           // no gate recorded at all
         } else if (!gpFilter.allowed && gpGateMode === "hard" && blockable) {
-          gates.push({ passed: false, reason: `GP filter (hard): ${gpFilter.reason} — bias confidence ${biasConf}% >= ${gpMinConf}%` });
+          gates.push({ gateKey: "game_plan", passed: false, reason: `GP filter (hard): ${gpFilter.reason} — bias confidence ${biasConf}% >= ${gpMinConf}%` });
           console.log(`[scan ${scanCycleId}] ⛔ ${pair}: GP GATE — ${analysis.direction} opposes ${gpFilter.gamePlanBias} bias at ${biasConf}% conf. Blocked.`);
         } else if (!gpFilter.allowed) {
           const why = gpFilter.reasonCode === "not_tradeable"
@@ -7475,10 +7475,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             : biasConf < gpMinConf
             ? `bias confidence ${biasConf}% < ${gpMinConf}% — below gate threshold`
             : "handled by GP Bias Confidence scoring";
-          gates.push({ passed: true, reason: `GP filter (${gpGateMode}): ${gpFilter.reason} — ${why}` });
+          gates.push({ gateKey: "game_plan", passed: true, reason: `GP filter (${gpGateMode}): ${gpFilter.reason} — ${why}` });
           console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction (${biasConf}% conf) — ${why}`);
         } else {
-          gates.push({ passed: true, reason: gpFilter.reason });
+          gates.push({ gateKey: "game_plan", passed: true, reason: gpFilter.reason });
         }
       }
       // ── News Impact Alignment Gate ──

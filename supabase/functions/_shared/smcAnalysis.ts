@@ -186,6 +186,9 @@ export interface GateResult {
   reason: string;
   /** Step 8: stable id for switchable gates (see _shared/simplification.ts). */
   gateId?: string;
+  /** Impulse-on-V3 step 4a: classification key for every gate (GATE_CLASS). Separate from gateId so attribution
+   *  gate names (classifyGate prefers gateId) and the existing log-only switches are unchanged. */
+  gateKey?: string;
   loggedOnly?: boolean;
   wouldBlock?: boolean;
 }

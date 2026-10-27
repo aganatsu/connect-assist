@@ -104,7 +104,27 @@ export function effectiveRiskPercent(sw: SimplificationSwitches, legacyRiskPerTr
 }
 
 export type GateId = "reaction" | "score" | "rr_legacy" | "news_event" | "news_alignment";
-export interface GateResult { passed: boolean; reason: string; gateId?: GateId; loggedOnly?: boolean; wouldBlock?: boolean }
+
+/**
+ * Every safety gate's key (gateKey, or gateId for the five gates that had one before step 4a), classified (Impulse-on-V3 step 4, owner decisions D1 = a / S1 / D2, 2026-10-26/27).
+ *   strategy — the legacy STRATEGY filters: under the V3 structure owner they run but only record (they are not part of the
+ *              strategy the shadow validated);
+ *   risk     — account / risk / execution rules: always enforced, whichever structure owns the trade.
+ * Pure metadata: nothing reads this for the legacy (Impulse) path, whose gate behaviour is unchanged.
+ */
+export const GATE_CLASS = {
+  direction_verdict: "strategy", htf_bias: "strategy", premium_discount: "strategy", conviction: "strategy", reaction: "strategy",
+  score: "strategy", smt: "strategy", rr_legacy: "strategy", opening_range: "strategy", kill_zone: "strategy", news_event: "strategy",
+  news_alignment: "strategy", fotsi: "strategy", atr_range: "strategy", tier1: "strategy", regime: "strategy", game_plan: "strategy",
+  spread_info: "strategy",
+  instrument_enabled: "risk", max_positions: "risk", per_symbol: "risk", portfolio_heat: "risk", daily_loss: "risk", drawdown: "risk",
+  cooldown: "risk", consecutive_losses: "risk", daily_dollar_loss: "risk", correlation: "risk",
+} as const satisfies Record<string, "strategy" | "risk">;
+export type AnyGateId = keyof typeof GATE_CLASS;
+/** Gate keys that only record (never block) when the V3 structure owns the trade. Read via gateKey ?? gateId. */
+export const gateKeyOf = (g: { gateKey?: string; gateId?: string }) => g.gateKey ?? g.gateId ?? null;
+export const V3_LOGGED_ONLY_GATE_IDS: ReadonlySet<string> = new Set(Object.entries(GATE_CLASS).filter(([, c]) => c === "strategy").map(([id]) => id));
+export interface GateResult { passed: boolean; reason: string; gateId?: GateId; gateKey?: string; loggedOnly?: boolean; wouldBlock?: boolean }
 
 /** Which gate ids are log-only under these switches. */
 export function loggedOnlyGateIds(sw: SimplificationSwitches): Set<GateId> {
