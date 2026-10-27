@@ -98,14 +98,16 @@ const REASONS: Record<string, string> = {
   no_fib_aligned: "no OB / FVG in the area of interest",
   no_daily_overlap: "no zone overlapping the daily range",
   no_zone_scored: "no zone scored high enough",
-  price_beyond_zone: "price is already past the zone",
   too_far_from_zone: "price is too far from the zone (more than 1.5 × ATR)",
   position_open: "a shadow trade is open on this pair",
   no_v3_structure: "V3 has no trend on this pair yet",
   day_not_enabled: "outside your trading days",
   warmup: "not enough history yet",
 };
-export function reasonText(reason: string): string {
+/** `dir` = the V3 direction. "price_beyond_zone" is the zone engine's side check failing: price is still more than 0.3 × ATR on the
+ *  approach side of the zone (above it for a long, below it for a short) — i.e. waiting for the pullback, NOT past the zone. */
+export function reasonText(reason: string, dir?: "long" | "short" | null): string {
+  if (reason === "price_beyond_zone") return `price hasn't pulled back to the zone yet (still more than 0.3 × ATR ${dir === "short" ? "below" : dir === "long" ? "above" : "away from"} it)`;
   if (REASONS[reason]) return REASONS[reason];
   if (reason.startsWith("session_not_enabled:")) return `outside your trading sessions (${reason.split(":")[1]})`;
   if (reason.startsWith("stop_geometry:")) return `stop rules rejected the order (${reason.split(":").slice(1).join(":")})`;

@@ -33,14 +33,14 @@ export function V3StoryPanel({ symbol }: { symbol: string }) {
         <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">V3 Story · Shadow</span>
         <span className="text-muted-foreground">{symbol} · 1H · as of {fmtUtc(d.t)} UTC</span>
       </div>
-      {!leg?.trend ? row("Trend", reasonText(d.reason)) : (
+      {!leg?.trend ? row("Trend", reasonText(d.reason, d.dir)) : (
         <>
           {row("Trend", <span className={bull ? "text-success font-bold" : "text-destructive font-bold"}>{bull ? "BULLISH" : "BEARISH"}</span>)}
           {row("Leg", <>from swing {bull ? "low" : "high"} {priceFmt(symbol, P)} ({fmtUtc(leg.swing_time)}) {bull ? "up to highest high" : "down to lowest low"} {priceFmt(symbol, X)} ({fmtUtc(leg.extreme_time)}){P != null && X != null ? ` · ${pipsBetween(symbol, P, X).toFixed(1)} pips` : ""}</>)}
           {row("Trend flips if", <>a candle closes {bull ? "below" : "above"} {priceFmt(symbol, P)}</>)}
           {pricePct != null && row("Price now", <>{priceFmt(symbol, d.price)} · {pricePct.toFixed(0)}% {bull ? "down from the high" : "up from the low"} ({(pricePct >= 50) === bull ? "in discount" : "in premium"})</>)}
           {mid != null && row("Area of interest", <>{bull ? "discount" : "premium"} half of the leg: {priceFmt(symbol, Math.min(mid, P!))} – {priceFmt(symbol, Math.max(mid, P!))}</>)}
-          {row("Zone", d.zone ? <>{d.zone.type.toUpperCase()} {priceFmt(symbol, d.zone.low)}–{priceFmt(symbol, d.zone.high)}{d.zone.fibDepth != null ? ` · ${(d.zone.fibDepth * 100).toFixed(0)}% retracement` : ""}{d.reason === "placed" || d.reason === "same_level_kept" ? " · best ranked" : ` · ${reasonText(d.reason)}`}</> : <>none — {reasonText(d.reason)}</>)}
+          {row("Zone", d.zone ? <>{d.zone.type.toUpperCase()} {priceFmt(symbol, d.zone.low)}–{priceFmt(symbol, d.zone.high)}{d.zone.fibDepth != null ? ` · ${(d.zone.fibDepth * 100).toFixed(0)}% retracement` : ""}{d.reason === "placed" || d.reason === "same_level_kept" ? " · best ranked" : ` · ${reasonText(d.reason, d.dir)}`}</> : <>none — {reasonText(d.reason, d.dir)}</>)}
           {d.order_plan && row("Order", <>{d.dir === "long" ? "BUY" : "SELL"} LIMIT {priceFmt(symbol, d.order_plan.entry)} · SL {priceFmt(symbol, d.order_plan.sl)} ({d.dir === "long" ? "below the swing low" : "above the swing high"}) · TP {priceFmt(symbol, d.order_plan.tp)} · risk {d.order_plan.riskPips.toFixed(0)} pips</>)}
           {order && row("Status", <>{statusText(order, symbol)} <span className="text-muted-foreground">({fmtUtc(order.statusAt)} UTC{order.status === "watching" || order.status === "in_zone" ? ` · expires ${fmtUtc(new Date(Date.parse(order.placedAt) + 8 * 3_600_000).toISOString())}` : ""})</span></>)}
           {row("4H trend", d.ctx4h ? <>{d.ctx4h === "bull" ? "BULLISH" : "BEARISH"} ({(d.ctx4h === "bull") === bull ? "agrees" : "against"})</> : "—")}
