@@ -3,14 +3,18 @@
  *
  * Signed-in owner only (their JWT; the row is keyed by their user id).
  *   {action: "status"}                         → mode, unlock state, V3 freshness, shadow summaries (A = external leg, B = internal leg)
- *   {action: "set", mode: "OFF"|"SHADOW"|"ON"}  → validated switch (ON only when unlocked and available), logged
+ *   {action: "set", mode: "OFF"|"SHADOW"|"ON", arm?: "A"|"B"} → validated switch (ON needs the arm and its unlock), logged;
+ *        entering / leaving ON also cancels the live orders on the V3 pairs that the other engine owned and marks / unmarks the
+ *        config (onSwitch.ts): ON is its own cohort
  *   {action: "feedback", cohortId, orderId, verdict: "right"|"wrong", note?} → the owner's chart check of one shadow order
  * The value is stored in structure_mode, NOT in bot_configs.config_json, so SHADOW does not change config_version (cohort).
- * Writes only structure_mode / structure_mode_log / iov3_shadow_feedback. No order, position or config is touched.
+ * Writes structure_mode / structure_mode_log / iov3_shadow_feedback; at an ON flip, through onSwitch.ts only, the live orders on the
+ * V3 pairs and config_json.structure. Open positions are never touched.
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { checkTransition, evaluateUnlock, MODES, summarize, type Mode } from "../_shared/iov3/modeControl.ts";
+import { enterOn, leaveOn } from "../_shared/iov3/onSwitch.ts";
 
 const BOT_ID = "smc";
 const respond = (data: unknown, status = 200) =>
@@ -29,10 +33,10 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
     const now = Date.now();
-    const { data: row } = await db.from("structure_mode").select("mode,set_at").eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
+    const { data: row } = await db.from("structure_mode").select("mode,set_at,arm,on_since,kill_reason").eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
     const mode: Mode = (row?.mode as Mode) ?? "OFF", setAt = row?.set_at ?? new Date(now).toISOString();
 
-    const unlockNow = async () => {
+    const unlockNow = async (forArm?: "A" | "B") => {
       const [{ count: repaints }, { data: staleRows }, { data: cohorts }] = await Promise.all([
         db.from("structure_v3_audit").select("*", { count: "exact", head: true }).eq("kind", "repaint").gte("recorded_at", setAt),
         db.from("structure_v3_audit").select("symbol,known_at").eq("kind", "stale").gte("recorded_at", setAt).limit(2000),
@@ -50,7 +54,7 @@ Deno.serve(async (req) => {
       }
       const v3Audit = (repaints ?? 0) + missedHours;
       const ids = (cohorts ?? []).map((c: { id: string }) => c.id);
-      let shadowAudit = 0, right = 0;
+      let shadowAudit = 0, right = 0, rightA = 0, rightB = 0;
       if (ids.length) {
         const { count } = await db.from("iov3_shadow_audit").select("*", { count: "exact", head: true }).in("cohort_id", ids).in("kind", ["mismatch", "error"]);
         shadowAudit = count ?? 0;
@@ -60,13 +64,14 @@ Deno.serve(async (req) => {
         // step 4 chooses the arm ON trades; until then ON unlocks on the better-checked arm
         const perArm = { A: 0, B: 0 } as Record<string, number>;
         for (const v of latest.values()) if (v.verdict === "right") perArm[v.arm] = (perArm[v.arm] ?? 0) + 1;
-        right = Math.max(perArm.A, perArm.B);
+        rightA = perArm.A; rightB = perArm.B;
+        right = forArm ? perArm[forArm] : Math.max(perArm.A, perArm.B);
       }
-      return { unlock: evaluateUnlock({ mode, setAtMs: Date.parse(setAt), nowMs: now, rightCount: right, v3AuditSince: v3Audit, shadowAuditSince: shadowAudit }), cohortIds: ids };
+      return { unlock: evaluateUnlock({ mode, setAtMs: Date.parse(setAt), nowMs: now, rightCount: right, v3AuditSince: v3Audit, shadowAuditSince: shadowAudit }), cohortIds: ids, rightA, rightB };
     };
 
     if (body.action === "status" || !body.action) {
-      const { unlock, cohortIds } = await unlockNow();
+      const { unlock, cohortIds, rightA, rightB } = await unlockNow();
       const { data: fresh } = await db.from("structure_v3_snapshots").select("symbol,known_at").eq("tf", "1H").order("known_at", { ascending: false }).limit(1);
       let summary = null, summaryB = null;
       if (cohortIds.length) {
@@ -74,18 +79,29 @@ Deno.serve(async (req) => {
         summary = summarize((ev ?? []).filter((e: { arm: string }) => e.arm === "A"));
         summaryB = summarize((ev ?? []).filter((e: { arm: string }) => e.arm === "B"));
       }
-      return respond({ mode, setAt, unlock, v3LatestClose: fresh?.[0]?.known_at ?? null, summary, summaryB });
+      return respond({ mode, setAt, arm: row?.arm ?? null, onSince: row?.on_since ?? null, killReason: row?.kill_reason ?? null, rightA, rightB, unlock, v3LatestClose: fresh?.[0]?.known_at ?? null, summary, summaryB });
     }
 
     if (body.action === "set") {
       const to = String(body.mode ?? "").toUpperCase() as Mode;
       if (!MODES.includes(to)) return respond({ error: `unknown mode ${body.mode}` }, 400);
-      const { unlock } = await unlockNow();
+      const arm = body.arm === "A" || body.arm === "B" ? body.arm : null;
+      if (to === "ON" && !arm) return respond({ error: "choose the leg ON trades: arm A (big leg) or B (scalp leg)" }, 400);
+      const { unlock } = await unlockNow(to === "ON" ? arm! : undefined);
       const ok = checkTransition(mode, to, unlock);
       if (!ok.ok) return respond({ error: ok.reason, mode }, 409);
       const at = new Date(now).toISOString();
-      // Update in place when the row exists, insert otherwise. Not an upsert: ON CONFLICT DO UPDATE would also rewrite user_id /
-      // bot_id, and the migration grants the service role UPDATE on (mode, set_at) only — the key columns stay immutable.
+      if (to === "ON") {
+        const r = await enterOn(db, userId, BOT_ID, mode, arm!, at);
+        console.log(`[structure-mode] ${userId.slice(0, 8)} ${mode} → ON (arm ${arm}); ${r.cancelledOrders} Impulse order(s) cancelled`);
+        return respond({ ok: true, mode: "ON", arm, setAt: at, cancelledOrders: r.cancelledOrders });
+      }
+      if (mode === "ON") {
+        const r = await leaveOn(db, userId, BOT_ID, to as "OFF" | "SHADOW", at);
+        console.log(`[structure-mode] ${userId.slice(0, 8)} ON → ${to}; ${r.cancelledOrders} V3 order(s) cancelled`);
+        return respond({ ok: true, mode: to, setAt: at, cancelledOrders: r.cancelledOrders });
+      }
+      // OFF ↔ SHADOW: update in place when the row exists, insert otherwise (the service role may update mode / set_at only)
       const { error: e1 } = row
         ? await db.from("structure_mode").update({ mode: to, set_at: at }).eq("user_id", userId).eq("bot_id", BOT_ID)
         : await db.from("structure_mode").insert({ user_id: userId, bot_id: BOT_ID, mode: to, set_at: at });

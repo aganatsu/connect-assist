@@ -175,8 +175,8 @@ Deno.test("every risk-percent use reads the single owner", () => {
   assert(!/riskPercent: pairConfig\.riskPerTrade/.test(scanner), "no sizing/record reads riskPerTrade directly");
   assert(!/Math\.min\(pairConfig\.riskPerTrade/.test(scanner), "broker mirror uses the owner too");
   assert(scanner.includes("effectiveRiskPercent(resolveSimplification((config as any).__rawConfigJson), config.riskPerTrade) / 100"), "heat-gate fallback");
-  // 5 + 2 in the Candidate C shadow's copy of the Route 2 sizing and frozen decision.
-  assertEquals((scanner.match(/riskPercent: pairRiskPercent/g) ?? []).length, 7);
+  // 5 + 2 in the Candidate C shadow's copy of the Route 2 sizing and frozen decision + 2 in V3 ON's sizing and frozen decision.
+  assertEquals((scanner.match(/riskPercent: pairRiskPercent/g) ?? []).length, 9);
 });
 
 Deno.test("Gate 14 pause comes from config; ICT risk is still gated by its own flag", () => {
