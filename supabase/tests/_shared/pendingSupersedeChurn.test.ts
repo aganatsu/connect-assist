@@ -105,7 +105,8 @@ Deno.test("a refreshed order is not also inserted", () => {
   // double the position if both filled.
   const refresh = scanner.indexOf('action: "refreshed_in_place"');
   // Step 15: the order is placed through placeRoute2Order (route2_place_order).
-  const insert = scanner.indexOf("await placeRoute2Order(supabase,");
+  // (the legacy Route 2 placement; V3 ON's own placement comes earlier in the file and has no refresh path)
+  const insert = scanner.indexOf("await placeRoute2Order(supabase, { attribution: route2Attribution,");
   assert(refresh > -1 && insert > refresh, "the guard must come before the insert");
   const between = scanner.slice(refresh, insert);
   assert(/continue;/.test(between), "the refreshed path must skip the insert");

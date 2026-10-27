@@ -102,7 +102,7 @@ import {
 } from "../_shared/route2Confirmation.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
-import { applyLoggedOnlyGates, effectiveRiskPercent, orderEffectiveRR, resolveSimplification, unifiedVsImpulse } from "../_shared/simplification.ts";
+import { applyLoggedOnlyGates, effectiveRiskPercent, gateKeyOf, orderEffectiveRR, resolveSimplification, unifiedVsImpulse, V3_LOGGED_ONLY_GATE_IDS } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
 import { buildAttribution } from "../_shared/attribution.ts";
@@ -153,6 +153,8 @@ import { createScanCache } from "../_shared/dataCache.ts";
 import { liveWriterConfig, writeLiveStructureBars } from "../_shared/structure/structureBarsWriter.ts";
 import { liveWriter5mConfig, writeLiveStructureBars5m } from "../_shared/structure/structureBarsWriter5m.ts";
 import { recordStructureBarsWhileFull } from "../_shared/structure/recordWhileFull.ts";
+import { STRUCTURE_PAIRS } from "../_shared/structure/canonicalBars.ts";
+import { isV3Order, latestDecision, legAsImpulse, loadOnContext, planFromDecision, v3TrendNow, v3ZoneType, fxOpenAt, V3_ENGINE_VERSION, type OnContext, type ShadowDecisionRow } from "../_shared/iov3/onMode.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -2593,6 +2595,20 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   const dryRunActive = account.entries_locked === true && simp.dryRunWhenLocked;
   const isPaused = dryRunActive ? false : (account.is_paused || account.entries_locked === true);
 
+  // ── Impulse-on-V3 ON (step 4b) ── inert unless structure_mode.mode = 'ON' AND config_json.structure.owner = 'v3'
+  // (onMode.ts). One read of structure_mode per cycle when OFF; any error reads as OFF (never blocks the scan).
+  let v3On: OnContext = { on: false, reason: "not loaded" };
+  try {
+    v3On = await loadOnContext(supabase, userId, BOT_ID, (config as any).__rawConfigJson ?? null, resolvedStyle, simp.styleOverridesMode);
+  } catch (e: any) {
+    v3On = { on: false, reason: `load error: ${e?.message ?? e}` };
+  }
+  const _v3TrendCache = new Map<string, Promise<"bull" | "bear" | null>>();
+  const v3TrendFor = (symbol: string) => {
+    if (!_v3TrendCache.has(symbol)) _v3TrendCache.set(symbol, v3TrendNow(supabase, symbol, V3_ENGINE_VERSION).catch(() => null));
+    return _v3TrendCache.get(symbol)!;
+  };
+
   // ── Compute average commission per lot across active broker connections ──
   // Used in R:R gating and lot sizing. Reads commission_per_lot (user-set) or detected_commission_per_lot (auto-learned).
   let avgCommissionPerLot = 0;
@@ -3878,7 +3894,45 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         // orders whose original trade thesis has been invalidated.
         // Fail-open: errors/missing data never cause cancellation.
         // ═══════════════════════════════════════════════════════════════════
-        if ((config as any).thesisValidationEnabled !== false) {
+        // ── Impulse-on-V3 ON (step 4b): a V3 order's structural thesis is the V3 trend, not the legacy direction engine ──
+        // The legacy thesis checks (direction re-run, FOTSI, Game Plan) are strategy filters: for V3 orders they do not cancel
+        // (owner decision D1 = a). The one structural cancel is "V3 trend flipped" (the leg-broken cancel is the existing
+        // impulse-broken check, fed the V3 leg). Fail-open: no snapshot → keep the order.
+        if (isV3Order(pending)) {
+          try {
+            const v3Trend = await v3TrendFor(pending.symbol);
+            if (v3Trend && (v3Trend === "bull") !== (pending.direction === "long")) {
+              const why = `V3 trend flipped to ${v3Trend === "bull" ? "bullish" : "bearish"}`;
+              await supabase.from("pending_orders").update({
+                status: "cancelled",
+                terminal_reason: "CANCELLED_DIRECTION_FLIP" as TerminalReason,
+                reset_reason: "direction_flip",
+                hard_invalidation: true,
+                cancel_reason: why,
+                resolved_at: new Date().toISOString(),
+              }).eq("order_id", pending.order_id).eq("user_id", userId);
+              pollCtx.branch = "v3_trend_flip"; pollCtx.after = "cancelled";
+              if (!isShadow) pendingCancelled++;
+              console.log(`[pending] V3 TREND FLIP: ${pending.symbol} ${pending.direction} — ${why}`);
+              if (!isShadow && telegramChatIds.length > 0 && shouldNotify("thesis_invalidated")) {
+                const msg = `⚠️ <b>V3 Trend Flipped — Order Cancelled</b>\n\n<b>Symbol:</b> ${pending.symbol}\n<b>Direction:</b> ${pending.direction.toUpperCase()}\n<b>Reason:</b> ${why}`;
+                await Promise.all(telegramChatIds.map(async (chatId: string) => {
+                  try {
+                    await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                      body: JSON.stringify({ chat_id: chatId, message: msg }),
+                    });
+                  } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+                }));
+              }
+              continue;
+            }
+          } catch (v3Err: any) {
+            console.warn(`[pending] V3 trend check error for ${pending.symbol}: ${v3Err?.message}`);
+          }
+        }
+        if ((config as any).thesisValidationEnabled !== false && !isV3Order(pending)) {
           try {
             const thesisStyleAware = (config as any).thesisDirectionStyleAware === true;
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
@@ -5669,6 +5723,13 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       hourlyPassed: hourlyCandles.length > 0,
       pairConfig: sanitizeConfigForCapture(pairConfig),
     };
+    // ── Impulse-on-V3 ON (step 4b): the V3 trend owns direction on V3 pairs — the shadow's decision at the last 1H close ──
+    let v3Decision: ShadowDecisionRow | null = null;
+    const v3OwnsPair = v3On.on && (STRUCTURE_PAIRS as readonly string[]).includes(pair);
+    if (v3On.on && v3OwnsPair) {
+      try { v3Decision = await latestDecision(supabase, v3On.cohortId, v3On.arm, pair); } catch { v3Decision = null; }
+      (pairConfig as any)._overrideDirection = v3Decision?.dir ?? null;
+    }
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
 
     // ── Structure shadow telemetry (flag: STRUCTURE_CANONICAL_SHADOW) ──
@@ -6038,6 +6099,157 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         } : null,
       },
     };
+
+    // ══ Impulse-on-V3 ON (step 4b; owner decisions D1 = a, S1, S2, S3) ════════════════════════════════════════════════
+    // On a V3 pair under ON, the order is the SHADOW'S OWN decision (onMode.planFromDecision), placed through the real
+    // Route 2 path: risk gates enforce, the legacy strategy gates only record, the stop/target/size come from the scanner's own
+    // Route 2 rules (shadowRoute2Geometry) and must reproduce the shadow's planned stop. No legacy strategy step runs for the pair.
+    if (v3On.on && v3OwnsPair) {
+      const v3Arm = v3On.arm;
+      cap.reached_stage = "gates";
+      const v3Skip = (status: string, why: string) => {
+        detail.status = status; detail.skipReason = why; (detail as any).v3On = { arm: v3Arm, decisionAt: v3Decision?.t ?? null, reason: why };
+        scanDetails.push(detail);
+      };
+      const plan = planFromDecision(v3Decision, v3On.params[pair], Date.now());
+      if (!plan.ok) { v3Skip("v3_no_order", `V3 ON (${v3Arm}): ${plan.reason}`); continue; }
+      if (isPaused) { v3Skip("paused", `V3 ON (${v3Arm}): account paused / entries locked`); continue; }
+      if (!fxOpenAt(Date.now())) { v3Skip("v3_no_order", `V3 ON (${v3Arm}): FX closed`); continue; }
+      const v3Spec = SPECS[pair] || SPECS["EUR/USD"];
+      const { data: v3Live } = await supabase.from("pending_orders").select("order_id,entry_price,direction,entry_zone_type,status")
+        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("symbol", pair).in("status", ["pending", "awaiting_confirmation"]);
+      const sameLevel = (v3Live ?? []).find((o: any) => isV3Order(o) && o.direction === plan.dir && Math.abs(Number(o.entry_price) - plan.entry) <= v3Spec.pipSize);
+      if (sameLevel) { v3Skip("v3_order_kept", `V3 ON (${v3Arm}): order ${sameLevel.order_id} already live at this level`); continue; }
+      // Risk gates enforce; the legacy strategy gates run but only record (GATE_CLASS / V3_LOGGED_ONLY_GATE_IDS)
+      const v3Gates = (await runSafetyGates(
+        supabase, userId, pair, plan.dir, analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
+        rateMap, null, null, propFirmGateResult?.enabled || false,
+      )).map((g: any) => {
+        const k = gateKeyOf(g);
+        if (!k || !V3_LOGGED_ONLY_GATE_IDS.has(k)) return g;
+        return g.passed ? { ...g, loggedOnly: true, wouldBlock: false } : { ...g, passed: true, loggedOnly: true, wouldBlock: true, reason: `[V3: recorded only] ${g.reason}` };
+      });
+      detail.gates = v3Gates;
+      const v3Blocking = v3Gates.filter((g: any) => !g.passed);
+      if (v3Blocking.length) { v3Skip("v3_risk_blocked", `V3 ON (${v3Arm}): ${v3Blocking.map((g: any) => g.reason).join("; ")}`); continue; }
+      if (propFirmGateResult.enabled && !propFirmGateResult.allowed) { v3Skip("v3_risk_blocked", `V3 ON (${v3Arm}): risk profile — ${propFirmGateResult.reason}`); continue; }
+      const v3Params = v3On.params[pair] as { tpRatio: number };
+      const v3H1Atr = hourlyCandles.length >= 15 ? calculateATR(hourlyCandles, 14) : null;
+      const v3Geo = shadowRoute2Geometry({
+        direction: plan.dir, limit: plan.entry, lastPrice: analysis.lastPrice, h1Atr: v3H1Atr,
+        marketSL: plan.planSL, tpRatio: v3Params.tpRatio, stopAnchor: "limit",
+        swingSL: null, impulseSL: plan.impulseSL, impulseCapPips: plan.impulseCapPips, minSlPips: plan.minSlPips,
+        pipSize: v3Spec.pipSize, symbol: pair, rateMap, commissionPerLot: avgCommissionPerLot,
+        orderRRMin: simp.orderRRMin, rrGateMode: simp.rrGateMode, sizingMode: simp.sizingMode, balance,
+        riskPercent: simp.riskPercent, maxLotsPerTrade: simp.maxLotsPerTrade,
+        legacyLots: (entry: number, stop: number) => computePositionSize({
+          balance, riskPercent: pairRiskPercent, entryPrice: entry, stopLoss: stop, symbol: pair,
+          method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize,
+          atrValue: atrForConsumers, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot,
+        }).lots,
+        halveLegacy: false,
+      });
+      if (!v3Geo.ok) { v3Skip(v3Geo.status, `V3 ON (${v3Arm}): ${v3Geo.reason}`); continue; }
+      if (Math.abs(v3Geo.stop - plan.planSL) > v3Spec.pipSize * 0.01 || Math.abs(v3Geo.target - plan.planTP) > v3Spec.pipSize * 0.01) {
+        v3Skip("v3_geometry_mismatch", `V3 ON (${v3Arm}): live stop/target ${v3Geo.stop}/${v3Geo.target} ≠ shadow plan ${plan.planSL}/${plan.planTP}`); continue;
+      }
+      const v3PlacedAt = new Date().toISOString(), v3ExpiresAt = route2ExpiresAt(v3PlacedAt);
+      const v3EntrySource: Route2EntrySource = plan.zone.refinedEntry != null ? "refinedEntry" : "zoneMid";
+      const v3Impulse = legAsImpulse(plan.dir, plan.leg.origin, plan.leg.extreme);
+      const v3Cfg = (config as any).__configVersion as string | null;
+      if (!(typeof v3Cfg === "string" && /^[0-9a-f]{32}$/.test(v3Cfg))) { v3Skip("attribution_invalid", `V3 ON (${v3Arm}): canonical config hash unavailable`); continue; }
+      const v3Telem = buildRoute2OrderTelemetry({
+        zoneId: route2ZoneId(pair, "1h", plan.dir, Number(plan.zone.high), Number(plan.zone.low)), zoneTimeframe: "1h", zoneCreatedAt: null,
+        pendingCreatedAt: v3PlacedAt, entrySource: v3EntrySource, pendingEntryPrice: plan.entry, currentPriceAtCreation: analysis.lastPrice,
+        h1Atr: v3H1Atr, distanceAtr: v3Geo.distanceAtr, initialStopLoss: v3Geo.stop, initialTakeProfit: v3Geo.target,
+        configHash: v3Cfg, wouldHaveBeenRoute1: false, zoneStory: null,
+      });
+      const v3ExitFlags = {
+        trailingStopEnabled: pairConfig.trailingStopEnabled, trailingStopPips: pairConfig.trailingStopPips, trailingStopActivation: pairConfig.trailingStopActivation,
+        trailingStopActivated: false, trailingStopLevel: null as number | null,
+        breakEvenEnabled: pairConfig.breakEvenEnabled, breakEvenPips: pairConfig.breakEvenPips, breakEvenOffsetPips: pairConfig.breakEvenOffsetPips, breakEvenActivated: false,
+        partialTPEnabled: pairConfig.partialTPEnabled, partialTPPercent: pairConfig.partialTPPercent, partialTPLevel: pairConfig.partialTPLevel, partialTPActivated: false,
+        maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours, tpRatio: v3Params.tpRatio,
+      };
+      const v3Ctx = { arm: v3Arm, cohortId: v3On.cohortId, decisionAt: plan.decisionAt, leg: plan.leg, zone: plan.zone, plan: { entry: plan.entry, sl: plan.planSL, tp: plan.planTP } };
+      const v3Row: Record<string, unknown> = {
+        user_id: userId, bot_id: BOT_ID, order_id: crypto.randomUUID().slice(0, 8), ...v3Telem,
+        symbol: pair, direction: plan.dir, order_type: "limit", entry_price: plan.entry,
+        frozen_strategy_context: buildFrozenDecision({
+          route: "pending-order", balanceAtEntry: balance, riskPercent: pairRiskPercent, sizeLots: v3Geo.size, entryPrice: plan.entry,
+          stopAtEntry: v3Geo.stop, pipSize: v3Spec.pipSize, slFloor: null, sizing: { mode: simp.sizingMode, plannedSizing: v3Geo.plannedSizing },
+          tradingStyle: config.tradingStyle?.mode ?? null, leg: null,
+        }),
+        current_price: analysis.lastPrice, stop_loss: v3Geo.stop, take_profit: v3Geo.target, size: v3Geo.size,
+        entry_zone_type: v3ZoneType(v3Arm, plan.zone.type), entry_zone_low: plan.zone.low, entry_zone_high: plan.zone.high,
+        refined_zone_low: null, refined_zone_high: null, status: "pending", expiry_minutes: ROUTE2_TTL_MINUTES, expires_at: v3ExpiresAt,
+        signal_reason: JSON.stringify({ bot: BOT_ID, summary: `V3 ON (${v3Arm}) — shadow decision ${plan.decisionAt}`, v3: v3Ctx,
+          impulseZone: { impulse: v3Impulse, bestZone: { type: plan.zone.type, low: plan.zone.low, high: plan.zone.high, refinedEntry: plan.zone.refinedEntry } },
+          gates: v3Gates, originalSL: v3Geo.stop, originalTP: v3Geo.target, exitFlags: v3ExitFlags }),
+        signal_score: analysis.score, setup_type: `v3_${v3Arm}`, setup_confidence: null,
+        from_watchlist: false, staged_cycles: 0, staged_initial_score: null, exit_flags: v3ExitFlags, placed_at: v3PlacedAt,
+        dry_run: dryRunActive, dry_run_context: dryRunActive ? { switches: simp, v3: v3Ctx, orderRR: v3Geo.orderRR, route2Stop: v3Geo.route2Stop, plannedSizing: v3Geo.plannedSizing } : null,
+        config_hash: v3Cfg,
+      };
+      let v3Attr: Record<string, unknown> | null = null;
+      try {
+        const pfDecision = propFirmGateResult.decision;
+        v3Attr = buildAttribution({
+          signalId: crypto.randomUUID(), decisionId: cap.id as string, scanCycleId, userId, botId: BOT_ID,
+          symbol: pair, direction: plan.dir, dryRun: dryRunActive, decisionAt: v3PlacedAt, configVersion: v3Cfg,
+          strategyVersion: String((v3Telem as any).strategy_version ?? "unknown"), switches: simp, legacyRiskPercent: pairConfig.riskPerTrade,
+          management: { breakEvenEnabled: pairConfig.breakEvenEnabled, trailingStopEnabled: pairConfig.trailingStopEnabled,
+            partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
+          caps: resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig), impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
+          riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null, promotedFromWatchlist: null,
+          entrySource: v3EntrySource, izGateMode: "hard", gamePlanEnabled: (config as any).gamePlanEnabled !== false,
+          gamePlanContext: (pairConfig as any)._gamePlanContext ?? null, directionVerdict: null,
+          impulse: { hasZone: true, selectedTF: "1h", impulse: v3Impulse, bestZone: plan.zone },
+          obFvgZone: null, unifiedDetected: null, unifiedComparison: null,
+          gateScore: Number.isFinite(analysis.score) ? analysis.score : null, decisionScoreGate: null,
+          factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+          gates: v3Gates as any, ictFvgGate: null, orderRR: v3Geo.orderRR as any, loggedOnlyWouldBlock: v3Gates.filter((g: any) => g.wouldBlock).map((g: any) => ({ gateId: gateKeyOf(g) ?? "unclassified", reason: String(g.reason) })),
+          tpSmallGate: null,
+          riskGate: propFirmGateResult.enabled ? {
+            enabled: true, allowed: propFirmGateResult.allowed, reason: propFirmGateResult.reason,
+            severity: pfDecision?.severity ?? null, trading_day: propFirmGateResult.tradingDay ?? null,
+            day_start_balance: pfDecision?.dayStartBalance ?? null, equity: pfDecision?.equity ?? null,
+            daily_loss_usd: pfDecision?.dailyLossUsd ?? null, thresholds: pfDecision?.thresholds ?? null,
+          } : { enabled: false, allowed: true, reason: "no active risk profile" },
+          zoneId: (v3Telem as any).zone_id ?? null, entryDepth: null,
+          limitPrice: plan.entry, stopPrice: v3Geo.stop, targetPrice: v3Geo.target, pipSize: v3Spec.pipSize,
+          route2Stop: v3Geo.route2Stop as any, plannedSizing: v3Geo.plannedSizing as any, balance, expiresAt: v3ExpiresAt,
+        });
+      } catch (e: any) {
+        v3Skip("attribution_invalid", `V3 ON (${v3Arm}): attribution build failed — ${e?.message ?? e}`); continue;
+      }
+      // ON owns the V3 pair: a new V3 order replaces every live order on it (the shadow's supersede rule)
+      const v3Supersede = (v3Live ?? []).map((o: any) => ({ order_id: o.order_id, cancel_reason: `V3 ON (${v3Arm}): superseded by the ${plan.decisionAt} V3 decision` }));
+      const v3Placement = await placeRoute2Order(supabase, { attribution: v3Attr!, order: v3Row, supersede: v3Supersede });
+      (detail as any).v3On = { arm: v3Arm, decisionAt: plan.decisionAt, outcome: v3Placement.outcome, superseded: v3Placement.superseded, orderRR: v3Geo.orderRR };
+      if (v3Placement.outcome === "placed") {
+        detail.status = "v3_order_placed";
+        detail.reason = `V3 ON (${v3Arm}): ${plan.dir.toUpperCase()} LIMIT ${plan.entry} · SL ${v3Geo.stop} · TP ${v3Geo.target} · ${v3Geo.size} lots`;
+        console.log(`[v3-on] ${pair} ${detail.reason}${v3Placement.superseded.length ? ` (superseded ${v3Placement.superseded.length})` : ""}`);
+        if (!dryRunActive && telegramChatIds.length > 0 && shouldNotify("zone_setup_active")) {
+          const msg = `🧭 <b>V3 Zone Setup ACTIVE (${v3Arm === "A" ? "big leg" : "scalp leg"})</b>\n\n<b>Symbol:</b> ${pair}\n<b>Direction:</b> ${plan.dir.toUpperCase()}\n<b>Limit:</b> ${plan.entry}\n<b>SL:</b> ${v3Geo.stop}\n<b>TP:</b> ${v3Geo.target}`;
+          await Promise.all(telegramChatIds.map(async (chatId: string) => {
+            try {
+              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                body: JSON.stringify({ chat_id: chatId, message: msg }),
+              });
+            } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+          }));
+        }
+      } else {
+        detail.status = `v3_${v3Placement.outcome}`;
+        detail.skipReason = `V3 ON (${v3Arm}): order not placed — ${v3Placement.code}: ${v3Placement.error ?? ""}`;
+        console.warn(`[v3-on] ${pair} ${detail.skipReason}`);
+      }
+      scanDetails.push(detail);
+      continue;
+    }
 
     // ── V2 structural order blocks (SHADOW MODE) ──────────────────────────
     // Structure-first detection: the base that produced a validated impulse,

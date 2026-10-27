@@ -5,22 +5,22 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Lock } from "lucide-react";
-import { structureModeApi, fmtUtc, type StructureMode } from "@/lib/structureMode";
+import { structureModeApi, fmtUtc, ARM_LABEL, type ShadowArm, type StructureMode } from "@/lib/structureMode";
 
 const DESCRIPTIONS: Record<StructureMode, string> = {
   OFF: "The bot trades exactly as now (Impulse structure). Nothing V3-related runs.",
   SHADOW: "The bot still trades exactly as now. Beside it, V3 records what it WOULD do — see the V3 Story under each Zone Story and the V3 Shadow section in Pending Orders. No real orders.",
-  ON: "The bot uses V3 structure for real (V3 trend + leg, Impulse zone inside it, Route 2 order). Starts a new cohort.",
+  ON: "The bot trades V3 structure for real: each hour it places the shadow's decision for the chosen leg as a Route 2 order (your account rules still apply). Starts a new cohort; drops back to SHADOW automatically at −8R.",
 };
 
 export function StructureEngineSection() {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["structure-mode"], queryFn: structureModeApi.status, refetchInterval: 60_000 });
   const setMode = useMutation({
-    mutationFn: (m: StructureMode) => structureModeApi.set(m),
-    onSuccess: (r, m) => {
+    mutationFn: (a: { m: StructureMode; arm?: ShadowArm }) => structureModeApi.set(a.m, a.arm),
+    onSuccess: (r, a) => {
       if (r?.error) { toast.error(r.error); return; }
-      toast.success(`Structure engine: ${m}`);
+      toast.success(`Structure engine: ${a.m}${a.arm ? ` · ${ARM_LABEL[a.arm]}` : ""}${r?.cancelledOrders ? ` — ${r.cancelledOrders} pending order(s) cancelled` : ""}`);
       qc.invalidateQueries({ queryKey: ["structure-mode"] });
       qc.invalidateQueries({ queryKey: ["v3-story"] });
       qc.invalidateQueries({ queryKey: ["v3-shadow-orders"] });
@@ -49,8 +49,11 @@ export function StructureEngineSection() {
               disabled={locked || active || setMode.isPending || status.isLoading}
               title={locked ? s?.unlock.reason : DESCRIPTIONS[m]}
               onClick={() => {
-                if (m === "ON" && !window.confirm("Switch to ON? The bot will trade V3 structure on this account, and a new cohort starts.")) return;
-                setMode.mutate(m);
+                if (m !== "ON") { setMode.mutate({ m }); return; }
+                const pick = window.prompt(`Switch to ON — which leg should the bot trade?\n\nA = Big leg (${s?.rightA ?? 0} setups marked ✓)\nB = Scalp leg (${s?.rightB ?? 0} setups marked ✓)\n\nType A or B. Your Impulse pending orders on the V3 pairs are cancelled (open positions keep running) and a new cohort starts.`);
+                const arm = pick?.trim().toUpperCase();
+                if (arm !== "A" && arm !== "B") { if (pick !== null) toast.error("Type A or B"); return; }
+                setMode.mutate({ m, arm });
               }}
               className={`px-4 h-8 text-[11px] font-semibold tracking-wider border-r last:border-r-0 border-border flex items-center gap-1 ${
                 active ? (m === "OFF" ? "bg-muted text-foreground" : m === "SHADOW" ? "bg-info/15 text-info" : "bg-success/15 text-success") : "text-muted-foreground hover:bg-muted/40"
@@ -61,7 +64,8 @@ export function StructureEngineSection() {
           );
         })}
       </div>
-      <p className="text-[10px] text-muted-foreground">{DESCRIPTIONS[mode]}</p>
+      <p className="text-[10px] text-muted-foreground">{DESCRIPTIONS[mode]}{mode === "ON" && s?.arm ? ` Trading: ${ARM_LABEL[s.arm]}${s.onSince ? ` since ${fmtUtc(s.onSince)} UTC` : ""}.` : ""}</p>
+      {s?.killReason && mode !== "ON" && <p className="text-[10px] text-destructive">ON stopped automatically: {s.killReason}</p>}
       {status.isError && <p className="text-[10px] text-destructive">Could not load the switch status.</p>}
       {s && (
         <div className="text-[10px] font-mono text-muted-foreground space-y-0.5">
@@ -73,7 +77,7 @@ export function StructureEngineSection() {
               {sm.voided ? ` · ${sm.voided} void (data gap)` : ""} · net {sm.netR > 0 ? "+" : ""}{sm.netR.toFixed(2)}R
             </div>
           ))}
-          {mode !== "ON" && <div>ON: {s.unlock.reason} · setups marked ✓: {s.unlock.right}</div>}
+          {mode !== "ON" && <div>ON: {s.unlock.reason} · setups marked ✓: big leg {s.rightA ?? 0}, scalp leg {s.rightB ?? 0}</div>}
         </div>
       )}
     </div>

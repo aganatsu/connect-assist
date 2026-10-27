@@ -8,7 +8,7 @@ import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224
 import { PGlite } from "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js";
 
 const read = (f: string) => Deno.readTextFileSync(new URL(`../../../migrations/${f}`, import.meta.url));
-const PR2 = read("20261015000000_structure_bars_1h.sql"), PR3 = read("20261027000000_structure_v3_state.sql"), M5 = read("20261027120000_structure_bars_5m.sql"), SHADOW = read("20261028000000_iov3_shadow.sql"), ARMB = read("20261027200000_iov3_shadow_arm_b.sql");
+const PR2 = read("20261015000000_structure_bars_1h.sql"), PR3 = read("20261027000000_structure_v3_state.sql"), M5 = read("20261027120000_structure_bars_5m.sql"), SHADOW = read("20261028000000_iov3_shadow.sql"), ARMB = read("20261027200000_iov3_shadow_arm_b.sql"), ON = read("20261028100000_iov3_on.sql");
 const PGLITE_DIST = "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist";
 let assets: Promise<{ wasmModule: WebAssembly.Module; fsBundle: Blob }> | null = null;
 const pgliteAssets = () => assets ??= (async () => ({
@@ -33,7 +33,7 @@ async function freshDb(): Promise<any> {
       grant execute on function auth.uid() to authenticated;
       insert into auth.users values ('${U1}'), ('${U2}');`);
     // applied in production order: the arm-B migration was applied after the shadow tables existed
-    await db.exec(PR2); await db.exec(PR3); await db.exec(M5); await db.exec(SHADOW); await db.exec(ARMB);
+    await db.exec(PR2); await db.exec(PR3); await db.exec(M5); await db.exec(SHADOW); await db.exec(ARMB); await db.exec(ON);
     return db;
   } finally {
     if (desc) Object.defineProperty(g, "process", desc); else delete g.process;
@@ -130,4 +130,17 @@ Deno.test("arm B: per-arm keys (same pair + hour for A and B), arm CHECK, existi
   await db.query(`insert into public.structure_v3_snapshots (symbol, tf, known_at, bar_time, engine_version, trend, state_hash, il_time, il_price, il_x_time, il_x_price)
                   values ('NZD/CHF', '1H', '2026-10-27 01:00+00', '2026-10-27 00:00+00', 'v', 'bull', 'h', '2026-10-02 12:00+00', 0.46338, '2026-10-27 00:00+00', 0.47142)`);
   assertEquals((await db.query(`select il_price::float8 p from public.structure_v3_snapshots`)).rows, [{ p: 0.46338 }]);
+});
+
+Deno.test("ON migration: arm A|B only, ON always has an arm, the service role may set arm / on_since / kill_reason but never the keys", async () => {
+  const db = await freshDb();
+  await db.exec(`set role service_role;`);
+  await db.query(`insert into public.structure_mode (user_id, bot_id, mode, set_at) values ($1, 'smc', 'SHADOW', now())`, [U1]);
+  await assertRejects(() => db.query(`update public.structure_mode set mode = 'ON' where user_id = $1`, [U1]), Error, "violates check constraint", "ON without an arm");
+  await assertRejects(() => db.query(`update public.structure_mode set arm = 'C' where user_id = $1`, [U1]), Error, "violates check constraint");
+  await db.query(`update public.structure_mode set mode = 'ON', arm = 'B', on_since = now(), kill_reason = null, set_at = now() where user_id = $1`, [U1]);
+  assertEquals((await db.query(`select mode, arm from public.structure_mode where user_id = $1`, [U1])).rows, [{ mode: "ON", arm: "B" }]);
+  await db.query(`update public.structure_mode set mode = 'SHADOW', kill_reason = 'ON net -8.10R ≤ -8R' where user_id = $1`, [U1]);
+  await assertRejects(() => db.query(`update public.structure_mode set user_id = user_id where user_id = $1`, [U1]), Error, "permission denied");
+  await db.exec(`reset role;`);
 });
