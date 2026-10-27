@@ -210,10 +210,14 @@ export type SeriesOverride = (tdSymbol: string, tdInterval: string) => { open: n
 export async function withStubbedNetwork<T>(
   db: FakeDb, calls: CallRecord[], baseMs: number, priceOf: (s: string) => number, fn: () => Promise<T>,
   override?: SeriesOverride,
+  /** Optional responder for broker (MetaApi) requests; null = fall through to the default 404. */
+  broker?: (url: string, init?: RequestInit) => Response | null,
 ): Promise<T> {
   const realFetch = globalThis.fetch;
   globalThis.fetch = ((input: string | URL | Request, _init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const b = broker && url.includes("agiliumtrade.ai") ? broker(url, _init) : null;
+    if (b) { calls.push({ kind: "other", url, phase: db.phase }); return Promise.resolve(b); }
     if (url.includes("api.twelvedata.com")) {
       calls.push({ kind: "provider", url: url.replace(/apikey=[^&]+/, "apikey=***"), phase: db.phase });
       const u = new URL(url);

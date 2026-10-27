@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Lock } from "lucide-react";
 import { structureModeApi, fmtUtc, ARM_LABEL, type ShadowArm, type StructureMode } from "@/lib/structureMode";
+import { brokerPriceSummary } from "@/lib/brokerPriceLog";
 
 const DESCRIPTIONS: Record<StructureMode, string> = {
   OFF: "The bot trades exactly as now (Impulse structure). Nothing V3-related runs.",
@@ -28,6 +29,8 @@ export function StructureEngineSection() {
     onError: (e: Error) => toast.error(e.message),
   });
   const s = status.data, mode: StructureMode = s?.mode ?? "OFF";
+  // Broker vs bot (step 4c, S3 = measure first): last 7 days of MT5 copies, every mirrored trade (Impulse and V3)
+  const broker = useQuery({ queryKey: ["broker-price-summary"], queryFn: () => brokerPriceSummary(new Date(Date.now() - 7 * 86_400_000).toISOString()), refetchInterval: 300_000 });
   const v3Age = s?.v3LatestClose ? (Date.now() - Date.parse(s.v3LatestClose)) / 3_600_000 : null;
 
   return (
@@ -78,6 +81,21 @@ export function StructureEngineSection() {
             </div>
           ))}
           {mode !== "ON" && <div>ON: {s.unlock.reason} · setups marked ✓: big leg {s.rightA ?? 0}, scalp leg {s.rightB ?? 0}</div>}
+        </div>
+      )}
+      {broker.data && (
+        <div className="text-[10px] font-mono text-muted-foreground space-y-0.5 pt-1 border-t border-border">
+          <div className="font-sans">
+            Broker vs bot, last 7 days (all trades copied to MT5). Slippage in pips, + = MT5 got the worse price. "MT5 closed first" = MT5 shut the trade before the bot did; rollover = 20:50–21:30 UTC.
+          </div>
+          {broker.data.length === 0 && <div>No MT5 copies recorded yet.</div>}
+          {broker.data.map((b) => (
+            <div key={b.symbol}>
+              {b.symbol}: {b.fills} copied{b.v3 ? ` (${b.v3} V3)` : ""}{b.avgEntrySlip != null ? `, entry ${b.avgEntrySlip > 0 ? "+" : ""}${b.avgEntrySlip}p` : ""}
+              {b.noCopy ? ` · ${b.noCopy} not copied` : ""} · {b.closes} closed{b.avgCloseSlip != null ? `, exit ${b.avgCloseSlip > 0 ? "+" : ""}${b.avgCloseSlip}p` : ""}
+              {b.brokerFirst ? ` · MT5 closed first ${b.brokerFirst} (${b.brokerFirstRollover} at rollover)` : ""}
+            </div>
+          ))}
         </div>
       )}
     </div>

@@ -8,7 +8,7 @@ import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224
 import { PGlite } from "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js";
 
 const read = (f: string) => Deno.readTextFileSync(new URL(`../../../migrations/${f}`, import.meta.url));
-const PR2 = read("20261015000000_structure_bars_1h.sql"), PR3 = read("20261027000000_structure_v3_state.sql"), M5 = read("20261027120000_structure_bars_5m.sql"), SHADOW = read("20261028000000_iov3_shadow.sql"), ARMB = read("20261027200000_iov3_shadow_arm_b.sql"), ON = read("20261028100000_iov3_on.sql");
+const PR2 = read("20261015000000_structure_bars_1h.sql"), PR3 = read("20261027000000_structure_v3_state.sql"), M5 = read("20261027120000_structure_bars_5m.sql"), SHADOW = read("20261028000000_iov3_shadow.sql"), ARMB = read("20261027200000_iov3_shadow_arm_b.sql"), ON = read("20261028100000_iov3_on.sql"), BPL = read("20261028200000_broker_price_log.sql");
 const PGLITE_DIST = "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist";
 let assets: Promise<{ wasmModule: WebAssembly.Module; fsBundle: Blob }> | null = null;
 const pgliteAssets = () => assets ??= (async () => ({
@@ -33,7 +33,7 @@ async function freshDb(): Promise<any> {
       grant execute on function auth.uid() to authenticated;
       insert into auth.users values ('${U1}'), ('${U2}');`);
     // applied in production order: the arm-B migration was applied after the shadow tables existed
-    await db.exec(PR2); await db.exec(PR3); await db.exec(M5); await db.exec(SHADOW); await db.exec(ARMB); await db.exec(ON);
+    await db.exec(PR2); await db.exec(PR3); await db.exec(M5); await db.exec(SHADOW); await db.exec(ARMB); await db.exec(ON); await db.exec(BPL);
     return db;
   } finally {
     if (desc) Object.defineProperty(g, "process", desc); else delete g.process;
@@ -142,5 +142,25 @@ Deno.test("ON migration: arm A|B only, ON always has an arm, the service role ma
   assertEquals((await db.query(`select mode, arm from public.structure_mode where user_id = $1`, [U1])).rows, [{ mode: "ON", arm: "B" }]);
   await db.query(`update public.structure_mode set mode = 'SHADOW', kill_reason = 'ON net -8.10R ≤ -8R' where user_id = $1`, [U1]);
   await assertRejects(() => db.query(`update public.structure_mode set user_id = user_id where user_id = $1`, [U1]), Error, "permission denied");
+  await db.exec(`reset role;`);
+});
+
+Deno.test("broker price log (4c): service role inserts once per position / connection / event; append-only; owner reads only their own rows", async () => {
+  const db = await freshDb();
+  const C = "33333333-3333-4333-8333-333333333333";
+  const ins = (u: string, ev: string, pos = "4324c6b3") => db.query(`insert into public.broker_price_log (user_id, bot_id, position_id, connection_id, symbol, direction, event, bot_price, broker_price)
+    values ($1, 'smc', $2, $3, 'USD/JPY', 'short', $4, 158.54711, 158.561)`, [u, pos, C, ev]);
+  await db.exec(`set role service_role;`);
+  await ins(U1, "open"); await ins(U1, "close_mirrored"); await ins(U2, "open", "other001");
+  await assertRejects(() => ins(U1, "open"), Error, "duplicate key", "once per position / connection / event");
+  await assertRejects(() => ins(U1, "closed_somehow", "p3"), Error, "violates check constraint");
+  await assertRejects(() => db.query(`update public.broker_price_log set broker_price = 1`), Error, "permission denied", "no update grant");
+  await assertRejects(() => db.query(`delete from public.broker_price_log`), Error, "permission denied", "no delete grant");
+  await db.exec(`reset role;`); // even the table owner cannot rewrite it: the append-only trigger
+  await assertRejects(() => db.query(`update public.broker_price_log set broker_price = 1`), Error, "append-only");
+  await assertRejects(() => db.query(`delete from public.broker_price_log`), Error, "append-only");
+  await db.exec(`set role authenticated; set request.jwt.claim.sub = '${U1}';`);
+  assertEquals((await db.query(`select event from public.broker_price_log order by id`)).rows.map((r: { event: string }) => r.event), ["open", "close_mirrored"]);
+  await assertRejects(() => ins(U1, "open", "p4"), Error, "permission denied");
   await db.exec(`reset role;`);
 });
