@@ -28,6 +28,9 @@ export interface V3Snapshot {
   close_pct: number | null;                          // last close in the leg's premium/discount, 100 = P, 0 = X
   pending_kind: "BOS" | "FLIP" | null;
   state_hash: string;                                // digest of the full structural state, indices mapped to bar times
+  // Outer INTERNAL leg (Impulse-on-V3 Shadow B, owner approval 2026-10-27): the second-oldest leg of the reference-leg stack — the
+  // outermost leg inside the external one — or the only leg when the stack has one. Origin + its extreme since the origin.
+  il_time: string | null; il_price: number | null; il_x_time: string | null; il_x_price: number | null;
 }
 export interface V3Checkpoint {
   symbol: string; known_at: string; engine_version: string; bars_1h: number; last_bar_time: string;
@@ -60,8 +63,18 @@ function snapshotOf(symbol: string, tf: V3Tf, s: State, bar: Bar, hash: string):
     symbol, tf, known_at: iso(bar.closeTime), bar_time: iso(bar.t), engine_version: V32C_ENGINE_VERSION,
     trend: s.trend, p_time: t(s.P?.index), p_price: s.P?.price ?? null, f_time: t(s.F?.index), f_price: s.F?.price ?? null,
     x_time: pd ? t(pd.extIndex) : null, x_price: pd?.p0 ?? null, close_pct: pd && Number.isFinite(pd.closePct) ? pd.closePct : null,
-    pending_kind: s.pending?.kind ?? null, state_hash: hash,
+    pending_kind: s.pending?.kind ?? null, state_hash: hash, ...internalLeg(s),
   };
+}
+
+/** The outer internal leg (see V3Snapshot.il_*). Its extreme runs in the trend's direction from the origin to the latest bar. */
+export function internalLeg(s: State): Pick<V3Snapshot, "il_time" | "il_price" | "il_x_time" | "il_x_price"> {
+  const leg = s.stack.length > 1 ? s.stack[1] : s.stack[0];
+  if (!s.trend || !leg) return { il_time: null, il_price: null, il_x_time: null, il_x_price: null };
+  const bull = s.trend === "bull";
+  let k = leg.origin.index;
+  for (let i = leg.origin.index + 1; i < s.bars.length; i++) if (bull ? s.bars[i].h > s.bars[k].h : s.bars[i].l < s.bars[k].l) k = i;
+  return { il_time: iso(s.bars[leg.origin.index].t), il_price: leg.origin.price, il_x_time: iso(s.bars[k].t), il_x_price: bull ? s.bars[k].h : s.bars[k].l };
 }
 
 /** Replay one pair from its full canonical 1H history; returns every snapshot (per TF, in time order) and every Daily checkpoint. */

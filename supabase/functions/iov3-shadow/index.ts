@@ -29,8 +29,8 @@ Deno.serve(async (req) => {
     return respond({ ok: true, pair, accounts: r });
   } catch (e: any) {
     console.error(`[iov3-shadow] ${pair} failed: ${e?.message ?? e}`);
-    await db.from("iov3_shadow_audit").upsert({ cohort_id: "-", pair, kind: "error", ref: new Date().toISOString().slice(0, 13), detail: { error: String(e?.message ?? e) } },
-      { onConflict: "cohort_id,pair,kind,ref", ignoreDuplicates: true });
+    await db.from("iov3_shadow_audit").upsert({ cohort_id: "-", arm: "A", pair, kind: "error", ref: new Date().toISOString().slice(0, 13), detail: { error: String(e?.message ?? e) } },
+      { onConflict: "cohort_id,arm,pair,kind,ref", ignoreDuplicates: true });
     return respond({ ok: false, pair, error: String(e?.message ?? e) }, 500);
   }
 });

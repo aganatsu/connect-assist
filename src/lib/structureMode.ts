@@ -5,11 +5,16 @@ import { invokeFunction } from "@/lib/api";
 import { getPipSize } from "@/lib/pipDisplay";
 
 export type StructureMode = "OFF" | "SHADOW" | "ON";
+/** A = V3's external (big) leg; B = V3's outer internal (scalp) leg. */
+export type ShadowArm = "A" | "B";
+export const ARM_LABEL: Record<ShadowArm, string> = { A: "Big leg (A)", B: "Scalp leg (B)" };
 export interface StructureStatus {
   mode: StructureMode; setAt: string; v3LatestClose: string | null;
   unlock: { met: boolean; onAvailable: boolean; daysInShadow: number; right: number; plumbingClean: boolean; reason: string };
-  summary: { placed: number; filled: number; wins: number; losses: number; open: number; voided: number; cancelled: number; netR: number } | null;
+  summary: ShadowSummary | null;   // Shadow A (V3 external leg)
+  summaryB?: ShadowSummary | null; // Shadow B (V3 outer internal leg)
 }
+export interface ShadowSummary { placed: number; filled: number; wins: number; losses: number; open: number; voided: number; cancelled: number; netR: number }
 export const structureModeApi = {
   status: () => invokeFunction<StructureStatus>("structure-mode", { action: "status" }),
   set: (mode: StructureMode) => invokeFunction<{ ok?: boolean; error?: string; mode: StructureMode }>("structure-mode", { action: "set", mode }),
@@ -30,17 +35,17 @@ export interface ShadowEventPayload {
   position?: { fill: number; ctx4h: string | null };
   reason?: string; result?: "TP" | "SL"; net?: number;
 }
-export interface ShadowEvent { cohort_id: string; pair: string; order_id: string; type: string; t: string; payload: ShadowEventPayload }
+export interface ShadowEvent { cohort_id: string; arm?: ShadowArm; pair: string; order_id: string; type: string; t: string; payload: ShadowEventPayload }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabase as any; // the shadow tables are not in the generated types
-export async function latestDecision(pair: string): Promise<ShadowDecision | null> {
-  const { data, error } = await db.from("iov3_shadow_decisions").select("*").eq("pair", pair).order("t", { ascending: false }).limit(1);
+export async function latestDecision(pair: string, arm: ShadowArm = "A"): Promise<ShadowDecision | null> {
+  const { data, error } = await db.from("iov3_shadow_decisions").select("*").eq("pair", pair).eq("arm", arm).order("t", { ascending: false }).limit(1);
   if (error) throw error;
   return data?.[0] ?? null;
 }
 export async function recentEvents(sinceIso: string, pair?: string): Promise<ShadowEvent[]> {
-  let q = db.from("iov3_shadow_events").select("cohort_id,pair,order_id,type,t,payload").gte("t", sinceIso).order("t").limit(2000);
+  let q = db.from("iov3_shadow_events").select("cohort_id,arm,pair,order_id,type,t,payload").gte("t", sinceIso).order("t").limit(4000);
   if (pair) q = q.eq("pair", pair);
   const { data, error } = await q;
   if (error) throw error;
@@ -54,7 +59,7 @@ export async function myFeedback(): Promise<Map<string, "right" | "wrong">> {
 }
 
 export interface ShadowOrder {
-  cohortId: string; orderId: string; pair: string; dir: "long" | "short"; placedAt: string;
+  cohortId: string; orderId: string; arm: ShadowArm; pair: string; dir: "long" | "short"; placedAt: string;
   entry: number; sl: number; tp: number; zoneType: string; zoneLow: number; zoneHigh: number;
   status: "watching" | "in_zone" | "filled" | "closed" | "cancelled" | "voided";
   statusAt: string; fill?: number; result?: "TP" | "SL"; netR?: number; reason?: string; ctx4h?: string | null;
@@ -67,7 +72,7 @@ export function foldOrders(events: ShadowEvent[]): ShadowOrder[] {
     if (e.type === "placed") {
       const o = e.payload.order;
       if (!o) continue;
-      m.set(key, { cohortId: e.cohort_id, orderId: e.order_id, pair: e.pair, dir: o.dir, placedAt: e.t, entry: o.entry, sl: o.sl, tp: o.tp, zoneType: o.zoneType, zoneLow: o.zl, zoneHigh: o.zh, status: "watching", statusAt: e.t });
+      m.set(key, { cohortId: e.cohort_id, orderId: e.order_id, arm: e.arm ?? (e.order_id.includes("|B|") ? "B" : "A"), pair: e.pair, dir: o.dir, placedAt: e.t, entry: o.entry, sl: o.sl, tp: o.tp, zoneType: o.zoneType, zoneLow: o.zl, zoneHigh: o.zh, status: "watching", statusAt: e.t });
       continue;
     }
     const o = m.get(key);

@@ -99,3 +99,19 @@ Deno.test("5m presence: observed within 60 min of close counts; younger absent b
   const later = canonical5m(rows, t0 + M5 + M5 + M5_MISSING_AFTER_MS + M5_WRITE_GRACE_MS + 3 * M5, t0);
   assert(later.processUntil > t0 + 3 * M5, "once the window has passed, the absent bars are gaps and processing continues");
 });
+
+Deno.test("arm B: both arms run with their own decisions, events and state; B order ids carry |B|; B equals a direct engine run on the internal leg", async () => {
+  const db = seed();
+  await runShadowForPair(db.client(), "EUR/USD", END);
+  const dec = db.rows("iov3_shadow_decisions"), ev = db.rows("iov3_shadow_events"), st = db.rows("iov3_shadow_state");
+  assert(dec.some((d) => d.arm === "A") && dec.some((d) => d.arm === "B"));
+  assertEquals(new Set(st.map((x) => x.arm)), new Set(["A", "B"]));
+  assert(ev.filter((e) => e.arm === "B").every((e) => String(e.order_id).includes("|B|")));
+  assert(ev.filter((e) => e.arm === "A").every((e) => !String(e.order_id).includes("|B|")));
+  // B decisions use the snapshot's internal leg, not the external one
+  const snapAt = new Map(MK.snaps.filter((x) => x.tf === "1H").map((x) => [x.known_at, x]));
+  for (const d of dec.filter((x) => x.arm === "B" && x.leg?.trend).slice(0, 50)) {
+    const sn = snapAt.get(d.t)!;
+    assertEquals([d.leg.swing_time, d.leg.swing_price, d.leg.extreme_price], [sn.il_time, sn.il_price, sn.il_x_price]);
+  }
+});
