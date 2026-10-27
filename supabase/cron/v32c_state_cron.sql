@@ -2,13 +2,16 @@
 -- v32c-state function is deployed, and the secret V32C_STATE_RUNNER=on is set (docs/DEPLOYMENT.md).
 --
 -- Writes only structure_v3_snapshots / structure_v3_checkpoints / structure_v3_audit. No order, position, account, ledger or
--- provider call. One call per pair (keeps each call well inside the edge CPU limit). Minute 40: the bar that closed at :00 is
--- canonical from the scanner's :20/:30 scan (settled ≥ close + 15 min); minute 55 is a catch-up that is a no-op when nothing is new.
+-- provider call. One call per pair (keeps each call well inside the edge CPU limit). The bar that closed at :00 becomes canonical
+-- at the scanner's :20 scan (settled ≥ close + 15 min), so minute 21 normally writes its V3 state; 31 / 40 / 55 are catch-ups that
+-- are no-ops when nothing is new. (Step 4, owner decision S2 = settled, 2026-10-27: was 40,55. The shadow's :26 / :36 run can then
+-- decide on the new hour, and ON places it about 10 minutes sooner.)
+-- Re-running this file replaces the existing job of the same name.
 --
 -- Verify:     select jobname, schedule, active from cron.job where jobname = 'v32c-state-hourly';
 -- Unschedule: select cron.unschedule('v32c-state-hourly');
 
-select cron.schedule('v32c-state-hourly', '40,55 * * * *', $job$
+select cron.schedule('v32c-state-hourly', '21,31,40,55 * * * *', $job$
   SELECT net.http_post(
     url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'supabase_url') || '/functions/v1/v32c-state',
     headers := jsonb_build_object(

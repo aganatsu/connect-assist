@@ -154,6 +154,7 @@ import { liveWriterConfig, writeLiveStructureBars } from "../_shared/structure/s
 import { liveWriter5mConfig, writeLiveStructureBars5m } from "../_shared/structure/structureBarsWriter5m.ts";
 import { recordStructureBarsWhileFull } from "../_shared/structure/recordWhileFull.ts";
 import { STRUCTURE_PAIRS } from "../_shared/structure/canonicalBars.ts";
+import { recordBrokerClose, recordBrokerOpen, recordBrokerOpenSkipped } from "../_shared/brokerPriceLog.ts";
 import { isV3Order, latestDecision, legAsImpulse, loadOnContext, planFromDecision, v3TrendNow, v3ZoneType, fxOpenAt, V3_ENGINE_VERSION, type OnContext, type ShadowDecisionRow } from "../_shared/iov3/onMode.ts";
 import {
   detectSession as sharedDetectSession,
@@ -3361,6 +3362,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                 const brokerPos = brokerPositions.find((bp: any) =>
                   bp.comment && (bp.comment.includes(commentTag) || bp.comment.startsWith(shortTag))
                 );
+                // Step 4c (measurement only, never throws): MT5's price at the bot's close, or MT5's own earlier close when it no longer holds the trade
+                if (conn.broker_type === "metaapi") {
+                  await recordBrokerClose(supabase, (path, init) => metaFetch(metaAccountId, authToken, path, init), { userId, botId: BOT_ID, positionId: pos.position_id,
+                    connectionId: conn.id, symbol: pos.symbol, direction: pos.direction, entryZoneType: (pos as any).entry_zone_timeframe ?? null, botExitPrice: hitPrice!,
+                    botCloseReason: closeReason, openTime: pos.open_time ?? null, brokerPos: brokerPos ?? null, nowIso: new Date().toISOString() });
+                }
                 if (!brokerPos) {
                   console.log(`SL/TP close [${conn.display_name}]: no matching comment-tagged position for paper:${pos.position_id} — skipping`);
                   continue;
@@ -4887,6 +4894,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                   const spreadResult = await fetchBrokerSpread(conn, pending.symbol, config, metaAccountIdForSpread, authTokenForSpread);
                   if (spreadResult && !spreadResult.passed) {
                     console.warn(`[limit-fill-mirror] ${conn.display_name}: spread too wide (${spreadResult.spreadPips.toFixed(2)}p > ${spreadResult.effectiveMax}p) — skipping broker mirror for ${pending.symbol} (B4 safety)`);
+                    // Step 4c (measurement only): the paper position runs with no broker copy
+                    await recordBrokerOpenSkipped(supabase, { userId, botId: BOT_ID, positionId, connectionId: conn.id, symbol: pending.symbol, direction: pending.direction,
+                      entryZoneType: (pending as any).entry_zone_type ?? null, botPrice: actualFillPrice, reason: "spread", detail: { spreadPips: spreadResult.spreadPips, maxPips: spreadResult.effectiveMax } });
                     continue;
                   }
 
@@ -4914,8 +4924,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                   };
                   if (pending.stop_loss) mt5Body.stopLoss = parseFloat(pending.stop_loss);
                   if (pending.take_profit) mt5Body.takeProfit = parseFloat(pending.take_profit);
-                  const { res: mt5Res } = await metaFetch(metaAccountId, authToken, (base: string) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
+                  const { res: mt5Res, body: mt5Reply } = await metaFetch(metaAccountId, authToken, (base: string) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
                   if (mt5Res.ok) { mirroredConnIds.push(conn.id); }
+                  // Step 4c (measurement only, never throws): MT5's open price next to the bot's fill
+                  await recordBrokerOpen(supabase, (path, init) => metaFetch(metaAccountId, authToken, path, init), { userId, botId: BOT_ID, positionId, connectionId: conn.id,
+                    symbol: pending.symbol, direction: pending.direction, entryZoneType: (pending as any).entry_zone_type ?? null, botPrice: actualFillPrice,
+                    ok: mt5Res.ok, status: mt5Res.status, reply: mt5Reply, spread: spreadResult });
                 } catch (e: any) { console.warn(`Limit fill broker mirror [${conn.display_name}] error: ${e?.message}`); }
               }
               if (mirroredConnIds.length > 0) {
