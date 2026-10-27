@@ -33,10 +33,22 @@ Deno.serve(async (req) => {
     const mode: Mode = (row?.mode as Mode) ?? "OFF", setAt = row?.set_at ?? new Date(now).toISOString();
 
     const unlockNow = async () => {
-      const [{ count: v3Audit }, { data: cohorts }] = await Promise.all([
-        db.from("structure_v3_audit").select("*", { count: "exact", head: true }).in("kind", ["repaint", "stale"]).gte("recorded_at", setAt),
+      const [{ count: repaints }, { data: staleRows }, { data: cohorts }] = await Promise.all([
+        db.from("structure_v3_audit").select("*", { count: "exact", head: true }).eq("kind", "repaint").gte("recorded_at", setAt),
+        db.from("structure_v3_audit").select("symbol,known_at").eq("kind", "stale").gte("recorded_at", setAt).limit(2000),
         db.from("iov3_shadow_cohorts").select("id").eq("user_id", userId).eq("bot_id", BOT_ID).gte("started_at", setAt),
       ]);
+      // "No missed hours": a stale hour counts only if its bar is STILL missing 3 hours later. A bar that arrived late (e.g. while
+      // the scanner was full and its recorders paused) is not a missed hour.
+      const MISSED_AFTER_MS = 3 * 3_600_000, stale = (staleRows ?? []).filter((r: { known_at: string }) => now - Date.parse(r.known_at) > MISSED_AFTER_MS);
+      let missedHours = 0;
+      for (const sym of new Set(stale.map((r: { symbol: string }) => r.symbol))) {
+        const hours = stale.filter((r: { symbol: string }) => r.symbol === sym).map((r: { known_at: string }) => new Date(r.known_at).toISOString());
+        const { data: have } = await db.from("structure_bars_1h").select("bar_time").eq("symbol", sym).in("bar_time", [...new Set(hours)]);
+        const got = new Set((have ?? []).map((b: { bar_time: string }) => new Date(b.bar_time).toISOString()));
+        missedHours += new Set(hours.filter((h) => !got.has(h))).size;
+      }
+      const v3Audit = (repaints ?? 0) + missedHours;
       const ids = (cohorts ?? []).map((c: { id: string }) => c.id);
       let shadowAudit = 0, right = 0;
       if (ids.length) {
@@ -47,7 +59,7 @@ Deno.serve(async (req) => {
         for (const f of fb ?? []) latest.set(f.order_id, f.verdict);
         right = [...latest.values()].filter((v) => v === "right").length;
       }
-      return { unlock: evaluateUnlock({ mode, setAtMs: Date.parse(setAt), nowMs: now, rightCount: right, v3AuditSince: v3Audit ?? 0, shadowAuditSince: shadowAudit }), cohortIds: ids };
+      return { unlock: evaluateUnlock({ mode, setAtMs: Date.parse(setAt), nowMs: now, rightCount: right, v3AuditSince: v3Audit, shadowAuditSince: shadowAudit }), cohortIds: ids };
     };
 
     if (body.action === "status" || !body.action) {

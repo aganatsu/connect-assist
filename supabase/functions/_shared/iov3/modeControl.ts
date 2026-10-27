@@ -3,7 +3,8 @@
 //   OFF ↔ SHADOW: always allowed (SHADOW changes no trade, so no new cohort: the value lives outside config_json).
 //   → ON: only when ON exists (step 4 deployed: ON_AVAILABLE) AND the unlock rule is met:
 //         ≥ 7 days continuously in SHADOW, OR ≥ 5 shadow setups the owner marked "looks right";
-//         AND the plumbing is clean since SHADOW began (no V3 state repaint / stale audit rows, no shadow mismatch / error rows).
+//         AND the plumbing is clean since SHADOW began (no V3 state repaint, no hour still missing 3 h later, no shadow mismatch /
+//         error rows). Late-arriving hours are not missed hours.
 //   ON → OFF / SHADOW: always allowed.
 export type Mode = "OFF" | "SHADOW" | "ON";
 export const MODES: readonly Mode[] = ["OFF", "SHADOW", "ON"];
@@ -23,7 +24,7 @@ export function evaluateUnlock(u: UnlockInput): Unlock {
   const met = inShadow && evidence && plumbingClean;
   const reason = !onAvailable ? "ON is being built (step 4)"
     : !inShadow ? "turn on SHADOW first"
-    : !plumbingClean ? `plumbing not clean since SHADOW began (${u.v3AuditSince} V3 state + ${u.shadowAuditSince} shadow audit events)`
+    : !plumbingClean ? `plumbing not clean since SHADOW began (${u.v3AuditSince} V3 repaints / missed hours + ${u.shadowAuditSince} shadow audit events)`
     : !evidence ? `unlocks after ${UNLOCK_DAYS} days in SHADOW (${daysInShadow.toFixed(1)} so far) or ${UNLOCK_RIGHT} setups marked ✓ (${u.rightCount} so far)`
     : "unlocked";
   return { met, onAvailable, daysInShadow: +daysInShadow.toFixed(2), right: u.rightCount, plumbingClean, reason };
