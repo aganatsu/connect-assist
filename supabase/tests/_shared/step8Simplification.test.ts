@@ -142,13 +142,22 @@ Deno.test("ICT FVG would-block is recorded in every mode; it vetoes only in hard
 });
 
 Deno.test("Unified modifiers off: detected and compared, but no bypass and standalone signal source", () => {
-  const i = scanner.indexOf("unifiedZoneData.confirmation?.entryReady === true && !simp.unifiedModifiersEnabled) {");
+  const i = scanner.indexOf("isUnifiedConfirmed(unifiedZoneData) && !simp.unifiedModifiersEnabled) {");
   assert(i > 0);
-  const block = scanner.slice(i, i + 900);
+  const block = scanner.slice(i, scanner.indexOf("} else if (", i + 1)); // exactly this branch
   assert(/\(detail as any\)\.signalSource = "standalone";/.test(block));
   assert(!/unifiedGatePassed = true/.test(block), "no Impulse-gate bypass");
   assert(/modifiersApplied: false/.test(block));
   assert(/\(detail as any\)\.unifiedComparison = unifiedVsImpulse\(/.test(scanner));
+});
+
+Deno.test("Require Unified Zone never skips a confirmed Unified setup (10-28 regression)", () => {
+  // With modifiers OFF the gate is not "passed", but the setup IS confirmed; the
+  // require-unified skip must consult the confirmation, not only unifiedGatePassed.
+  const i = scanner.indexOf("} else if (requireUnifiedSkips({ requireUnifiedZone: !!pairConfig.requireUnifiedZone, unifiedGatePassed, unifiedConfirmed: isUnifiedConfirmed(unifiedZoneData) })) {");
+  assert(i > 0, "require-unified skip goes through requireUnifiedSkips with the confirmation");
+  assert(/detail\.status = "skipped_require_unified";/.test(scanner.slice(i, i + 600)));
+  assert(!/\} else if \(pairConfig\.requireUnifiedZone\) \{/.test(scanner), "the old unconditional skip is gone");
 });
 
 Deno.test("dry-run orders are flagged at insert, market entries are refused in dry run", () => {

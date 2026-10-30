@@ -117,6 +117,8 @@ import {
   type ShadowIntent,
 } from "../_shared/shadowZoneMid.ts";
 import { evaluateTpSmallGate } from "../_shared/tpSmallGate.ts";
+import { isUnifiedConfirmed, requireUnifiedSkips } from "../_shared/unifiedGate.ts";
+import { updateBlockStall } from "../_shared/blockStall.ts";
 import {
   decideZone, buildHtfConfluence, hasMinZoneCandles,
   type ResolvedStyle as ZoneStyle,
@@ -6987,18 +6989,14 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       unifiedGatePassed = true;
       (detail as any).signalSource = "cascade";
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: CASCADE GATE PASSED [triggered] \u2014 Daily\u21924H\u21921H cascade complete, entry=${cascadeResult.entry?.toFixed(5)}, SL=${cascadeResult.sl?.toFixed(5)}`);
-    } else if (unifiedZoneData?.hasZone &&
-        (unifiedZoneData.state === "triggered" || unifiedZoneData.state === "confirmed") &&
-        unifiedZoneData.confirmation?.entryReady === true && !simp.unifiedModifiersEnabled) {
+    } else if (isUnifiedConfirmed(unifiedZoneData) && !simp.unifiedModifiersEnabled) {
       // Step 8: Unified detected but NOT allowed to modify entry/SL/size or bypass
       // the Impulse gate. Detection, attribution and the Unified-vs-Impulse
       // comparison are recorded; the trade proceeds as standalone Impulse.
       (detail as any).signalSource = "standalone";
       (detail as any).unifiedDetected = { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore ?? null, confirmation: unifiedZoneData.confirmation?.type ?? null, modifiersApplied: false };
       console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: Unified ${unifiedZoneData.state} detected — modifiers OFF (logged only)`);
-    } else if (unifiedZoneData?.hasZone &&
-        (unifiedZoneData.state === "triggered" || unifiedZoneData.state === "confirmed") &&
-        unifiedZoneData.confirmation?.entryReady === true) {
+    } else if (isUnifiedConfirmed(unifiedZoneData)) {
       unifiedGatePassed = true;
       (detail as any).signalSource = "unified";
       (detail as any).unifiedDetected = { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore ?? null, confirmation: unifiedZoneData.confirmation?.type ?? null, modifiersApplied: true };
@@ -7031,8 +7029,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       // Unified story is complete — use its entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: Unified gate passed \u2014 bypassing impulse zone gate.`);
-    } else if (pairConfig.requireUnifiedZone) {
-      // requireUnifiedZone is ON — skip pair entirely if unified zone engine did not confirm
+    } else if (requireUnifiedSkips({ requireUnifiedZone: !!pairConfig.requireUnifiedZone, unifiedGatePassed, unifiedConfirmed: isUnifiedConfirmed(unifiedZoneData) })) {
+      // requireUnifiedZone is ON — skip pair entirely if unified zone engine did not confirm.
+      // A confirmed setup with modifiers OFF is NOT skipped: it continues below as standalone Impulse.
       detail.status = "skipped_require_unified";
       detail.skipReason = "Require Unified Zone: unified zone engine did not reach triggered/confirmed state \u2014 no standalone fallback allowed";
       console.log(`[scan ${scanCycleId}] \u26d4 ${pair}: REQUIRE UNIFIED ZONE \u2014 unified gate not passed, standalone fallback disabled. Skipping.`);
@@ -10137,6 +10136,23 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     trades_placed: tradesPlaced,
     details_json: detailsWithMeta,
   });
+
+  // ── Silent-stall alert: every pair blocked by the same reason for 6h → one Telegram message ──
+  // Observation only; updateBlockStall never throws (see _shared/blockStall.ts).
+  if (!opts?.isManagementOnly) {
+    await updateBlockStall(supabase, userId, BOT_ID, scanDetails, async (msg: string) => {
+      if (telegramChatIds.length === 0 || !shouldNotify("bot_health")) return;
+      await Promise.all(telegramChatIds.map(async (chatId: string) => {
+        try {
+          await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+            body: JSON.stringify({ chat_id: chatId, message: msg }),
+          });
+        } catch { /* non-fatal */ }
+      }));
+    });
+  }
 
   return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, weekendCryptoMode, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
   } finally {

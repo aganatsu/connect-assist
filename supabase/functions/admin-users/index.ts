@@ -6,7 +6,8 @@
 //
 //   { action: "overview" }  every auth user with sign-up/sign-in facts, paper
 //                           accounts, bot status and activity counts, plus
-//                           paper accounts whose user no longer exists.
+//                           paper accounts whose user no longer exists, and every
+//                           active scanner_operational_alerts row (nothing else shows them).
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
@@ -93,10 +94,16 @@ Deno.serve(async (req) => {
       if (a === true) adminIds.add(u.id);
     }));
     const acc = (accounts ?? []) as PaperAccountFacts[];
+    const { data: alerts, error: alErr } = await db.from("scanner_operational_alerts")
+      .select("id, user_id, bot_id, alert_type, severity, title, message, occurrences, first_detected_at, last_detected_at")
+      .eq("status", "active").order("last_detected_at", { ascending: false }).limit(50);
+    if (alErr) throw new Error(`scanner_operational_alerts: ${alErr.message}`);
+    const emailOf = new Map(users.map((u) => [u.id, u.email]));
     return respond({
       generated_at: new Date().toISOString(),
       users: buildUserRows(users, acc, activity, adminIds, new Date()),
       orphan_accounts: orphanAccounts(users, acc),
+      active_alerts: (alerts ?? []).map((x) => ({ ...x, email: emailOf.get(x.user_id) ?? null })),
     });
   } catch (e) {
     return respond({ error: e instanceof Error ? e.message : String(e) }, 500);

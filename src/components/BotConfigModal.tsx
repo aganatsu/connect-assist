@@ -881,6 +881,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     </>)}
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
+                    <ToggleField label="Use Unified's Entry & Stop" description="When the Unified engine confirms a setup, trade it with Unified's own entry and stop. Off: Unified only confirms, and the trade uses the Impulse engine's entry and stop. Either way, Require Unified Zone above still lets only confirmed setups through." checked={config.simplification?.unifiedModifiersEnabled !== false} onChange={v => updateField('simplification', 'unifiedModifiersEnabled', v)} />
                     {/* ── Impulse Zone Gate Mode ── */}
                     <FieldGroup label="Impulse Zone Gate Mode" description="Controls how strictly the impulse zone requirement is enforced when Unified Zone is OFF.">
                       <div className="flex items-center gap-3">
