@@ -12,6 +12,7 @@ import {
   isImpulseBroken,
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
+  resolveZoneConfirmationConfig,
   type ConfirmationSignal,
   type ZoneConfirmationConfig,
 } from "./zoneConfirmation.ts";
@@ -803,4 +804,69 @@ Deno.test("Regression: Tier 1 only config produces same results as old binary CH
     assertEquals(result.closeBased, true);
     assert(result.displacement >= 0.5, "Old-style config should enforce 0.5 displacement");
   }
+});
+
+// ─── Configurable tiers (2026-10-30) ─────────────────────────────────────────
+//
+// Both pollers used to pass DEFAULT_ZONE_CONFIRMATION_CONFIG, so the tier
+// switches could not be set from Bot Config. They now read
+// entry.confirmationTier{1,2,3}Enabled through resolveZoneConfirmationConfig.
+
+/** Flat 5m chop, then one large bearish candle in the zone: no CHoCH, no rejection wick. */
+function oneBigBearishCandle(): Candle[] {
+  const candles: Candle[] = [];
+  for (let i = 0; i < 30; i++) {
+    const up = i % 2 === 0;
+    candles.push(makeCandle(up ? 1.1000 : 1.1002, 1.1003, 1.0999, up ? 1.1002 : 1.1000,
+      new Date(Date.UTC(2026, 9, 30, 8, i * 5)).toISOString()));
+  }
+  candles.push(makeCandle(1.1002, 1.1004, 1.0980, 1.0982, new Date(Date.UTC(2026, 9, 30, 10, 30)).toISOString()));
+  return candles;
+}
+const BIG_CANDLE_ZONE = { zoneHigh: 1.1005, zoneLow: 1.0995 };
+
+Deno.test("resolveZoneConfirmationConfig: a config without the keys keeps every tier on", () => {
+  assertEquals(resolveZoneConfirmationConfig({}), DEFAULT_ZONE_CONFIRMATION_CONFIG);
+  assertEquals(resolveZoneConfirmationConfig(null), DEFAULT_ZONE_CONFIRMATION_CONFIG);
+  assertEquals(resolveZoneConfirmationConfig({ entry: { cooldownMinutes: 5 } }), DEFAULT_ZONE_CONFIRMATION_CONFIG);
+});
+
+Deno.test("resolveZoneConfirmationConfig: reads each tier switch from entry", () => {
+  const c = resolveZoneConfirmationConfig({ entry: { confirmationTier2Enabled: false, confirmationTier3Enabled: false } });
+  assertEquals([c.tier1Enabled, c.tier2Enabled, c.tier3Enabled], [true, false, false]);
+  assertEquals(c.minDisplacement, DEFAULT_ZONE_CONFIRMATION_CONFIG.minDisplacement);
+  assertEquals(c.maxLookbackCandles, DEFAULT_ZONE_CONFIRMATION_CONFIG.maxLookbackCandles);
+});
+
+Deno.test("resolveZoneConfirmationConfig: all three off reads as the defaults, not 'never confirm'", () => {
+  const c = resolveZoneConfirmationConfig({ entry: { confirmationTier1Enabled: false, confirmationTier2Enabled: false, confirmationTier3Enabled: false } });
+  assertEquals(c, DEFAULT_ZONE_CONFIRMATION_CONFIG);
+});
+
+Deno.test("Tier 3 switch: one big candle confirms by default, and not when Tier 3 is off", () => {
+  // The Route 2 audit (2026-10-20) found Tier 3 can be one big candle. That
+  // comes through confirmationHierarchy's displacement level, which used to
+  // be returned without looking at tier3Enabled.
+  const candles = oneBigBearishCandle();
+  const on = detectZoneConfirmation(candles, "short", DEFAULT_ZONE_CONFIRMATION_CONFIG, undefined, "EUR/USD", BIG_CANDLE_ZONE);
+  assertEquals(on?.tier, 3);
+  assertEquals(on?.supportingSignals[0], "displacement");
+  const off = detectZoneConfirmation(candles, "short", { ...DEFAULT_ZONE_CONFIRMATION_CONFIG, tier3Enabled: false }, undefined, "EUR/USD", BIG_CANDLE_ZONE);
+  assertEquals(off, null);
+});
+
+Deno.test("Tier 1 switch off leaves a Tier 3 confirmation alone", () => {
+  const candles = oneBigBearishCandle();
+  const r = detectZoneConfirmation(candles, "short", { ...DEFAULT_ZONE_CONFIRMATION_CONFIG, tier1Enabled: false }, undefined, "EUR/USD", BIG_CANDLE_ZONE);
+  assertEquals(r?.tier, 3);
+});
+
+Deno.test("both pollers read the tier switches from the saved config", () => {
+  const read = (rel: string) => Deno.readTextFileSync(new URL(rel, import.meta.url));
+  const scanner = read("../bot-scanner/index.ts");
+  const second = read("../zone-confirmation-scanner/index.ts");
+  assert(/detectZoneConfirmation\(\s*confirmCandles,[^;]*resolveZoneConfirmationConfig\(\(config as any\)\.__rawConfigJson\)/s.test(scanner));
+  assert(/detectZoneConfirmation\(\s*confirmCandles,[^;]*resolveZoneConfirmationConfig\(config\)/s.test(second));
+  assert(!scanner.includes("DEFAULT_ZONE_CONFIRMATION_CONFIG"));
+  assert(!second.includes("DEFAULT_ZONE_CONFIRMATION_CONFIG"));
 });

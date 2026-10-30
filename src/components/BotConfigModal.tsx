@@ -91,6 +91,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "entry_exit", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity", "strict"] },
   { tab: "entry_exit", label: "Zone Proximity (ATR)", keywords: ["atr", "multiplier", "proximity", "zone", "strict", "distance", "market fill"] },
   { tab: "entry_exit", label: "Zone Watch Expiry", keywords: ["zone", "expiry", "watch", "cancel", "minutes"] },
+  { tab: "entry_exit", label: "Entry Confirmation", keywords: ["confirmation", "entry", "choch", "mss", "wick", "reversal", "candle", "tier", "engulfing", "displacement"] },
   { tab: "entry_exit", label: "Zone Setup Distance", keywords: ["zone", "distance", "pips", "max", "min"] },
   { tab: "entry_exit", label: "Zone Preference", keywords: ["zone", "ob", "fvg", "nearest", "prefer"] },
   { tab: "entry_exit", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
@@ -1472,6 +1473,29 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                             </div>
                           </FieldGroup>
                           <p className="text-[9px] text-muted-foreground italic">The bot watches for price to reach the zone, then hunts for LTF confirmation (CHoCH, BOS, or sweep+CHoCH) before entering at live price. This expiry applies to auto-enabled orders too, which is why it stays visible while the toggle above is off. Scalper caps it at 60 minutes regardless of the value set here.</p>
+                          {/* ── Entry Confirmation: which tiers may fill a pending order. Before 2026-10-30 all three were fixed on in code ── */}
+                          {(() => {
+                            const en = config.entry ?? {};
+                            const tiers = [
+                              { key: 'confirmationTier1Enabled', label: "CHoCH (candle close)", description: "Tier 1. A confirmation-timeframe candle closes beyond the last swing against the pullback. The strongest signal." },
+                              { key: 'confirmationTier2Enabled', label: "CHoCH (wick) + supporting signal", description: "Tier 2. The swing is broken by a wick only, plus at least one of: engulfing, rejection wick, new FVG, volume spike." },
+                              { key: 'confirmationTier3Enabled', label: "Reversal candle (no CHoCH)", description: "Tier 3. No structure break: one strong momentum candle in the zone, or an engulfing candle with a rejection wick. The weakest signal." },
+                            ];
+                            const onCount = tiers.filter(t => en[t.key] !== false).length;
+                            return (
+                              <div className="space-y-2 pt-2">
+                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Entry Confirmation</p>
+                                <p className="text-[9px] text-muted-foreground italic">Any one switched-on type fills the order. At least one must stay on. Without a refined zone the bot accepts only a CHoCH close, so with that switched off those orders cannot fill.</p>
+                                {tiers.map(t => {
+                                  const on = en[t.key] !== false;
+                                  return (
+                                    <ToggleField key={t.key} label={t.label} description={t.description} checked={on}
+                                      onChange={v => { if (v || onCount > 1) updateField('entry', t.key, v); }} />
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>

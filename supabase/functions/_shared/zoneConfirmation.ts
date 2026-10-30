@@ -83,6 +83,31 @@ export const DEFAULT_ZONE_CONFIRMATION_CONFIG: ZoneConfirmationConfig = {
 };
 
 /**
+ * The confirmation config for a saved bot config: the defaults, with the three
+ * tier switches read from `entry.confirmationTier{1,2,3}Enabled`.
+ *
+ * Until 2026-10-30 both pollers passed DEFAULT_ZONE_CONFIRMATION_CONFIG
+ * directly, so the tier switches existed only in code. A missing key means on,
+ * so a config that never mentions them keeps every tier, as before. All three
+ * off would make every pending order wait until it expires, so that reads as
+ * the defaults instead.
+ *
+ * @param rawConfig - the nested bot_configs.config_json
+ */
+export function resolveZoneConfirmationConfig(rawConfig: unknown): ZoneConfirmationConfig {
+  const entry = ((rawConfig as Record<string, unknown> | null)?.entry ?? {}) as Record<string, unknown>;
+  const tier1Enabled = entry.confirmationTier1Enabled !== false;
+  const tier2Enabled = entry.confirmationTier2Enabled !== false;
+  const tier3Enabled = entry.confirmationTier3Enabled !== false;
+  if (!tier1Enabled && !tier2Enabled && !tier3Enabled) return { ...DEFAULT_ZONE_CONFIRMATION_CONFIG };
+  return { ...DEFAULT_ZONE_CONFIRMATION_CONFIG, tier1Enabled, tier2Enabled, tier3Enabled };
+}
+
+function tierEnabled(config: ZoneConfirmationConfig, tier: 1 | 2 | 3): boolean {
+  return tier === 1 ? config.tier1Enabled : tier === 2 ? config.tier2Enabled : config.tier3Enabled;
+}
+
+/**
  * Instrument-specific displacement thresholds.
  * Metals and crypto have larger wicks relative to bodies, so we lower the bar.
  * Forex majors keep the standard threshold.
@@ -276,10 +301,14 @@ export function detectZoneConfirmation(
       direction: hierarchyDir,
       maxLookback: config.maxLookbackCandles,
     });
-    // Map hierarchy result to ConfirmationSignal if entry-ready (CHoCH-level)
+    // Map hierarchy result to ConfirmationSignal if entry-ready (CHoCH-level).
+    // The tier switches apply here too: the hierarchy's lone displacement
+    // candle maps to Tier 3, so without this check switching Tier 3 off would
+    // still let one big candle confirm. A result from a switched-off tier
+    // falls through to the legacy tiers below.
     if (hierarchyResult.entryReady && hierarchyResult.type !== "none") {
       const mapped = mapHierarchyToSignal(hierarchyResult, candles5m, direction);
-      if (mapped) return mapped;
+      if (mapped && tierEnabled(config, mapped.tier)) return mapped;
     }
   }
 
