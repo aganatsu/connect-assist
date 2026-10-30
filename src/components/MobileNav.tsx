@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Bot, Search, MoreHorizontal,
-  Brain, BookOpen, FlaskConical, Settings, Server, Calendar, X, Play, Shield, ShieldX,
+  Brain, BookOpen, FlaskConical, Settings, Server, Calendar, X, Play, Shield, ShieldX, Users,
 } from "lucide-react";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 
 const PRIMARY_ITEMS = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -31,6 +32,8 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const isAdmin = useIsAdmin();
+  const moreItems = isAdmin ? [...MORE_ITEMS, { title: "Admin", url: "/admin", icon: Users }] : MORE_ITEMS;
 
   const isActive = (url: string) =>
     url === "/" ? location.pathname === "/" : location.pathname.startsWith(url);
@@ -51,7 +54,7 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
               </button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {MORE_ITEMS.map((item) => (
+              {moreItems.map((item) => (
                 <button
                   key={item.url}
                   onClick={() => {
