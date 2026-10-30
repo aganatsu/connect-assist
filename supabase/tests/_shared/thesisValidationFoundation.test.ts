@@ -41,6 +41,8 @@ import type { DirectionResult } from "../../functions/_shared/directionEngine.ts
 const scanner = await Deno.readTextFile(
   new URL("../../functions/bot-scanner/index.ts", import.meta.url),
 );
+// The cancel check's inputs moved to _shared/thesisInputs.ts (shared with the pre-placement check).
+const thesisInputs = Deno.readTextFileSync(new URL("../../functions/_shared/thesisInputs.ts", import.meta.url));
 const mapper = await Deno.readTextFile(
   new URL("../../functions/_shared/configMapper.ts", import.meta.url),
 );
@@ -184,24 +186,27 @@ Deno.test("the validator is handed the config the scanner uses", () => {
   // Passing nothing is what let it cancel using the blocking behaviour
   // priceAwareStructureBlocks exists to switch off.
   assert(
-    /priceAwareStructureBlocks: \(config as any\)\.priceAwareStructureBlocks === true/.test(scanner),
+    /priceAwareStructureBlocks: config\.priceAwareStructureBlocks === true/.test(thesisInputs),
     "dirConfig must carry the flag",
   );
-  assert(/styleAwareDirection: thesisStyleAware/.test(scanner));
-  assert(/style: resolvedStyle/.test(scanner));
+  assert(/styleAwareDirection: config\.thesisDirectionStyleAware === true/.test(thesisInputs));
+  assert(/style: ctx\.style/.test(thesisInputs));
+  assert(/thesisValidationOpts\(config, thesisCandles, \{ fotsiResult: _fotsiResult, lastGamePlan: _lastGamePlanForValidation, style: resolvedStyle \}\)/.test(scanner),
+    "the cancel check passes the scanner's config and style");
 });
 
 Deno.test("the style-aware path costs one extra fetch, not three", () => {
   // Scalper needs 1H/15m/5m. 1H is already fetched for the legacy path and the
   // entry-TF series is already in hand, so only 15m is new.
-  const i = scanner.indexOf("if (thesisStyleAware || !opts?.isManagementOnly) {");
-  assert(i > -1, "the shadow-candles branch was not found");
-  const block = scanner.slice(i, i + 800);
-  // Trailing tag is the observation-only telemetry reason, not a behaviour change.
+  const i = thesisInputs.indexOf('if (o.style === "scalper") {');
+  assert(i > -1, "the scalper style-candles branch was not found");
+  const block = thesisInputs.slice(i, i + 300);
+  assert(/fetch\(symbol, "15m", "5d", "pending_thesis_m15"\)/.test(block), "scalper adds 15m");
+  assert(/confirm: o\.confirmCandles/.test(block), "and reuses the candles already fetched");
+  assert(/bias: h1/.test(block), "and the 1H already fetched above");
   // huntFetch = cachedFetch for A orders (a cache-only peek for Candidate C shadow orders)
-  assert(/huntFetch\(pending\.symbol, "15m", "5d"(, "[a-z0-9_]+")?\)/.test(block), "scalper adds 15m");
-  assert(/confirm: pendingCandles/.test(block), "and reuses the candles already fetched");
-  assert(/bias: tvH1/.test(block), "and the 1H already fetched above");
+  assert(/loadThesisCandles\(huntFetch, pending\.symbol, \{[\s\S]{0,200}confirmCandles: pendingCandles/.test(scanner),
+    "the cancel check hands over the entry-TF series it already fetched");
 });
 
 Deno.test("observations reach scan detail", () => {
@@ -266,7 +271,7 @@ Deno.test("the shadow engine is free on full scans, skipped on management runs",
   // The 15m series is already in scanCache after the pair loop. On a
   // management-only cycle it is not, and that cycle runs every minute.
   assert(
-    /if \(thesisStyleAware \|\| !opts\?\.isManagementOnly\) \{/.test(scanner),
+    /wantStyleCandles: thesisStyleAware \|\| !opts\?\.isManagementOnly,/.test(scanner),
     "shadow candles on full scans, or whenever the flag genuinely needs them",
   );
 });
@@ -286,7 +291,7 @@ Deno.test("gp_bias_reversal honours the entry gate's mode", () => {
     "the validator must read the entry gate's mode",
   );
   assert(
-    /gamePlanGateMode: \(config as any\)\.gamePlanGateMode \?\? "soft",/.test(scanner),
+    /gamePlanGateMode: config\.gamePlanGateMode \?\? "soft",/.test(thesisInputs),
     "and the scanner must pass the same value it gates entry with",
   );
 });
@@ -312,6 +317,6 @@ Deno.test("an observed-only opposition says so in its reason", () => {
 Deno.test("the two gates read the same config key", () => {
   // The whole defect was two gates on one input with separate settings.
   const entry = scanner.indexOf('const gpGateMode = (pairConfig as any).gamePlanGateMode');
-  const thesis = scanner.indexOf('gamePlanGateMode: (config as any).gamePlanGateMode');
+  const thesis = thesisInputs.indexOf('gamePlanGateMode: config.gamePlanGateMode');
   assert(entry > -1 && thesis > -1, "both call sites must exist");
 });

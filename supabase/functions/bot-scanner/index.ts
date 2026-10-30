@@ -138,6 +138,7 @@ import { detectZoneConfirmation, isPriceInZone, classifyZoneExit, isImpulseBroke
 import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
+import { loadThesisCandles, thesisValidationOpts } from "../_shared/thesisInputs.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
 import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
@@ -3944,41 +3945,18 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         if ((config as any).thesisValidationEnabled !== false && !isV3Order(pending)) {
           try {
             const thesisStyleAware = (config as any).thesisDirectionStyleAware === true;
-            // Fetch D1/4H/1H candles for direction check (cached if full scan)
-            const [tvDaily, tvH4, tvH1] = await Promise.all([
-              huntFetch(pending.symbol, "1d", "1y", "pending_thesis_htf"),
-              huntFetch(pending.symbol, "4h", "1mo", "pending_thesis_htf").then(c => c.slice(-LEGACY_H4_WINDOW)),
-              huntFetch(pending.symbol, "1h", "5d", "pending_thesis_htf"),
-            ]);
-
-            // Under styleAwareDirection the validator uses the same engine and
-            // timeframes that CREATED the order. Scalper needs 1H/15m/5m; 1H is
-            // already fetched above and the entry-TF series is already in hand,
-            // so this is one extra fetch, not three. Swing needs the weekly.
-            //
-            // Supplied even when the flag is OFF, so BOTH engines are judged and
-            // their disagreement is recorded. That disagreement rate is what
-            // decides whether direction_flip should be fixed or deleted: if the
-            // two engines agree, the check sees a real directional change; if
-            // they persistently disagree, it was measuring the mismatch between
-            // the engine that created the order and the one that judged it.
-            //
-            // Only on full scans. On management-only cycles the pair loop has
-            // not run, so the 15m series would be a genuine extra fetch every
-            // minute; on a full scan it is already in scanCache from the main
-            // loop and costs nothing.
-            let thesisStyleCandles: { bias: Candle[] | null; structure: Candle[] | null; confirm: Candle[] | null } | null = null;
-            if (thesisStyleAware || !opts?.isManagementOnly) {
-              if (resolvedStyle === "scalper") {
-                const tvM15 = await huntFetch(pending.symbol, "15m", "5d", "pending_thesis_m15");
-                thesisStyleCandles = { bias: tvH1, structure: tvM15, confirm: pendingCandles };
-              } else if (resolvedStyle === "swing_trader") {
-                const tvW = await huntFetch(pending.symbol, "1w", "2y", "pending_thesis_weekly");
-                thesisStyleCandles = { bias: tvW, structure: tvDaily, confirm: tvH4 };
-              } else {
-                thesisStyleCandles = { bias: tvDaily, structure: tvH4, confirm: tvH1 };
-              }
-            }
+            // Inputs built by _shared/thesisInputs.ts — the SAME builder the scanner's
+            // pre-placement check uses, so both ask one question of one data set.
+            // Style candles are supplied even when the style-aware flag is OFF, so
+            // BOTH engines are judged and their disagreement is recorded; only on
+            // full scans, where the 15m series is already in scanCache (on
+            // management-only cycles it would be an extra fetch every minute).
+            const thesisCandles = await loadThesisCandles(huntFetch, pending.symbol, {
+              style: resolvedStyle,
+              wantStyleCandles: thesisStyleAware || !opts?.isManagementOnly,
+              confirmCandles: pendingCandles,
+              h4Window: LEGACY_H4_WINDOW,
+            });
             const thesisResult: ThesisValidationResult = validatePendingOrderThesis(
               {
                 order_id: pending.order_id,
@@ -3987,34 +3965,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                 entry_price: pending.entry_price,
                 signal_reason: pending.signal_reason,
               },
-              {
-                fotsiResult: _fotsiResult,
-                lastGamePlan: _lastGamePlanForValidation,
-                dailyCandles: tvDaily.length >= 20 ? tvDaily : null,
-                h4Candles: tvH4.length >= 20 ? tvH4 : null,
-                h1Candles: tvH1.length >= 20 ? tvH1 : null,
-                enabledChecks: {
-                  direction_flip: (config as any).thesisCheckDirectionFlip !== false,
-                  fotsi_veto: (config as any).thesisCheckFotsiVeto !== false,
-                  gp_bias_reversal: (config as any).thesisCheckGpBiasReversal !== false,
-                },
-                // The same setting the entry gate applies at :6010, so one
-                // policy governs the game-plan bias end to end.
-                gamePlanGateMode: (config as any).gamePlanGateMode ?? "soft",
-                styleAwareDirection: thesisStyleAware,
-                style: resolvedStyle,
-                styleCandles: thesisStyleCandles,
-                // The same DirectionConfig the scanner builds, so flags such as
-                // priceAwareStructureBlocks are honoured. Passing nothing is
-                // what let this validator cancel using the blocking behaviour
-                // that flag exists to switch off.
-                // The pending loop runs outside the per-pair scope, so this reads
-                // the mapped global config rather than pairConfig.
-                dirConfig: {
-                  structureLookback: (config as any).structureLookback,
-                  priceAwareStructureBlocks: (config as any).priceAwareStructureBlocks === true,
-                },
-              },
+              thesisValidationOpts(config, thesisCandles, { fotsiResult: _fotsiResult, lastGamePlan: _lastGamePlanForValidation, style: resolvedStyle }),
             );
 
             // Recorded whether or not a check is allowed to act, so the firing
@@ -8388,6 +8339,34 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           detail.skipReason = "Dry run (entries locked): market entry path not simulated";
           scanDetails.push(detail);
           continue;
+        }
+        // ── Thesis pre-check: never enter what the cancel check would kill on arrival ──
+        // The manage loop cancels a pending order whenever validatePendingOrderThesis
+        // says invalid. Asking it here first, on the same inputs (_shared/thesisInputs.ts),
+        // ends the place-then-cancel loop: in Oct 2026 direction_flip cancelled 65 orders
+        // from just 22 setups, 61 of them within 2 minutes of placement. Covers market
+        // fills too, so every entry path shares one direction decision. Fail-open, like
+        // the validator. V3-owned orders never reach this point (placed earlier).
+        if ((config as any).thesisValidationEnabled !== false && analysis.direction) {
+          try {
+            const preCandles = await loadThesisCandles(cachedFetch, pair, {
+              style: resolvedStyle, wantStyleCandles: true, confirmCandles: candles, h4Window: LEGACY_H4_WINDOW,
+            });
+            const pre = validatePendingOrderThesis(
+              { order_id: `precheck:${pair}`, symbol: pair, direction: analysis.direction as "long" | "short", entry_price: limitEntry?.price ?? analysis.lastPrice },
+              thesisValidationOpts(config, preCandles, { fotsiResult: _fotsiResult, lastGamePlan: _lastGamePlanForValidation, style: resolvedStyle }),
+            );
+            (detail as any).thesisPrecheck = { valid: pre.valid, checkType: pre.checkType, reason: pre.reason, checks: pre.checks };
+            if (!pre.valid) {
+              detail.status = "skipped_thesis_conflict";
+              detail.skipReason = `Not placed — the thesis check would cancel it on arrival (${pre.checkType}): ${pre.reason}`;
+              console.log(`[scan ${scanCycleId}] ⛔ ${pair} ${analysis.direction}: THESIS PRE-CHECK — ${pre.reason}`);
+              scanDetails.push(detail);
+              continue;
+            }
+          } catch (e: any) {
+            console.warn(`[scan ${scanCycleId}] ${pair}: thesis pre-check error (fail-open): ${e?.message}`);
+          }
         }
         // ── Candidate C shadow: C's order from the same inputs ──
         // Same condition as A's Route 2 branch below, which this precedes

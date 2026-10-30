@@ -50,7 +50,15 @@ Deno.test("every legacy 4H consumer is sliced back to its original window", () =
   // a cache-only peek for Candidate C shadow orders), so count both spellings.
   assert(code.includes("const huntFetch = isShadow ? shadowFetch : cachedFetch;"));
   const sites = [...code.matchAll(/(?:cachedFetch|huntFetch)\([^)]*"4h"[^)]*\)([^\n]*)/g)];
-  assert(sites.length >= 3, `expected the known 4h call sites, found ${sites.length}`);
+  assert(sites.length >= 2, `expected the known 4h call sites, found ${sites.length}`);
+  // The thesis check's 4h fetch lives in _shared/thesisInputs.ts (shared by the
+  // cancel check and the pre-placement check): it slices to the window it is
+  // given, and both scanner callers must give it LEGACY_H4_WINDOW.
+  const thesisInputs = Deno.readTextFileSync(new URL("../../functions/_shared/thesisInputs.ts", import.meta.url));
+  assert(/fetch\(symbol, "4h", "1mo", "pending_thesis_htf"\)\.then\(\(c\) => c\.slice\(-o\.h4Window\)\)/.test(thesisInputs),
+    "the thesis 4h fetch slices to its window");
+  const callers = [...code.matchAll(/loadThesisCandles\([\s\S]{0,260}?h4Window: ([A-Z_0-9]+)/g)].map((m) => m[1]);
+  assertEquals(callers, ["LEGACY_H4_WINDOW", "LEGACY_H4_WINDOW"], "both thesis callers pass the legacy window");
   const unsliced = sites.filter((s) => !/slice\(-LEGACY_H4_WINDOW\)/.test(s[1]));
   assertEquals(unsliced.length, 1,
     `only the pair-loop fetch may be unsliced; found ${unsliced.length}`);
