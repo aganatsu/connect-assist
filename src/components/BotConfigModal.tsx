@@ -75,6 +75,16 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "entry_exit", label: "Pending Zone Orders", keywords: ["zone", "setup", "pending", "order", "confirmation", "choch", "ob", "fvg", "entry type", "limit"] },
   { tab: "strategy", label: "Tier 1 Gate Enabled", keywords: ["tier 1", "gate", "toggle", "disable", "enable", "gate 19", "core factors", "off"] },
   { tab: "strategy", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum", "gate 19", "market structure", "ob", "fvg", "premium discount"] },
+  { tab: "strategy", label: "Direction Engine", keywords: ["direction", "bias", "trend", "engine", "long", "short"] },
+  { tab: "strategy", label: "Stable Bias Trend", keywords: ["confirmed", "trend", "bias", "stable"] },
+  { tab: "strategy", label: "Bias Break Extension", keywords: ["fib", "factor", "extension", "bias"] },
+  { tab: "strategy", label: "Bias Swing Size", keywords: ["swing", "lookback", "bias"] },
+  { tab: "strategy", label: "Structure CHoCH Lookback", keywords: ["choch", "lookback", "structure", "h4"] },
+  { tab: "strategy", label: "Confirmation BOS Lookback", keywords: ["bos", "lookback", "confirmation", "h1"] },
+  { tab: "strategy", label: "Let Pullbacks Through", keywords: ["pullback", "price aware", "retracement", "block"] },
+  { tab: "strategy", label: "Thesis Check", keywords: ["thesis", "cancel", "invalidation", "pre-check"] },
+  { tab: "strategy", label: "Thesis Check: Direction Flip", keywords: ["thesis", "direction", "flip", "cancel"] },
+  { tab: "strategy", label: "Thesis Check Uses My Style's Engine", keywords: ["thesis", "style", "aware", "engine"] },
   { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "soft", "off", "blocking", "skip"] },
   { tab: "strategy", label: "Zone Entry Depth", keywords: ["zone", "entry", "depth", "limit", "fill", "near", "far", "edge", "penetration"] },
   { tab: "strategy", label: "Min Zone Score", keywords: ["zone", "score", "gate", "quality", "minimum", "threshold", "weak", "rejected", "conviction"] },
@@ -882,6 +892,50 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
                     <ToggleField label="Use Unified's Entry & Stop" description="When the Unified engine confirms a setup, trade it with Unified's own entry and stop. Off: Unified only confirms, and the trade uses the Impulse engine's entry and stop. Either way, Require Unified Zone above still lets only confirmed setups through." checked={config.simplification?.unifiedModifiersEnabled !== false} onChange={v => updateField('simplification', 'unifiedModifiersEnabled', v)} />
+                    {/* ── Direction Engine: these settings existed only in the saved config until 2026-10-30 ── */}
+                    {(() => {
+                      const styleMode = (config.tradingStyle?.mode as string) ?? "scalper";
+                      const tf = DIRECTION_TFS[styleMode] ?? DIRECTION_TFS.scalper;
+                      const st = config.strategy ?? {};
+                      const chochN = st.simpleDirectionH4ChochLookback ?? 10, bosN = st.simpleDirectionH1BosLookback ?? 8;
+                      const intIn = (key: string, value: number, min: number, max: number) => (
+                        <Input type="number" value={value} min={min} max={max} step={1} className="h-9 text-sm"
+                          onChange={e => updateField('strategy', key, Math.min(max, Math.max(min, Math.round(Number(e.target.value)) || min)))} />
+                      );
+                      return (
+                        <div className="border-t border-border pt-4 space-y-4">
+                          <div>
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Direction Engine</p>
+                            <p className="text-[10px] text-muted-foreground">Decides long, short or no trade before any zone is looked at. Your style ({tf.name}) reads the bias on {tf.bias}, structure on {tf.structure} and confirmation on {tf.confirm}; change the timeframes in the Trading Style tab.</p>
+                          </div>
+                          <ToggleField label="Direction Engine" description="Off: the bot sets no direction from structure (not recommended)." checked={st.useSimpleDirection ?? true} onChange={v => updateField('strategy', 'useSimpleDirection', v)} />
+                          <ToggleField label="Stable Bias Trend" description={`Read the ${tf.bias} bias from close-confirmed swing breaks that push past the old swing (confirmed trend). Off: use the last two swings, which flips far more often.`} checked={st.useConfirmedTrend ?? true} onChange={v => updateField('strategy', 'useConfirmedTrend', v)} />
+                          <div className="grid grid-cols-2 gap-3">
+                            <FieldGroup label="Bias Break Extension" description="Share of the swing a close must push past the old swing to flip the bias. Default 0.25 (25%).">
+                              <Input type="number" value={st.confirmedTrendFibFactor ?? 0.25} min={0} max={1} step={0.05} className="h-9 text-sm"
+                                onChange={e => updateField('strategy', 'confirmedTrendFibFactor', Math.min(1, Math.max(0, Number(e.target.value) || 0)))} />
+                            </FieldGroup>
+                            <FieldGroup label="Bias Swing Size" description={`A ${tf.bias} swing must stand out from this many candles on each side. Default 5.`}>
+                              {intIn('confirmedTrendSwingLookback', st.confirmedTrendSwingLookback ?? 5, 2, 20)}
+                            </FieldGroup>
+                            <FieldGroup label="Structure CHoCH Lookback" description={`A ${tf.structure} CHoCH against the bias within this many ${tf.structure} candles blocks direction. ${chochN} candles = ${formatMinutes(chochN * tf.structureMin)}. Default 10.`}>
+                              {intIn('simpleDirectionH4ChochLookback', chochN, 1, 100)}
+                            </FieldGroup>
+                            <FieldGroup label="Confirmation BOS Lookback" description={`A ${tf.confirm} BOS/CHoCH in the bias direction within this many ${tf.confirm} candles confirms it. ${bosN} candles = ${formatMinutes(bosN * tf.confirmMin)}. Default 8.`}>
+                              {intIn('simpleDirectionH1BosLookback', bosN, 1, 100)}
+                            </FieldGroup>
+                          </div>
+                          <ToggleField label="Let Pullbacks Through" description={`Off: when the ${tf.structure} trend turns against the ${tf.bias} bias, even in a pullback, there is no direction. On: healthy pullbacks pass (price-aware structure blocks). Tested 2026-10-30: On gave more trades but worse results in both test periods.`} checked={st.priceAwareStructureBlocks ?? false} onChange={v => updateField('strategy', 'priceAwareStructureBlocks', v)} />
+                          <div>
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Thesis Check</p>
+                            <p className="text-[10px] text-muted-foreground">Cancels pending orders whose thesis broke, and skips any entry it would cancel on arrival.</p>
+                          </div>
+                          <ToggleField label="Thesis Check" description="Master switch for the cancel check and the pre-entry check." checked={st.thesisValidationEnabled ?? true} onChange={v => updateField('strategy', 'thesisValidationEnabled', v)} />
+                          <ToggleField label="Thesis Check: Direction Flip" description="Cancel, or skip up front, when the check's direction opposes the order." checked={st.thesisCheckDirectionFlip ?? true} onChange={v => updateField('strategy', 'thesisCheckDirectionFlip', v)} />
+                          <ToggleField label="Thesis Check Uses My Style's Engine" description={`Off: judged by the Daily → 4H → 1H engine, a higher-timeframe second opinion. On: judged by your own ${tf.bias} → ${tf.structure} → ${tf.confirm} engine, which almost always agrees with the entry, so it rarely blocks anything.`} checked={st.thesisDirectionStyleAware ?? false} onChange={v => updateField('strategy', 'thesisDirectionStyleAware', v)} />
+                        </div>
+                      );
+                    })()}
                     {/* ── Impulse Zone Gate Mode ── */}
                     <FieldGroup label="Impulse Zone Gate Mode" description="Controls how strictly the impulse zone requirement is enforced when Unified Zone is OFF.">
                       <div className="flex items-center gap-3">
@@ -2228,6 +2282,19 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
       </div>
     </div>
   );
+}
+
+/** The direction engine's timeframe stack per trading style (directionEngine.ts STYLE_TF_LABELS). Minutes per candle drive the durations shown. */
+const DIRECTION_TFS: Record<string, { name: string; bias: string; structure: string; confirm: string; structureMin: number; confirmMin: number }> = {
+  scalper: { name: "Scalper", bias: "1H", structure: "15m", confirm: "5m", structureMin: 15, confirmMin: 5 },
+  day_trader: { name: "Day Trader", bias: "Daily", structure: "4H", confirm: "1H", structureMin: 240, confirmMin: 60 },
+  swing_trader: { name: "Swing Trader", bias: "Weekly", structure: "Daily", confirm: "4H", structureMin: 1440, confirmMin: 240 },
+};
+
+function formatMinutes(m: number): string {
+  if (m < 60) return `${m} min`;
+  if (m < 1440) return `${+(m / 60).toFixed(1)} hours`;
+  return `${+(m / 1440).toFixed(1)} days`;
 }
 
 function SectionHeader({ title, description }: { title: string; description: string }) {
