@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock, ShieldAlert,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock, ShieldAlert, Users,
 } from "lucide-react";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -34,7 +34,9 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
   const { theme, setTheme } = useTheme();
   const isAdmin = useIsAdmin();
   const items = isAdmin
-    ? [...NAV_ITEMS, { title: "System Reset & Ledger Health", url: "/system", icon: ShieldAlert, shortcut: undefined as string | undefined }]
+    ? [...NAV_ITEMS,
+       { title: "System Reset & Ledger Health", url: "/system", icon: ShieldAlert, shortcut: undefined as string | undefined },
+       { title: "Admin · Users", url: "/admin", icon: Users, shortcut: undefined as string | undefined }]
     : NAV_ITEMS;
 
   const cycleTheme = () => {
