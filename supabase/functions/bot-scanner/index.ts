@@ -134,7 +134,7 @@ import { buildHtfContext, type HtfStyle } from "../_shared/smcHtfContext.ts";
 import { runStructuralOrderBlocks, toRow as sobToRow, toScanDetail as sobToScanDetail } from "../_shared/structuralOrderBlockRunner.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { observeStructureLag } from "../_shared/structureLagObserver.ts";
-import { detectZoneConfirmation, isPriceInZone, classifyZoneExit, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
+import { detectZoneConfirmation, isPriceInZone, classifyZoneExit, isImpulseBroken, formatConfirmationSummary, resolveZoneConfirmationConfig, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
@@ -4346,7 +4346,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           const confirmationSignal = detectZoneConfirmation(
             confirmCandles,
             pending.direction as "long" | "short",
-            DEFAULT_ZONE_CONFIRMATION_CONFIG,
+            resolveZoneConfirmationConfig((config as any).__rawConfigJson),
             zoneTouchIdx,
             pending.symbol,
             (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,

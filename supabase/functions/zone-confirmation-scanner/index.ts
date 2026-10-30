@@ -50,7 +50,7 @@ import {
   isPriceInZone, classifyZoneExit,
   isImpulseBroken,
   formatConfirmationSummary,
-  DEFAULT_ZONE_CONFIRMATION_CONFIG,
+  resolveZoneConfirmationConfig,
 } from "../_shared/zoneConfirmation.ts";
 
 // Attribute this isolate's TwelveData credits. Six functions reach the
@@ -534,7 +534,7 @@ Deno.serve(async (req) => {
         const confirmationSignal = detectZoneConfirmation(
           confirmCandles,
           pending.direction as "long" | "short",
-          DEFAULT_ZONE_CONFIRMATION_CONFIG,
+          resolveZoneConfirmationConfig(config),
           zoneTouchIdx,
           pending.symbol,
           (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
