@@ -39,10 +39,24 @@ interface AdminUserRow {
   enabled_tasks: number;
 }
 
+interface BotAlert {
+  id: string;
+  email: string | null;
+  bot_id: string;
+  alert_type: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+  occurrences: number;
+  first_detected_at: string;
+  last_detected_at: string;
+}
+
 interface Overview {
   generated_at: string;
   users: AdminUserRow[];
   orphan_accounts: (PaperAccount & { user_id: string })[];
+  active_alerts?: BotAlert[];
   error?: string;
 }
 
@@ -115,6 +129,32 @@ export default function Admin() {
             </Card>
           ))}
         </div>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Active bot alerts</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {(data?.active_alerts ?? []).length === 0 ? (
+              <div className="text-xs text-muted-foreground">{isLoading ? "…" : "None — the scanner's health checks are all clear."}</div>
+            ) : (
+              data!.active_alerts!.map((a) => (
+                <div key={a.id} className="rounded-md border border-border p-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={a.severity === "critical" ? "destructive" : a.severity === "warning" ? "default" : "secondary"} className="text-[10px]">
+                      {a.severity}
+                    </Badge>
+                    <span className="font-medium">{a.title}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      since {formatTimeAgo(a.first_detected_at)} · {a.occurrences}× · {a.email ?? a.bot_id}
+                    </span>
+                  </div>
+                  <div className="mt-1 whitespace-pre-line text-muted-foreground">{a.message}</div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className="pb-2">

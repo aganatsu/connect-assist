@@ -511,6 +511,7 @@ function PreferencesSettings() {
     { key: "trade_management", label: "Trade Management", description: "BE, trailing, partial TP", emoji: "🛡️" },
     { key: "thesis_invalidated", label: "Thesis Invalidated", description: "Order cancelled", emoji: "⚠️" },
     { key: "prop_firm_alert", label: "Prop Firm Alerts", description: "Emergency close, lockout", emoji: "🚨" },
+    { key: "bot_health", label: "Bot Health", description: "All pairs blocked for 6h", emoji: "🩺" },
     { key: "daily_review", label: "Daily Review", description: "End-of-day summary", emoji: "📋" },
     { key: "weekly_advisor", label: "Weekly Advisor", description: "Weekly performance report", emoji: "📈" },
     { key: "gate_effectiveness", label: "Gate Effectiveness", description: "Gate performance alerts", emoji: "📊" },
