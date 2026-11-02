@@ -43,7 +43,7 @@ function seed(mode = "SHADOW", cfg = config()) {
 const END = MK.hours.at(-1)!.t + H + 2 * H; // "now" two hours after the last bar
 const strip = (rows: Record<string, unknown>[]) => rows.map(({ id: _i, ...r }) => r).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
-Deno.test("cohort: deterministic id at the flip; params resolved per pair; reused; a live config change starts a new one", async () => {
+Deno.test("cohort: deterministic id at the flip; params resolved per pair; reused; a change of the shadow's parameters starts a new one", async () => {
   const db = seed();
   const m = { user_id: USER, bot_id: "smc", mode: "SHADOW", set_at: SET_AT };
   const c1 = await ensureCohort(db.client(), m);
@@ -52,10 +52,78 @@ Deno.test("cohort: deterministic id at the flip; params resolved per pair; reuse
   assert(!("reason" in c1.params["EUR/USD"]) && (c1.params["EUR/USD"] as { tpRatio: number }).tpRatio === 1.5);
   assertEquals((await ensureCohort(db.client(), m)).id, c1.id);
   assertEquals(db.rows("iov3_shadow_cohorts").length, 1);
-  db.rows("bot_configs")[0].config_version = "v-new"; db.rows("bot_configs")[0].updated_at = iso(Date.parse(SET_AT) + 5 * H);
+  const cfg = db.rows("bot_configs")[0];
+  cfg.config_version = "v-new"; cfg.updated_at = iso(Date.parse(SET_AT) + 5 * H); cfg.config_json = { ...config(), exit: { ...config().exit, tpRRRatio: 2 } };
   const c2 = await ensureCohort(db.client(), m);
   assertEquals(c2.started_at, iso(Date.parse(SET_AT) + 5 * H));
   assertEquals(db.rows("iov3_shadow_cohorts").length, 2);
+});
+
+Deno.test("cohort: a config save that leaves the shadow's parameters alone keeps the cohort (2026-11-02: 6 restarts, all identical params)", async () => {
+  const db = seed();
+  const m = { user_id: USER, bot_id: "smc", mode: "SHADOW", set_at: SET_AT };
+  const c1 = await ensureCohort(db.client(), m);
+  const cfg = db.rows("bot_configs")[0];
+  cfg.config_version = "v-other"; cfg.updated_at = iso(Date.parse(SET_AT) + 5 * H);
+  cfg.config_json = { ...config(), entry: { ...config().entry, confirmationTier3Enabled: false } };   // a Bot Config save the shadow does not read
+  assertEquals((await ensureCohort(db.client(), m)).id, c1.id);
+  assertEquals(db.rows("iov3_shadow_cohorts").length, 1);
+});
+
+Deno.test("cohort: entering ON is still its own cohort (owner decision Q1 = a), and leaving ON starts another", async () => {
+  const db = seed();
+  const m = { user_id: USER, bot_id: "smc", mode: "SHADOW", set_at: SET_AT };
+  const c1 = await ensureCohort(db.client(), m);
+  const cfg = db.rows("bot_configs")[0];
+  cfg.config_json = { ...config(), structure: { owner: "v3", arm: "A" } }; cfg.config_version = "v-on"; cfg.updated_at = iso(Date.parse(SET_AT) + 5 * H);
+  const on = await ensureCohort(db.client(), { ...m, mode: "ON" });
+  assert(on.id !== c1.id);
+  cfg.config_json = config(); cfg.config_version = "v-off"; cfg.updated_at = iso(Date.parse(SET_AT) + 9 * H);
+  const off = await ensureCohort(db.client(), m);
+  assert(off.id !== on.id && off.id !== c1.id);
+  assertEquals(c1.params_hash, off.params_hash, "same parameters and no structure owner: the pre-2026-11-02 key");
+});
+
+Deno.test("restart: the old cohort's open order is cancelled at the restart and its open position runs to stop or target under the old id", async () => {
+  const db = seed();
+  const T1 = MK.hours[200].t + H;                       // the old cohort has run up to this 1H close
+  await runShadowForPair(db.client(), "EUR/USD", T1 + 10 * 60_000);
+  const c1 = db.rows("iov3_shadow_cohorts")[0].id as string;
+  const latest = (cid: string, arm: string) => db.rows("iov3_shadow_state").filter((x) => x.cohort_id === cid && x.arm === arm).sort((a, b) => (b.seq as number) - (a.seq as number))[0];
+  // plant an open position in arm A and a waiting order in arm B of the old cohort
+  const px = MK.hours[200].c, pip = 0.0001;
+  const pos = { id: "EUR/USD|planted", dir: "long", entry: px, fill: px, fillT: T1, sl: +(px - 30 * pip).toFixed(5), tp: +(px + 45 * pip).toFixed(5), zl: px - 5 * pip, zh: px,
+    placed: T1 - H, conf: "bullish_choch", riskPips: 30, legBars: 10, ctx4h: null, ctx4hAgrees: null };
+  const pend = { id: "EUR/USD|B|planted", dir: "short", entry: px + 200 * pip, sl: px + 230 * pip, tp: px + 155 * pip, zl: px + 195 * pip, zh: px + 205 * pip, zoneType: "ob",
+    origin: px + 230 * pip, placed: T1, touchT: null, legBars: 10, stopSource: "impulse" };
+  for (const [arm, patch] of [["A", { pos, pend: null }], ["B", { pend, pos: null }]] as const) {
+    const r = latest(c1, arm);
+    db.rows("iov3_shadow_state").push({ ...r, seq: (r.seq as number) + 1, state: { ...(r.state as object), ...patch } });
+  }
+  // a real restart two hours later: the shadow's target ratio changes
+  const restartAt = T1 + 2 * H + 15 * 60_000;
+  const cfg = db.rows("bot_configs")[0];
+  cfg.config_json = { ...config(), exit: { ...config().exit, tpRRRatio: 2 } }; cfg.config_version = "v-tp2"; cfg.updated_at = iso(restartAt);
+  await runShadowForPair(db.client(), "EUR/USD", END);
+  assertEquals(db.rows("iov3_shadow_cohorts").length, 2);
+  const old = db.rows("iov3_shadow_events").filter((e) => e.cohort_id === c1);
+  // the position: closed at the first 5m bar after its fill that reaches the stop or the target
+  const m5 = MK.m5.map((b) => ({ t: Date.parse(b.bar_time as string), h: b.high as number, l: b.low as number })).filter((b) => b.t >= T1);
+  const hit = m5.find((b) => b.l <= pos.sl || b.h >= pos.tp)!;
+  const closed = old.find((e) => e.order_id === pos.id && e.type === "closed");
+  assert(closed, "the planted position was closed under the old cohort");
+  assertEquals(closed!.t, iso(hit.t + M5));
+  assertEquals((closed!.payload as { result: string }).result, hit.l <= pos.sl ? "SL" : "TP");
+  // the order: cancelled at the restart
+  const endB = old.filter((e) => e.order_id === pend.id && ["cancelled", "filled", "voided"].includes(e.type as string));
+  assertEquals(endB.length, 1);
+  assertEquals([endB[0].type, (endB[0].payload as { reason: string }).reason, endB[0].t], ["cancelled", "cohort_restart", iso(restartAt)]);
+  assert(!old.some((e) => e.type === "placed" && Date.parse(e.t as string) > restartAt), "a retired cohort places no new orders after the restart");
+  for (const arm of ["A", "B"]) { const st = latest(c1, arm).state as { pend: unknown; pos: unknown }; assertEquals([st.pend, st.pos], [null, null], arm); }
+  // idempotent: another run writes nothing new for the old cohort
+  const n = db.rows("iov3_shadow_events").filter((e) => e.cohort_id === c1).length;
+  await runShadowForPair(db.client(), "EUR/USD", END);
+  assertEquals(db.rows("iov3_shadow_events").filter((e) => e.cohort_id === c1).length, n);
 });
 
 Deno.test("run: OFF accounts are untouched (no cohort, no rows)", async () => {
