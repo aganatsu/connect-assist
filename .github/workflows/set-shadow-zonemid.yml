@@ -39,7 +39,9 @@ jobs:
     steps:
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned: CLI 3.0.0 (2026-11-02) asks for confirmation before a deploy and exits without deploying when it can't
+          # (no terminal), which broke the deploy of 7203430e. 2.122.0 is what the last good deploy (2026-10-30) installed.
+          version: 2.122.0
 
       - name: Set SMC_SHADOW_ZONEMID
         if: inputs.mode != 'status'
