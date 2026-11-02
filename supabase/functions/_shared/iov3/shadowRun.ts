@@ -33,21 +33,35 @@ async function pages<T>(q: (from: number) => PromiseLike<{ data: T[] | null; err
 export interface Cohort { id: string; user_id: string; bot_id: string; started_at: string; first_decision_at: string; live_config_version: string | null; params: Record<string, ShadowParams | { reason: string }>; params_hash: string; engine_version: string }
 interface ModeRow { user_id: string; bot_id: string; mode: string; set_at: string }
 
-/** The cohort that should be current for an account in SHADOW/ON: reuse the latest if it started after the flip under the same live
- *  config version, otherwise a new one starting at the flip (or at the config change). Deterministic, so parallel runs agree. */
+/**
+ * What a cohort stands for: the shadow's own parameters, plus the structure owner while ON (owner decision Q1 = a: ON is its own
+ * cohort, SHADOW is not). Without a structure owner this is hashStructure(params), the value every cohort before 2026-11-02 stored,
+ * so existing cohorts keep matching.
+ */
+export function cohortKey(params: Cohort["params"], structure: unknown): string {
+  return structure == null ? hashStructure(params) : hashStructure({ params, structure });
+}
+
+/** The cohort that should be current for an account in SHADOW/ON: reuse the latest if it started after the flip with the same cohort
+ *  key and engine, otherwise a new one starting at the flip (or at the config change). Deterministic, so parallel runs agree.
+ *
+ *  Until 2026-11-02 any change of live config version started a new cohort, and the old cohort's open order and position were never
+ *  advanced again: 6 restarts in a week, every one with identical shadow parameters, orphaned 8 of 20 orders. A config save that
+ *  leaves the shadow's parameters alone now keeps the cohort; a real restart retires the old cohort's open items (retireOldCohorts). */
 export async function ensureCohort(db: Client, m: ModeRow): Promise<Cohort> {
   const { data: cfg, error: ce } = await db.from("bot_configs").select("config_json,config_version,updated_at").eq("user_id", m.user_id).is("connection_id", null).maybeSingle();
   if (ce) throw new Error(`bot config: ${ce.message}`);
   const { data: last, error: le } = await db.from("iov3_shadow_cohorts").select("*").eq("user_id", m.user_id).eq("bot_id", m.bot_id).order("started_at", { ascending: false }).limit(1);
   if (le) throw new Error(`cohorts: ${le.message}`);
   const cur = last?.[0] as Cohort | undefined, version = cfg?.config_version ?? null;
-  if (cur && Date.parse(cur.started_at) >= Date.parse(m.set_at) && cur.live_config_version === version) return cur;
-  const configChanged = !!cur && Date.parse(cur.started_at) >= Date.parse(m.set_at) && cur.live_config_version !== version;
-  const startMs = configChanged ? Math.max(Date.parse(m.set_at), Date.parse(cfg?.updated_at ?? m.set_at)) : Date.parse(m.set_at);
   const params: Cohort["params"] = {};
   for (const pair of IOV3_PAIRS) { const r = resolveShadowParams(cfg?.config_json ?? null, pair); params[pair] = r.ok ? r.params : { reason: r.reason }; }
+  const key = cohortKey(params, (cfg?.config_json as Record<string, unknown> | null)?.structure);
+  const inPeriod = !!cur && Date.parse(cur.started_at) >= Date.parse(m.set_at);
+  if (cur && inPeriod && cur.params_hash === key && cur.engine_version === SHADOW_ENGINE_VERSION) return cur;
+  const startMs = inPeriod ? Math.max(Date.parse(m.set_at), Date.parse(cfg?.updated_at ?? m.set_at)) : Date.parse(m.set_at);
   const row: Cohort = { id: `${m.user_id}|${m.bot_id}|${iso(startMs)}`, user_id: m.user_id, bot_id: m.bot_id, started_at: iso(startMs),
-    first_decision_at: iso(Math.ceil(startMs / H) * H), live_config_version: version, params, params_hash: hashStructure(params), engine_version: SHADOW_ENGINE_VERSION };
+    first_decision_at: iso(Math.ceil(startMs / H) * H), live_config_version: version, params, params_hash: key, engine_version: SHADOW_ENGINE_VERSION };
   const { error } = await db.from("iov3_shadow_cohorts").upsert(row, { onConflict: "id", ignoreDuplicates: true });
   if (error) throw new Error(`cohort insert: ${error.message}`);
   return row;
@@ -125,12 +139,67 @@ export function eventRow(c: Cohort, pair: string, e: ShadowEvent, arm: Arm = "A"
 
 export interface PairRunResult { cohort: string; arm: Arm; pair: string; skipped?: string; decisions: number; events: number; asOf?: string; open?: string | null }
 
+/**
+ * Older cohorts of this account that still hold an open order or position for `pair`: run them up to the restart exactly as before
+ * (deterministic, so nothing they would have done is lost), cancel the open order at the restart ("cohort_restart"), and keep
+ * managing an open position on 5m bars until its stop or target. No new orders are placed in a retired cohort. Rows are written under
+ * the old cohort id, so the app's per-cohort order history closes properly.
+ */
+export async function retireOldCohorts(db: Client, current: Cohort, pair: string, nowMs: number): Promise<PairRunResult[]> {
+  const out: PairRunResult[] = [];
+  const { data: olds, error } = await db.from("iov3_shadow_cohorts").select("*").eq("user_id", current.user_id).eq("bot_id", current.bot_id)
+    .lt("started_at", current.started_at).order("started_at");
+  if (error) throw new Error(`old cohorts: ${error.message}`);
+  const restartMs = Date.parse(current.started_at);
+  for (const old of (olds ?? []) as Cohort[]) {
+    const params = old.params?.[pair];
+    if (!params || "reason" in params) continue;
+    for (const arm of ARMS) {
+      const { data: sRows, error: se } = await db.from("iov3_shadow_state").select("seq,state").eq("cohort_id", old.id).eq("arm", arm).eq("pair", pair).order("seq", { ascending: false }).limit(1);
+      if (se) throw new Error(`state: ${se.message}`);
+      const seq: number = sRows?.[0]?.seq ?? 0, state0: ShadowState | undefined = sRows?.[0]?.state;
+      if (!state0 || (!state0.pend && !state0.pos)) continue;
+      const data = await loadPairData(db, pair, Math.min(state0.lastScanT, state0.last5mT), nowMs, nowMs);
+      const settled = Math.min(nowMs - 60_000, data.m5ProcessUntil);
+      const events: ShadowEvent[] = [], decisions: ShadowDecision[] = [];
+      let state = state0;
+      const upTo = Math.min(restartMs, settled);
+      if (upTo > state.lastScanT || upTo > state.last5mT + M5) {
+        const r = step(params, state, data, upTo, arm); state = r.state; events.push(...r.events); decisions.push(...r.decisions);
+      }
+      if (state.pend && settled >= restartMs) {
+        events.push({ type: "cancelled", t: restartMs, id: state.pend.id, reason: "cohort_restart" });
+        state = { ...state, pend: null };
+      }
+      if (state.pos && !state.pend && settled > restartMs) {
+        // management only: no 1H bars means no decision is taken, so 5m bars just run the position to its stop or target
+        const r = advance(state, { h1: [], m5: data.m5, v3At: () => undefined, ctx4hAt: () => null, params: { ...params, arm }, until: settled });
+        state = r.state; events.push(...r.events);
+      }
+      if (JSON.stringify(state) === JSON.stringify(state0)) continue;
+      const put = async (table: string, rows: unknown[], onConflict: string) => {
+        for (let i = 0; i < rows.length; i += 500) {
+          const { error: e } = await db.from(table).upsert(rows.slice(i, i + 500), { onConflict, ignoreDuplicates: true });
+          if (e) throw new Error(`${table} ${pair}: ${e.message}`);
+        }
+      };
+      const ctxAt = (t: number) => { let v: string | null = null; for (const x of data.ctx4h) { if (x.t <= t) v = x.trend; else break; } return v; };
+      await put("iov3_shadow_decisions", decisions.map((x) => decisionRow(old, pair, x, ctxAt(x.t), arm)), "cohort_id,arm,pair,t");
+      await put("iov3_shadow_events", events.map((e) => eventRow(old, pair, e, arm)), "cohort_id,order_id,type,t");
+      await put("iov3_shadow_state", [{ cohort_id: old.id, arm, pair, seq: seq + 1, user_id: old.user_id, as_of: iso(settled), state }], "cohort_id,arm,pair,seq");
+      out.push({ cohort: old.id, arm, pair, decisions: decisions.length, events: events.length, asOf: iso(settled), open: state.pos ? `position ${state.pos.id}` : state.pend ? `order ${state.pend.id}` : null });
+    }
+  }
+  return out;
+}
+
 export async function runShadowForPair(db: Client, pair: string, nowMs: number): Promise<PairRunResult[]> {
   const { data: modes, error } = await db.from("structure_mode").select("user_id,bot_id,mode,set_at").in("mode", ["SHADOW", "ON"]);
   if (error) throw new Error(`structure_mode: ${error.message}`);
   const out: PairRunResult[] = [];
   for (const m of (modes ?? []) as ModeRow[]) {
     const c = await ensureCohort(db, m);
+    out.push(...await retireOldCohorts(db, c, pair, nowMs));
     const params = c.params[pair];
     if (!params || "reason" in params) {
       const reason = params && "reason" in params ? params.reason : "no parameters";

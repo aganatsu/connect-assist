@@ -132,4 +132,5 @@ export function statusText(o: ShadowOrder, pair: string): string {
 const CANCEL: Record<string, string> = {
   ttl_expiry: "expired after 8 hours", sl_invalidation: "price touched the stop before entry", leg_broken: "a candle closed beyond the swing (the leg broke)",
   direction_flip: "V3 trend flipped", superseded: "a new zone replaced it", fill_beyond_stop: "confirmation closed beyond the stop",
+  cohort_restart: "the shadow restarted because its settings changed",
 };
