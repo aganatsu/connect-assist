@@ -1095,10 +1095,11 @@ export function checkHTFConfluence(
 // ─── 6. refineLowerTF ─────────────────────────────────────────────────────────
 
 /**
- * Drop to 15m (LTF) to find a precise OB or FVG inside the best zone.
+ * Drop to the lower timeframe (LTF) to find a precise OB or FVG inside the best zone. The caller's entry candles: 10m for the scalper
+ * (built from 5m in smcZoneDecision), 15m for the day trader, 1H for the swing trader.
  * This gives a tighter entry and SL than the HTF zone alone.
  *
- * @param entryCandles - 15m candles (the entry timeframe)
+ * @param entryCandles - the entry-timeframe candles (see above)
  * @param zone - The best-ranked zone from the HTF analysis
  * @returns Refined entry details or null if no LTF structure found
  */

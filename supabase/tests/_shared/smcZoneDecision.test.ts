@@ -16,6 +16,8 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import {
   resolveZoneSlots, hasMinZoneCandles, buildHtfConfluence, decideZone,
   ZONE_DECISION_CONTRACT, type ZoneSeries,
+  regroupCandles,
+  SCALPER_REFINE_MS,
 } from "../../functions/_shared/smcZoneDecision.ts";
 import { barMsOf } from "../../functions/_shared/smcScanSnapshot.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
@@ -177,4 +179,27 @@ Deno.test("scalper is 1H-only: no 15m / 5m fallback; lowerTfFallback restores it
   assert(!reason(run("scalper", true)).includes("fallback off"), "replays of pre-10-27 decisions keep the old waterfall");
   assert(!reason(run("day_trader")).includes("fallback off"), "day trader keeps its D → 4H → 1H waterfall");
   assertEquals(run("scalper").impulseZone?.selectedTF, null);
+});
+
+// ── Scalper refinement on 10-minute candles (owner 2026-11-03) ──
+
+Deno.test("regroupCandles: 5m → 10m on UTC :00/:10 boundaries — first open, high, low, last close, summed volume", () => {
+  const c = (t: string, o: number, h: number, l: number, cl: number, v = 10) => ({ datetime: t, open: o, high: h, low: l, close: cl, volume: v });
+  const out = regroupCandles([
+    c("2026-11-03T04:00:00Z", 1.10, 1.12, 1.09, 1.11), c("2026-11-03T04:05:00Z", 1.11, 1.13, 1.10, 1.12),
+    c("2026-11-03T04:10:00Z", 1.12, 1.125, 1.115, 1.12),                        // 04:15 missing: built from what it has
+    c("2026-11-03T04:25:00Z", 1.12, 1.14, 1.12, 1.135),                         // bucket 04:20, its first bar missing
+  ], SCALPER_REFINE_MS);
+  assertEquals(out, [
+    { datetime: "2026-11-03T04:00:00Z", open: 1.10, high: 1.13, low: 1.09, close: 1.12, volume: 20 },
+    { datetime: "2026-11-03T04:10:00Z", open: 1.12, high: 1.125, low: 1.115, close: 1.12, volume: 10 },
+    { datetime: "2026-11-03T04:20:00Z", open: 1.12, high: 1.14, low: 1.12, close: 1.135, volume: 10 },
+  ]);
+});
+
+Deno.test("decideZone: only the scalper's refinement candles are regrouped to 10m; the slots (stored scan bars) stay 5m", () => {
+  const src = Deno.readTextFileSync(new URL("../../functions/_shared/smcZoneDecision.ts", import.meta.url));
+  assert(src.includes('const refineCandles = input.style === "scalper" ? regroupCandles(slots.entry, SCALPER_REFINE_MS) : slots.entry;'));
+  assert(/findUnifiedZone\(\s*slots\.h1,\s*slots\.h4,\s*refineCandles,/.test(src), "refineCandles is the entry argument");
+  assert(src.includes('entry: s.candles,              // 5m entry'), "the scalper slot itself is still the raw 5m series");
 });
