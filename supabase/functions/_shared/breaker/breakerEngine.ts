@@ -3,7 +3,11 @@
 //
 // The rule is the one pre-registered and tested in ~/strategy-v2/flip-zones/PREREG.md (sha256 2371fbce…). It FAILED on the unseen
 // year (confirmation arm: gross −0.007R, net −0.131R, n 58), so this records it live beside the bot instead of trading it.
-//   Break: the first 5m bar, starting at or after the zone was first seen, that CLOSES beyond the zone's far side.
+//   Break: the first 5m bar, starting at or after the zone was first seen, that CLOSES beyond the zone's far side, while the zone is
+//   intact. A zone is intact when the scan that first showed it had price on its side or inside it (as the shadow orders of the
+//   tested rule always had), or after a later close on its side or inside it. Unified keeps showing a zone after price has broken it
+//   (USD/JPY 157.653–157.849 was still shown 23 h after its break on 2026-11-02); without this, a fresh start would count that old
+//   break as a new flip on its first bar.
 //   Flip:  E = the near edge price returns to; S = the other edge ∓ 1 pip, widened to the pair's minimum stop; T = E ∓ 1.5 × |E − S|.
 //   Valid 48 h from the break bar's close. Cancelled before a fill on: expiry, a 5m close back beyond the other edge (flip failed),
 //   and for arm C a bar reaching S after the touch (stop before entry) or a confirmation close beyond S.
@@ -23,7 +27,7 @@ export type Arm = "C" | "L";
 export const ARMS: readonly Arm[] = ["C", "L"];
 export interface Bar { t: number; o: number; h: number; l: number; c: number }
 export interface BreakerParams { pair: string; pip: number; costPips: number; minSlPips: number; watchLimitMs?: number }
-export interface SeenZone { id: string; dir: "long" | "short"; zoneType: string; zl: number; zh: number; seenT: number; tf?: string | null }
+export interface SeenZone { id: string; dir: "long" | "short"; zoneType: string; zl: number; zh: number; seenT: number; tf?: string | null; intact?: boolean }
 interface ArmState { status: "pending" | "touched" | "done"; touchT: number | null }
 export interface Zone extends SeenZone {
   status: "watching" | "flipped" | "done";
@@ -56,7 +60,7 @@ export function addZones(state0: BreakerState, seen: SeenZone[], nowT: number): 
   for (const z of [...seen].sort((a, b) => a.seenT - b.seenT)) {
     if (z.id in st.known) { st.known[z.id] = Math.max(st.known[z.id], z.seenT); continue; }
     st.known[z.id] = z.seenT;
-    st.zones.push({ ...z, status: "watching", breakT: null, flipDir: null, E: null, S: null, T: null, arms: { C: { status: "pending", touchT: null }, L: { status: "pending", touchT: null } } });
+    st.zones.push({ ...z, intact: z.intact === true, status: "watching", breakT: null, flipDir: null, E: null, S: null, T: null, arms: { C: { status: "pending", touchT: null }, L: { status: "pending", touchT: null } } });
     events.push({ type: "seen", t: z.seenT, zoneId: z.id, zone: z });
   }
   const tracked = new Set(st.zones.map((z) => z.id));
@@ -88,7 +92,9 @@ export function advanceBars(state0: BreakerState, m5: readonly Bar[], p: Breaker
       if (z.status === "watching") {
         if (b.t < z.seenT) continue;
         if (close > z.seenT + (p.watchLimitMs ?? WATCH_LIMIT_MS)) { z.status = "done"; continue; }
-        if (z.dir === "long" ? b.c < z.zl : b.c > z.zh) {
+        const beyond = z.dir === "long" ? b.c < z.zl : b.c > z.zh;
+        if (!z.intact) { if (!beyond) z.intact = true; continue; }
+        if (beyond) {
           const flipDir = z.dir === "long" ? "short" : "long", E = flipDir === "short" ? z.zl : z.zh;
           let S = flipDir === "short" ? z.zh + pip : z.zl - pip;
           if (Math.abs(E - S) < p.minSlPips * pip) S = flipDir === "short" ? E + p.minSlPips * pip : E - p.minSlPips * pip;

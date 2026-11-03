@@ -40,6 +40,14 @@ Deno.test("zones from scan details: Unified zones with bounds and an impulse dir
   assertEquals(z.map((x) => [x.id, x.dir, x.tf]), [["EUR/USD|long|11000.0|11010.0", "long", "1H"], ["USD/JPY|short|15760.0|15780.0", "short", "1H"]]);
 });
 
+Deno.test("zones from scan details: intact only when the scan's price is on the zone's side or inside it", () => {
+  const withPrice = (price: number | undefined, dir: string) => ({ ...detail("USD/JPY", 157.653, 157.849, dir), unifiedZone: { ...detail("USD/JPY", 157.653, 157.849, dir).unifiedZone, price: price === undefined ? undefined : { currentPrice: price } } });
+  const pipOf = () => 0.01;
+  const intact = (d: unknown) => zonesFromScan([d], T0, pipOf)[0].intact;
+  assertEquals([intact(withPrice(157.5, "bearish")), intact(withPrice(157.7, "bearish")), intact(withPrice(157.95, "bearish")), intact(withPrice(undefined, "bearish"))],
+    [true, true, false, false], "sell zone: below or inside = intact; above (already broken, the 2026-11-03 case) or unknown = not");
+});
+
 Deno.test("switch off: nothing is read beyond the config and nothing is written", async () => {
   const db = seed(false);
   assertEquals(await runBreakerShadow(db.client(), NOW), []);

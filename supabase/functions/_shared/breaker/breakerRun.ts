@@ -27,7 +27,10 @@ export function zonesFromScan(details: unknown, scanT: number, pipOf: (pair: str
     const zl = Number(u.zone.low), zh = Number(u.zone.high);
     const dir = u.impulse.direction === "bullish" ? "long" : u.impulse.direction === "bearish" ? "short" : null;
     if (!dir || !(zh > zl)) continue;
-    out.push({ id: zoneId(pair, dir, zl, zh, pip), dir, zoneType: String(u.zone.type ?? ""), zl, zh, seenT: scanT, tf: u.selectedTF ?? null });
+    // intact: the scan's price was on the zone's side or inside it (a zone price has already closed through is not a fresh break)
+    const price = Number(u.price?.currentPrice);
+    const intact = Number.isFinite(price) && (dir === "long" ? price >= zl : price <= zh);
+    out.push({ id: zoneId(pair, dir, zl, zh, pip), dir, zoneType: String(u.zone.type ?? ""), zl, zh, seenT: scanT, tf: u.selectedTF ?? null, intact });
   }
   return out;
 }

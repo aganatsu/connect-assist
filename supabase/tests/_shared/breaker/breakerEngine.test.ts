@@ -12,7 +12,7 @@ function bars(path: [number, number, number, number][]): Bar[] {
   path.forEach(([o, h, l, c], i) => out.push({ t: T0 + i * M5, o, h, l, c }));
   return out;
 }
-const Z = { id: zoneId("EUR/USD", "long", 1.1000, 1.1010, pip), dir: "long" as const, zoneType: "FVG", zl: 1.1000, zh: 1.1010, seenT: T0 };
+const Z = { id: zoneId("EUR/USD", "long", 1.1000, 1.1010, pip), dir: "long" as const, zoneType: "FVG", zl: 1.1000, zh: 1.1010, seenT: T0, intact: true };
 function run(path: [number, number, number, number][], zones = [Z]) {
   const m5 = bars(path);
   let st = initBreakerState(T0);
@@ -94,4 +94,13 @@ Deno.test("a zone the scanner keeps showing is tracked once; it is forgotten onl
   assertEquals(addZones(st, [{ ...Z, seenT: T0 + 2 * 3600_000 }], T0 + 2 * 3600_000).events.length, 0, "finished, still remembered");
   const later = addZones(st, [], T0 + 3600_000 + FORGET_AFTER_MS + 3600_000).state;
   assert(!(Z.id in later.known), "a week unseen and not tracked: forgotten");
+});
+
+Deno.test("a zone first seen ALREADY broken does not flip on its first bar; it flips only after price is back and closes through again", () => {
+  const stale = { ...Z, intact: false };
+  const below: [number, number, number, number][] = [[1.0990, 1.0992, 1.0985, 1.0988], [1.0988, 1.0990, 1.0984, 1.0987]];
+  assertEquals(types(run(below, [stale]).events), ["seen"], "price already beyond the zone: no flip (2026-11-03 USD/JPY false flip)");
+  const back: [number, number, number, number][] = [...below, [1.0987, 1.1004, 1.0986, 1.1003], [1.1003, 1.1004, 1.0990, 1.0993]];
+  const f = run(back, [stale]).events.find((e) => e.type === "flipped") as Extract<BreakerEvent, { type: "flipped" }>;
+  assertEquals(f.t, T0 + 4 * M5, "back inside, then a close through: a real break");
 });
