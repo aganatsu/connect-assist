@@ -140,18 +140,21 @@ export function eventRow(c: Cohort, pair: string, e: ShadowEvent, arm: Arm = "A"
 export interface PairRunResult { cohort: string; arm: Arm; pair: string; skipped?: string; decisions: number; events: number; asOf?: string; open?: string | null }
 
 /**
- * Older cohorts of this account that still hold an open order or position for `pair`: run them up to the restart exactly as before
+ * Older cohorts of this account that still hold an open order or position for `pair`: run each up to ITS restart (the start of the
+ * cohort that replaced it, not the current one: on 2026-11-02 using the current start let a 10-28 cohort keep deciding until 11-02 and
+ * place orders that never existed) exactly as before
  * (deterministic, so nothing they would have done is lost), cancel the open order at the restart ("cohort_restart"), and keep
  * managing an open position on 5m bars until its stop or target. No new orders are placed in a retired cohort. Rows are written under
  * the old cohort id, so the app's per-cohort order history closes properly.
  */
 export async function retireOldCohorts(db: Client, current: Cohort, pair: string, nowMs: number): Promise<PairRunResult[]> {
   const out: PairRunResult[] = [];
-  const { data: olds, error } = await db.from("iov3_shadow_cohorts").select("*").eq("user_id", current.user_id).eq("bot_id", current.bot_id)
-    .lt("started_at", current.started_at).order("started_at");
+  const { data: all, error } = await db.from("iov3_shadow_cohorts").select("*").eq("user_id", current.user_id).eq("bot_id", current.bot_id)
+    .lte("started_at", current.started_at).order("started_at");
   if (error) throw new Error(`old cohorts: ${error.message}`);
-  const restartMs = Date.parse(current.started_at);
-  for (const old of (olds ?? []) as Cohort[]) {
+  const chain = ((all ?? []) as Cohort[]).filter((x) => x.id !== current.id).concat([current]);
+  for (let ci = 0; ci < chain.length - 1; ci++) {
+    const old = chain[ci], restartMs = Date.parse(chain[ci + 1].started_at);
     const params = old.params?.[pair];
     if (!params || "reason" in params) continue;
     for (const arm of ARMS) {
