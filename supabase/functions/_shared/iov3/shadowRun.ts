@@ -3,17 +3,14 @@
 // structure_mode, bot_configs (the account's global config row, exactly what bot-scanner loads), structure_bars_1h,
 // structure_v3_snapshots, structure_bars_5m. Writes only iov3_shadow_*. No provider call, no trading table.
 import { hashStructure } from "../smcScanSnapshot.ts";
-import { fxOpenNY } from "../structure/canonicalBars.ts";
+import { canonical5m, M5_MISSING_AFTER_MS, M5_WRITE_GRACE_MS } from "./canonical5m.ts";
 import { V32C_ENGINE_VERSION } from "../structure/v32cState.ts";
 import { resolveShadowParams } from "./params.ts";
 import { advance, IOV3_PAIRS, initShadowState, type Bar, type ShadowDecision, type ShadowEvent, type ShadowParams, type ShadowState, type V3Leg } from "./shadowEngine.ts";
 
 export const SHADOW_ENGINE_VERSION = `iov3-shadow-v1.1+${V32C_ENGINE_VERSION}`;
 export const RUNNER_ENV = "IOV3_SHADOW_RUNNER"; // "on" enables the cron function; anything else (default) = off
-/** A 5m bar counts only if its canonical value was observed within this long after its close; otherwise it is a data gap. */
-export const M5_MISSING_AFTER_MS = 60 * 60_000;
-/** Extra wait before declaring a bar missing, so a scan that observed it in time but is still writing is not raced. */
-export const M5_WRITE_GRACE_MS = 5 * 60_000;
+export { canonical5m, M5_MISSING_AFTER_MS, M5_WRITE_GRACE_MS };
 const H = 3_600_000, M5 = 300_000;
 
 // deno-lint-ignore no-explicit-any
@@ -65,29 +62,6 @@ export async function ensureCohort(db: Client, m: ModeRow): Promise<Cohort> {
   const { error } = await db.from("iov3_shadow_cohorts").upsert(row, { onConflict: "id", ignoreDuplicates: true });
   if (error) throw new Error(`cohort insert: ${error.message}`);
   return row;
-}
-
-/**
- * The shadow's 5m bars from the canonical 5m store (structure_bars_5m: first settled observation wins, values never change).
- * Deterministic: a bar is PRESENT iff its canonical value was observed within M5_MISSING_AFTER_MS of its close, so a later replay
- * (the audit) sees exactly what the hourly run saw. `processUntil` stops processing before the first FX-open slot (from `fromMs`)
- * that is not final yet: absent but still inside the window (+ write grace). Older absent slots are data gaps.
- */
-export function canonical5m(rows: { bar_time: string; open: number; high: number; low: number; close: number; observed_at: string }[], nowMs: number, fromMs: number): { bars: Bar[]; processUntil: number } {
-  const bars: Bar[] = [];
-  for (const r of rows) {
-    const t = Date.parse(r.bar_time);
-    if (Date.parse(r.observed_at) > t + M5 + M5_MISSING_AFTER_MS) continue;
-    bars.push({ t, o: Number(r.open), h: Number(r.high), l: Number(r.low), c: Number(r.close) });
-  }
-  bars.sort((a, b) => a.t - b.t);
-  const have = new Set(bars.map((b) => b.t));
-  let processUntil = nowMs - 60_000;
-  for (let t = Math.floor(fromMs / M5) * M5; t + M5 <= processUntil; t += M5) {
-    if (!fxOpenNY(Math.floor(t / H) * H) || have.has(t)) continue;
-    if (nowMs < t + M5 + M5_MISSING_AFTER_MS + M5_WRITE_GRACE_MS) { processUntil = t + M5 - 1; break; } // may still arrive: wait
-  }
-  return { bars, processUntil };
 }
 
 export type Arm = "A" | "B";

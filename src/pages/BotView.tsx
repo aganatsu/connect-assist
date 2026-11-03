@@ -41,6 +41,7 @@ import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel, fmtBarTime } from "@/components/ZoneStoryPanel";
 import { V3StoryPanel } from "@/components/V3StoryPanel";
+import { BreakerStoryPanel } from "@/components/BreakerStoryPanel";
 import { V3ShadowOrders } from "@/components/V3ShadowOrders";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -1834,6 +1835,7 @@ function ScanSignalDetail({ signal: d, minZoneScore = 4 }: { signal: any; minZon
           {/* Zone Story — consolidated impulse + unified zone narrative */}
           <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
           <V3StoryPanel symbol={d.pair} />
+          <BreakerStoryPanel symbol={d.pair} />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -2027,6 +2029,7 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
       <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
       <V3StoryPanel symbol={d.pair} />
+      <BreakerStoryPanel symbol={d.pair} />
       {/* V2 structural order blocks — SHADOW MODE, numbers only */}
       {Array.isArray(d.structuralOrderBlocksV2) && d.structuralOrderBlocksV2.length > 0 && (
         // <details> rather than component state: this panel re-renders on every
