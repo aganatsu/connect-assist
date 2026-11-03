@@ -3,13 +3,15 @@
 //
 // The rule is the one pre-registered and tested in ~/strategy-v2/flip-zones/PREREG.md (sha256 2371fbce…). It FAILED on the unseen
 // year (confirmation arm: gross −0.007R, net −0.131R, n 58), so this records it live beside the bot instead of trading it.
-//   Break: the first 5m bar, starting at or after the zone was first seen, that CLOSES beyond the zone's far side, while the zone is
-//   intact. A zone is intact when the scan that first showed it had price on its side or inside it (as the shadow orders of the
+//   Break: the first 30-minute candle (UTC :00 / :30, built from the 5m bars; owner 2026-11-03) that CLOSES beyond the zone's far side,
+//   after the zone was first seen, while the zone is intact. The tested rule used a 5m close; breakTfMs = 5 min reproduces it
+//   exactly (research parity), the 30-minute rule itself is untested. A zone is intact when the scan that first showed it had price on its side or inside it (as the shadow orders of the
 //   tested rule always had), or after a later close on its side or inside it. Unified keeps showing a zone after price has broken it
 //   (USD/JPY 157.653–157.849 was still shown 23 h after its break on 2026-11-02); without this, a fresh start would count that old
 //   break as a new flip on its first bar.
 //   Flip:  E = the near edge price returns to; S = the other edge ∓ 1 pip, widened to the pair's minimum stop; T = E ∓ 1.5 × |E − S|.
-//   Valid 48 h from the break bar's close. Cancelled before a fill on: expiry, a 5m close back beyond the other edge (flip failed),
+//   Valid 48 h from the break candle's close. Cancelled before a fill on: expiry, a close of the same 30-minute candles back beyond the
+//   other edge (flip failed),
 //   and for arm C a bar reaching S after the touch (stop before entry) or a confirmation close beyond S.
 //   Arm C: touch E, then production detectZoneConfirmation at each later 5m close; fill at that close.
 //   Arm L: limit at E; fill at E, or at the bar's open when it opens beyond E.
@@ -17,7 +19,9 @@
 //   while its arm already holds one is skipped. R from the fill; net subtracts the shadow cost table's pips.
 import * as ZC from "../zoneConfirmation.ts";
 
-export const BREAKER_ENGINE_VERSION = "breaker-shadow-v1 (flip-zones prereg 2371fbce)";
+export const BREAKER_ENGINE_VERSION = "breaker-shadow-v2 (30m break; flip-zones prereg 2371fbce with a 5m break)";
+/** The candle whose close breaks a zone (and fails a flip). Entries, confirmation, stop and target stay on 5m. */
+export const BREAK_TF_MS = 30 * 60_000;
 export const FLIP_VALID_MS = 48 * 3_600_000;
 /** A zone that never breaks is forgotten after this long (keeps the state small; the tested rule had no limit). */
 export const WATCH_LIMIT_MS = 30 * 86_400_000;
@@ -26,7 +30,7 @@ const M5 = 300_000;
 export type Arm = "C" | "L";
 export const ARMS: readonly Arm[] = ["C", "L"];
 export interface Bar { t: number; o: number; h: number; l: number; c: number }
-export interface BreakerParams { pair: string; pip: number; costPips: number; minSlPips: number; watchLimitMs?: number }
+export interface BreakerParams { pair: string; pip: number; costPips: number; minSlPips: number; watchLimitMs?: number; breakTfMs?: number }
 export interface SeenZone { id: string; dir: "long" | "short"; zoneType: string; zl: number; zh: number; seenT: number; tf?: string | null; intact?: boolean }
 interface ArmState { status: "pending" | "touched" | "done"; touchT: number | null }
 export interface Zone extends SeenZone {
@@ -38,11 +42,12 @@ export interface Position { zoneId: string; dir: "long" | "short"; fill: number;
 /** A zone id is remembered until it has not been seen in a scan for this long, so a zone the scanner keeps showing after it finished
  *  is not tracked a second time (the tested rule counted each zone once). */
 export const FORGET_AFTER_MS = 7 * 86_400_000;
-/** last5mT: open time of the last 5m bar processed. known: every zone id ever registered → when a scan last showed it. */
-export interface BreakerState { last5mT: number; zones: Zone[]; pos: Record<Arm, Position | null>; known: Record<string, number> }
+/** last5mT: open time of the last 5m bar processed. known: every zone id ever registered → when a scan last showed it.
+ *  tf: the break-timeframe candle still open after the last processed bar (its end and latest close), when that bar did not close it. */
+export interface BreakerState { last5mT: number; zones: Zone[]; pos: Record<Arm, Position | null>; known: Record<string, number>; tf?: { end: number; c: number } | null }
 export type BreakerEvent =
   | { type: "seen"; t: number; zoneId: string; zone: SeenZone }
-  | { type: "flipped"; t: number; zoneId: string; flipDir: "long" | "short"; E: number; S: number; T: number; breakClose: number }
+  | { type: "flipped"; t: number; zoneId: string; flipDir: "long" | "short"; E: number; S: number; T: number; breakClose: number; tfMin: number }
   | { type: "touched"; t: number; zoneId: string; arm: Arm }
   | { type: "filled"; t: number; zoneId: string; arm: Arm; position: Position }
   | { type: "skipped"; t: number; zoneId: string; arm: Arm; reason: "position_open" }
@@ -83,8 +88,36 @@ export function advanceBars(state0: BreakerState, m5: readonly Bar[], p: Breaker
     events.push({ type: "closed", t: close, zoneId: pos.zoneId, arm, result: hitS ? "SL" : "TP", exit, gross: +gross.toFixed(4), net: +(gross - cost / risk).toFixed(4) });
     st.pos[arm] = null;
   };
+  const TF = p.breakTfMs ?? BREAK_TF_MS, tfEnd = (t: number) => Math.floor(t / TF) * TF + TF;
+  /** A zone still watching sees a break-timeframe close `c` at time `T` (from 5m bar starting at `barT`). */
+  const watchClose = (z: Zone, barT: number, T: number, c: number) => {
+    if (barT < z.seenT) return;
+    const beyond = z.dir === "long" ? c < z.zl : c > z.zh;
+    if (!z.intact) { if (!beyond) z.intact = true; return; }
+    if (!beyond) return;
+    const flipDir = z.dir === "long" ? "short" : "long", E = flipDir === "short" ? z.zl : z.zh;
+    let S = flipDir === "short" ? z.zh + pip : z.zl - pip;
+    if (Math.abs(E - S) < p.minSlPips * pip) S = flipDir === "short" ? E + p.minSlPips * pip : E - p.minSlPips * pip;
+    const Tg = flipDir === "short" ? E - 1.5 * Math.abs(E - S) : E + 1.5 * Math.abs(E - S);
+    Object.assign(z, { status: "flipped", breakT: T, flipDir, E, S, T: Tg });
+    events.push({ type: "flipped", t: T, zoneId: z.id, flipDir, E, S, T: Tg, breakClose: c, tfMin: TF / 60_000 });
+  };
   for (; k < m5.length && m5t[k] + M5 <= until; k++) {
     const b = m5[k], close = b.t + M5;
+    // a break-timeframe candle whose last 5m bar is missing closes when the next bucket's first bar arrives
+    if (st.tf && st.tf.end <= b.t) {
+      const { end, c } = st.tf; st.tf = null;
+      for (const z of st.zones) {
+        if (z.status === "watching") watchClose(z, end - M5, end, c);
+        else if (z.status === "flipped") for (const arm of ARMS) {
+          if (z.arms[arm].status === "done" || !(z.flipDir === "long" ? c < z.zl : c > z.zh)) continue;
+          z.arms[arm].status = "done"; events.push({ type: "cancelled", t: end, zoneId: z.id, arm, reason: "flip_failed" });
+        }
+        if (z.status === "flipped" && z.arms.C.status === "done" && z.arms.L.status === "done") z.status = "done";
+      }
+      st.zones = st.zones.filter((z) => z.status !== "done");
+    }
+    const closesTf = close === tfEnd(b.t);
     st.last5mT = b.t;
     for (const arm of ARMS) manage(arm, b, close);                       // exits first: a fill on the same bar may take the slot
     for (const z of st.zones) {
@@ -92,16 +125,7 @@ export function advanceBars(state0: BreakerState, m5: readonly Bar[], p: Breaker
       if (z.status === "watching") {
         if (b.t < z.seenT) continue;
         if (close > z.seenT + (p.watchLimitMs ?? WATCH_LIMIT_MS)) { z.status = "done"; continue; }
-        const beyond = z.dir === "long" ? b.c < z.zl : b.c > z.zh;
-        if (!z.intact) { if (!beyond) z.intact = true; continue; }
-        if (beyond) {
-          const flipDir = z.dir === "long" ? "short" : "long", E = flipDir === "short" ? z.zl : z.zh;
-          let S = flipDir === "short" ? z.zh + pip : z.zl - pip;
-          if (Math.abs(E - S) < p.minSlPips * pip) S = flipDir === "short" ? E + p.minSlPips * pip : E - p.minSlPips * pip;
-          const T = flipDir === "short" ? E - 1.5 * Math.abs(E - S) : E + 1.5 * Math.abs(E - S);
-          Object.assign(z, { status: "flipped", breakT: close, flipDir, E, S, T });
-          events.push({ type: "flipped", t: close, zoneId: z.id, flipDir, E, S, T, breakClose: b.c });
-        }
+        if (closesTf) watchClose(z, b.t, close, b.c);
         continue;                                                         // the break bar itself is never an entry bar
       }
       const long = z.flipDir === "long", E = z.E!, S = z.S!;
@@ -117,7 +141,7 @@ export function advanceBars(state0: BreakerState, m5: readonly Bar[], p: Breaker
       for (const arm of ARMS) {
         const a = z.arms[arm]; if (a.status === "done") continue;
         if (close > z.breakT! + FLIP_VALID_MS) { cancel(arm, "expired"); continue; }
-        const reachesE = long ? b.l <= E : b.h >= E, failed = long ? b.c < z.zl : b.c > z.zh;
+        const reachesE = long ? b.l <= E : b.h >= E, failed = closesTf && (long ? b.c < z.zl : b.c > z.zh);
         if (arm === "L") {
           if (reachesE) { fill("L", long ? Math.min(b.o, E) : Math.max(b.o, E), null); continue; }
           if (failed) cancel("L", "flip_failed");
@@ -139,6 +163,7 @@ export function advanceBars(state0: BreakerState, m5: readonly Bar[], p: Breaker
       if (z.arms.C.status === "done" && z.arms.L.status === "done") z.status = "done";
     }
     st.zones = st.zones.filter((z) => z.status !== "done");
+    st.tf = closesTf ? null : { end: tfEnd(b.t), c: b.c };
   }
   return { state: st, events };
 }

@@ -14,7 +14,7 @@ export interface BreakerArmView {
 }
 export interface BreakerZoneView {
   zoneId: string; dir: "long" | "short"; zoneType: string; zl: number; zh: number; seenAt: string;
-  flip: { at: string; dir: "long" | "short"; E: number; S: number; T: number } | null;
+  flip: { at: string; dir: "long" | "short"; E: number; S: number; T: number; tfMin: number } | null;
   arms: Record<BreakerArm, BreakerArmView>;
 }
 
@@ -46,7 +46,7 @@ export function foldBreakers(rows: BreakerEventRow[]): BreakerZoneView[] {
       z = { zoneId: r.zone_id, dir: dir as "long" | "short", zoneType: "", zl: NaN, zh: NaN, seenAt: r.t, flip: null, arms: { C: blank(), L: blank() } };
       m.set(r.zone_id, z);
     }
-    if (r.type === "flipped") { z.flip = { at: r.t, dir: p.flipDir, E: p.E, S: p.S, T: p.T }; continue; }
+    if (r.type === "flipped") { z.flip = { at: r.t, dir: p.flipDir, E: p.E, S: p.S, T: p.T, tfMin: Number(p.tfMin ?? 5) }; continue; }
     if (r.arm !== "C" && r.arm !== "L") continue;
     const a = z.arms[r.arm as BreakerArm];
     a.t = r.t;
