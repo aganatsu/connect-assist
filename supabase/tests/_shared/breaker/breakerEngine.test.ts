@@ -1,10 +1,12 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { addZones, advanceBars, FLIP_VALID_MS, FORGET_AFTER_MS, initBreakerState, zoneId, type Bar, type BreakerEvent } from "../../../functions/_shared/breaker/breakerEngine.ts";
 
-/** The breaker engine on hand-made 5m paths. The full rule was checked against the research replay (strategy-v2/flip-zones/parity_engine.ts: identical trades on all six pairs). */
+/** The breaker engine on hand-made 5m paths. With a 5m break it equals the tested research rule (strategy-v2/flip-zones/parity_engine.ts: identical trades on all six pairs);
+ *  the live default breaks on a 30-minute close. Most paths below use the 5m break to test the entry mechanics; the 30-minute tests come last. */
 
 const M5 = 300_000, T0 = Date.parse("2026-11-09T08:00:00Z"), pip = 0.0001;
-const P = { pair: "EUR/USD", pip, costPips: 1.5, minSlPips: 20 };
+const P = { pair: "EUR/USD", pip, costPips: 1.5, minSlPips: 20, breakTfMs: M5 };
+const P30 = { pair: "EUR/USD", pip, costPips: 1.5, minSlPips: 20 };
 /** Bars from (o,h,l,c) tuples, 5 minutes apart from T0, after 300 flat warm-up bars. */
 function bars(path: [number, number, number, number][]): Bar[] {
   const out: Bar[] = [];
@@ -12,12 +14,12 @@ function bars(path: [number, number, number, number][]): Bar[] {
   path.forEach(([o, h, l, c], i) => out.push({ t: T0 + i * M5, o, h, l, c }));
   return out;
 }
-const Z = { id: zoneId("EUR/USD", "long", 1.1000, 1.1010, pip), dir: "long" as const, zoneType: "FVG", zl: 1.1000, zh: 1.1010, seenT: T0 };
-function run(path: [number, number, number, number][], zones = [Z]) {
+const Z = { id: zoneId("EUR/USD", "long", 1.1000, 1.1010, pip), dir: "long" as const, zoneType: "FVG", zl: 1.1000, zh: 1.1010, seenT: T0, intact: true };
+function run(path: [number, number, number, number][], zones = [Z], params: typeof P30 = P) {
   const m5 = bars(path);
   let st = initBreakerState(T0);
   const a = addZones(st, zones, T0); st = a.state;
-  const r = advanceBars(st, m5, P, m5.at(-1)!.t + M5);
+  const r = advanceBars(st, m5, params, m5.at(-1)!.t + M5);
   return { events: [...a.events, ...r.events], state: r.state };
 }
 const types = (ev: BreakerEvent[]) => ev.map((e) => `${e.type}${"arm" in e && e.arm ? ":" + e.arm : ""}`);
@@ -94,4 +96,56 @@ Deno.test("a zone the scanner keeps showing is tracked once; it is forgotten onl
   assertEquals(addZones(st, [{ ...Z, seenT: T0 + 2 * 3600_000 }], T0 + 2 * 3600_000).events.length, 0, "finished, still remembered");
   const later = addZones(st, [], T0 + 3600_000 + FORGET_AFTER_MS + 3600_000).state;
   assert(!(Z.id in later.known), "a week unseen and not tracked: forgotten");
+});
+
+Deno.test("a zone first seen ALREADY broken does not flip on its first bar; it flips only after price is back and closes through again", () => {
+  const stale = { ...Z, intact: false };
+  const below: [number, number, number, number][] = [[1.0990, 1.0992, 1.0985, 1.0988], [1.0988, 1.0990, 1.0984, 1.0987]];
+  assertEquals(types(run(below, [stale]).events), ["seen"], "price already beyond the zone: no flip (2026-11-03 USD/JPY false flip)");
+  const back: [number, number, number, number][] = [...below, [1.0987, 1.1004, 1.0986, 1.1003], [1.1003, 1.1004, 1.0990, 1.0993]];
+  const f = run(back, [stale]).events.find((e) => e.type === "flipped") as Extract<BreakerEvent, { type: "flipped" }>;
+  assertEquals(f.t, T0 + 4 * M5, "back inside, then a close through: a real break");
+});
+
+// ── the live default: a 30-minute close breaks the zone (owner 2026-11-03) ──
+const flat = (n: number, c: number): [number, number, number, number][] => Array.from({ length: n }, () => [c, c + 0.0001, c - 0.0001, c]);
+
+Deno.test("30m: a 5m close through that recovers before the half hour is not a break", () => {
+  // 08:00–08:30 candle: dips below 1.1000 on 5m closes, but the 08:25 bar closes back at 1.1006
+  const path: [number, number, number, number][] = [[1.1012, 1.1013, 1.0990, 1.0992], [1.0992, 1.0995, 1.0988, 1.0990], ...flat(3, 1.0995), [1.0995, 1.1007, 1.0994, 1.1006]];
+  assertEquals(types(run(path, [Z], P30).events), ["seen"]);
+});
+
+Deno.test("30m: the half-hour close beyond the zone breaks it at 08:30, and entries only start after that close", () => {
+  // touches the old edge at 08:10 (before the break): no entry; the 08:25 bar closes the candle at 1.0992 → flip at 08:30
+  const path: [number, number, number, number][] = [[1.1012, 1.1013, 1.0990, 1.0992], [1.0992, 1.0995, 1.0988, 1.0990], [1.0990, 1.1001, 1.0989, 1.0996], ...flat(2, 1.0994), [1.0994, 1.0995, 1.0991, 1.0992],
+    [1.0992, 1.1001, 1.0991, 1.0999]];   // 08:30 bar returns to 1.1000: the limit fills here
+  const { events } = run(path, [Z], P30);
+  const f = events.find((e) => e.type === "flipped") as Extract<BreakerEvent, { type: "flipped" }>;
+  assertEquals([f.t, f.breakClose, f.tfMin], [T0 + 30 * 60_000, 1.0992, 30]);
+  const fill = events.find((e) => e.type === "filled" && e.arm === "L")!;
+  assertEquals(fill.t, T0 + 35 * 60_000);
+});
+
+Deno.test("30m: a 5m close back through the zone does not fail the flip; a half-hour close back through does", () => {
+  const brk: [number, number, number, number][] = [...flat(5, 1.0994), [1.0994, 1.0995, 1.0991, 1.0992]];                 // flip at 08:30
+  const wickBack: [number, number, number, number][] = [[1.0992, 1.0993, 1.0991, 1.0992], [1.0992, 1.1003, 1.0991, 1.1012 - 0.0001], ...flat(4, 1.0995)];
+  // the 08:35 bar closes at 1.1011 (> 1.1010) but the 09:00 half hour closes at 1.0995: the flip survives (no flip_failed)
+  const zNoTouchE = { ...Z, intact: true };
+  const ev1 = run([...brk, ...wickBack], [zNoTouchE], P30).events;
+  assert(!ev1.some((e) => e.type === "cancelled" && (e as { reason: string }).reason === "flip_failed"), JSON.stringify(types(ev1)));
+  const closeBack: [number, number, number, number][] = [...flat(5, 1.0995).map(([o]) => [o, o + 0.0001, o - 0.0001, o] as [number, number, number, number]), [1.0995, 1.1013, 1.0994, 1.1012]];
+  const ev2 = run([...brk, ...closeBack], [zNoTouchE], P30).events;
+  const failed = ev2.filter((e) => e.type === "cancelled" && (e as { reason: string }).reason === "flip_failed").map((e) => e.t);
+  assert(failed.includes(T0 + 60 * 60_000), `flip fails at the 09:00 close: ${JSON.stringify(types(ev2))}`);
+});
+
+Deno.test("30m: when the last 5m bar of a half hour is missing, the candle closes when the next half hour starts", () => {
+  const m5 = bars([...flat(5, 1.0994)]);                                  // 08:00–08:20 only; 08:25 missing
+  m5.push({ t: T0 + 30 * 60_000, o: 1.0994, h: 1.0995, l: 1.0993, c: 1.0994 });   // 08:30 bar
+  let st = addZones(initBreakerState(T0), [Z], T0).state;
+  const r = advanceBars(st, m5, P30, m5.at(-1)!.t + M5);
+  const f = r.events.find((e) => e.type === "flipped")!;
+  assertEquals(f.t, T0 + 30 * 60_000);
+  st = r.state; assertEquals(st.tf, { end: T0 + 60 * 60_000, c: 1.0994 });
 });

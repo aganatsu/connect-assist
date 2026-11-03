@@ -45,7 +45,7 @@ export function BreakerStoryPanel({ symbol }: { symbol: string }) {
       {!zones.length && <div className="text-muted-foreground">No Unified zone has flipped in the last 3 days.</div>}
       {zones.map((z) => (
         <div key={z.zoneId} className="pt-1 space-y-0.5 border-t border-warning/20">
-          {row("Broken zone", <>{side(z.dir)} {z.zoneType ? z.zoneType.toUpperCase() + " " : ""}{Number.isFinite(z.zl) ? `${priceFmt(symbol, z.zl)}–${priceFmt(symbol, z.zh)}` : ""} · a 5m candle closed {z.dir === "long" ? "below" : "above"} it at {fmtUtc(z.flip!.at)} UTC</>)}
+          {row("Broken zone", <>{side(z.dir)} {z.zoneType ? z.zoneType.toUpperCase() + " " : ""}{Number.isFinite(z.zl) ? `${priceFmt(symbol, z.zl)}–${priceFmt(symbol, z.zh)}` : ""} · a {z.flip!.tfMin === 30 ? "30-minute" : `${z.flip!.tfMin}m`} candle closed {z.dir === "long" ? "below" : "above"} it at {fmtUtc(z.flip!.at)} UTC</>)}
           {row("Now a", <span className={z.flip!.dir === "long" ? "text-success font-bold" : "text-destructive font-bold"}>{side(z.flip!.dir)} zone</span>)}
           {row("Plan", <>entry {priceFmt(symbol, z.flip!.E)} · stop {priceFmt(symbol, z.flip!.S)} · target {priceFmt(symbol, z.flip!.T)} (1.5R) · valid until {fmtUtc(new Date(Date.parse(z.flip!.at) + 48 * 3_600_000).toISOString())} UTC</>)}
           {(["C", "L"] as BreakerArm[]).map((arm) => row(BREAKER_ARM_LABEL[arm], armText(symbol, z, z.arms[arm])))}
@@ -53,7 +53,7 @@ export function BreakerStoryPanel({ symbol }: { symbol: string }) {
       ))}
       <div className="pt-1 border-t border-warning/20 text-muted-foreground">
         So far on {symbol}: {(["C", "L"] as BreakerArm[]).map((arm) => `${BREAKER_ARM_LABEL[arm].toLowerCase()} ${totals[arm].n} closed, ${totals[arm].tp} at target, ${totals[arm].netR >= 0 ? "+" : ""}${totals[arm].netR.toFixed(2)}R`).join(" · ")}.
-        {" "}Tested on past data this rule lost (−0.13R a trade after costs), which is why it is recorded, not traded.
+        {" "}The 5-minute version of this rule lost on past data (−0.13R a trade after costs); this 30-minute version is untested, which is why it is recorded, not traded.
       </div>
     </div>
   );

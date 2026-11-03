@@ -14,17 +14,20 @@ function m5Rows() {
   const push = (t: number, o: number, h: number, l: number, c: number) => rows.push({ symbol: "EUR/USD", bar_time: iso(t), open: o, high: h, low: l, close: c, observed_at: iso(t + M5 + 20 * 60_000) });
   let t = T0 - 24 * 3600_000;
   for (; t < T0; t += M5) push(t, 1.1030, 1.1032, 1.1028, 1.1030);
+  // 08:00–08:30 candle closes at 1.0992, below the zone (a 30-minute break), then price returns to 1.1000 and falls to 1.0965
   const path: [number, number, number, number][] = [[1.1030, 1.1031, 1.1012, 1.1013], [1.1013, 1.1014, 1.0990, 1.0992], [1.0992, 1.0998, 1.0990, 1.0997],
-    [1.0997, 1.1001, 1.0996, 1.0999], [1.0999, 1.0999, 1.0985, 1.0986], [1.0986, 1.0987, 1.0965, 1.0966]];
+    [1.0997, 1.0998, 1.0993, 1.0994], [1.0994, 1.0996, 1.0991, 1.0993], [1.0993, 1.0994, 1.0990, 1.0992],
+    [1.0992, 1.0998, 1.0991, 1.0997], [1.0997, 1.1001, 1.0996, 1.0999], [1.0999, 1.0999, 1.0985, 1.0986], [1.0986, 1.0987, 1.0965, 1.0966]];
   for (const [o, h, l, c] of path) { push(t, o, h, l, c); t += M5; }
   for (let i = 0; i < 24; i++, t += M5) push(t, 1.0966, 1.0968, 1.0964, 1.0966);
   return rows;
 }
 const detail = (pair: string, low: number, high: number, direction: string) => ({ pair, unifiedZone: { hasZone: true, state: "watching", selectedTF: "1H", zone: { type: "FVG", low, high }, impulse: { direction } } });
+const withPrice = (d: ReturnType<typeof detail>, currentPrice: number) => ({ ...d, unifiedZone: { ...d.unifiedZone, price: { currentPrice } } });
 function seed(on = true) {
   return new FakeDb({
     bot_configs: [{ user_id: USER, connection_id: null, config_json: config(on) }],
-    scan_logs: [{ user_id: USER, created_at: iso(T0 - 10 * 60_000), details_json: [{ __meta: true }, detail("EUR/USD", 1.1000, 1.1010, "bullish"), { pair: "GBP/USD", unifiedZone: { hasZone: false } }] }],
+    scan_logs: [{ user_id: USER, created_at: iso(T0 - 10 * 60_000), details_json: [{ __meta: true }, withPrice(detail("EUR/USD", 1.1000, 1.1010, "bullish"), 1.1030), { pair: "GBP/USD", unifiedZone: { hasZone: false } }] }],
     structure_bars_5m: m5Rows(),
   });
 }
@@ -40,13 +43,21 @@ Deno.test("zones from scan details: Unified zones with bounds and an impulse dir
   assertEquals(z.map((x) => [x.id, x.dir, x.tf]), [["EUR/USD|long|11000.0|11010.0", "long", "1H"], ["USD/JPY|short|15760.0|15780.0", "short", "1H"]]);
 });
 
+Deno.test("zones from scan details: intact only when the scan's price is on the zone's side or inside it", () => {
+  const withPrice = (price: number | undefined, dir: string) => ({ ...detail("USD/JPY", 157.653, 157.849, dir), unifiedZone: { ...detail("USD/JPY", 157.653, 157.849, dir).unifiedZone, price: price === undefined ? undefined : { currentPrice: price } } });
+  const pipOf = () => 0.01;
+  const intact = (d: unknown) => zonesFromScan([d], T0, pipOf)[0].intact;
+  assertEquals([intact(withPrice(157.5, "bearish")), intact(withPrice(157.7, "bearish")), intact(withPrice(157.95, "bearish")), intact(withPrice(undefined, "bearish"))],
+    [true, true, false, false], "sell zone: below or inside = intact; above (already broken, the 2026-11-03 case) or unknown = not");
+});
+
 Deno.test("switch off: nothing is read beyond the config and nothing is written", async () => {
   const db = seed(false);
   assertEquals(await runBreakerShadow(db.client(), NOW), []);
   assertEquals(db.writes.length, 0);
 });
 
-Deno.test("run: the zone is seen, flips on the close below it, the limit arm fills on the return and hits the 1.5R target", async () => {
+Deno.test("run: the zone is seen, flips on the half-hour close below it, the limit arm fills on the return and hits the 1.5R target", async () => {
   const db = seed();
   // first run within the pause window: start from a state 6h old is fresh; seed a state so the run covers the path
   db.rows("breaker_shadow_state").push({ user_id: USER, pair: "EUR/USD", seq: 1, as_of: iso(T0 - 20 * 60_000), last_scan_at: iso(T0 - 20 * 60_000), engine_version: "x",
