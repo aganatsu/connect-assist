@@ -121,6 +121,33 @@ export function resolveZoneSlots(style: ResolvedStyle, s: ZoneSeries): ZoneSlots
 }
 
 /** Whether the active style has enough of its own structural series to score. */
+/** The scalper refines its 1H zone on 10-minute candles (owner 2026-11-03), built here from the 5m entry candles. */
+export const SCALPER_REFINE_MS = 10 * 60_000;
+
+/**
+ * Candles regrouped into `ms` buckets on UTC boundaries (:00 / :10 / :20 … for 10 minutes): first open, highest high, lowest low,
+ * last close, summed volume. A bucket with only some of its bars (the forming one, or a gap) is built from the bars it has, exactly as
+ * the scanner already uses its forming 5m bar. Candles whose time cannot be read are left out.
+ */
+export function regroupCandles(candles: Candle[], ms: number): Candle[] {
+  const out: Candle[] = [];
+  let cur: Candle | null = null, curB = NaN;
+  for (const c of candles) {
+    const t = Date.parse(c.datetime);
+    if (!Number.isFinite(t)) continue;
+    const b = Math.floor(t / ms) * ms;
+    if (cur && b === curB) {
+      cur.high = Math.max(cur.high, c.high); cur.low = Math.min(cur.low, c.low); cur.close = c.close;
+      if (c.volume != null) cur.volume = (cur.volume ?? 0) + c.volume;
+      continue;
+    }
+    curB = b;
+    cur = { datetime: t === b ? c.datetime : new Date(b).toISOString().replace(".000Z", "Z"), open: c.open, high: c.high, low: c.low, close: c.close, ...(c.volume != null ? { volume: c.volume } : {}) };
+    out.push(cur);
+  }
+  return out;
+}
+
 export function hasMinZoneCandles(style: ResolvedStyle, s: ZoneSeries): boolean {
   return style === "scalper"
     ? s.candles.length >= 20
@@ -201,10 +228,14 @@ export function decideZone(input: ZoneDecisionInput): ZoneDecisionResult {
   const slots = resolveZoneSlots(input.style, input.series);
   const unifiedDir = input.direction === "long" ? "bullish" : "bearish";
 
+  // The entry slot feeds only the LTF refinement (refineLowerTF). The scalper refines on 10-minute candles built from its 5m entry
+  // candles (owner 2026-11-03): with the detectors' 50-candle window that is ~8 hours of history instead of ~4. The slots, and so the
+  // stored scan bars, stay raw 5m; a replay rebuilds the same 10m candles here.
+  const refineCandles = input.style === "scalper" ? regroupCandles(slots.entry, SCALPER_REFINE_MS) : slots.entry;
   const unifiedResult: UnifiedZoneResult = findUnifiedZone(
     slots.h1,
     slots.h4,
-    slots.entry,
+    refineCandles,
     unifiedDir as "bullish" | "bearish",
     input.lastPrice,
     input.liquidityPools,
