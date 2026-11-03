@@ -76,6 +76,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Tier 1 Gate Enabled", keywords: ["tier 1", "gate", "toggle", "disable", "enable", "gate 19", "core factors", "off"] },
   { tab: "strategy", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum", "gate 19", "market structure", "ob", "fvg", "premium discount"] },
   { tab: "strategy", label: "Direction Engine", keywords: ["direction", "bias", "trend", "engine", "long", "short"] },
+  { tab: "strategy", label: "Breaker Shadow (flip zones)", keywords: ["breaker", "flip", "inversion", "broken", "zone", "shadow", "ifvg"] },
   { tab: "strategy", label: "Stable Bias Trend", keywords: ["confirmed", "trend", "bias", "stable"] },
   { tab: "strategy", label: "Bias Break Extension", keywords: ["fib", "factor", "extension", "bias"] },
   { tab: "strategy", label: "Bias Swing Size", keywords: ["swing", "lookback", "bias"] },
@@ -893,6 +894,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
                     <ToggleField label="Use Unified's Entry & Stop" description="When the Unified engine confirms a setup, trade it with Unified's own entry and stop. Off: Unified only confirms, and the trade uses the Impulse engine's entry and stop. Either way, Require Unified Zone above still lets only confirmed setups through." checked={config.simplification?.unifiedModifiersEnabled !== false} onChange={v => updateField('simplification', 'unifiedModifiersEnabled', v)} />
+                    <ToggleField label="Breaker Shadow (flip zones)" description="When price closes through a Unified zone, the zone flips to the other side (a broken buy zone becomes a sell zone). The bot records pretend trades on those flips (with confirmation, and with a plain limit order) and shows them in Zone Story → Breakers. Never places a real order. Tested on past data this rule lost (−0.13R a trade after costs), so it is recorded, not traded." checked={config.strategy?.breakerShadowEnabled === true} onChange={v => updateField('strategy', 'breakerShadowEnabled', v)} />
                     {/* ── Direction Engine: these settings existed only in the saved config until 2026-10-30 ── */}
                     {(() => {
                       const styleMode = (config.tradingStyle?.mode as string) ?? "scalper";
