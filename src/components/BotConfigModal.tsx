@@ -895,6 +895,31 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
                     <ToggleField label="Use Unified's Entry & Stop" description="When the Unified engine confirms a setup, trade it with Unified's own entry and stop. Off: Unified only confirms, and the trade uses the Impulse engine's entry and stop. Either way, Require Unified Zone above still lets only confirmed setups through." checked={config.simplification?.unifiedModifiersEnabled !== false} onChange={v => updateField('simplification', 'unifiedModifiersEnabled', v)} />
                     <ToggleField label="Breaker Shadow (flip zones)" description="When a 30-minute candle closes through a Unified zone, the zone flips to the other side (a broken buy zone becomes a sell zone). The bot records pretend trades on those flips (with confirmation, and with a plain limit order) and shows them in Zone Story → Breakers. Never places a real order. The 5-minute version of this rule lost on past data (−0.13R a trade after costs) and the 30-minute version is untested, so it is recorded, not traded." checked={config.strategy?.breakerShadowEnabled === true} onChange={v => updateField('strategy', 'breakerShadowEnabled', v)} />
+                    {/* ── Scalper15: 15m Impulse zones in the 1H direction (_shared/scalper15.ts) ── */}
+                    <ToggleField label="15m Impulse Scalper (Scalper15)" description="Replaces the Impulse strategy's decision on every pair it scans (V3 ON keeps the pairs it owns). Direction comes from 1H structure: long after a 1H candle closes above the last 1H swing high, short after one closes below the last swing low. The Impulse engine finds the zone on 15-minute candles; the order waits for the zone to be touched and a 5-minute confirmation, then fills. Stop just beyond the zone, target the 1H leg's high (longs) or low (shorts). Risk gates, position caps, sizing and dry run work as for every order — and if this account mirrors to a broker, these orders do too. Scalper style only. Untested: 15m zones lost −0.20R a trade in the October replay (#677), and the 1H direction and target are the new parts. Try it in dry run first." checked={config.strategy?.scalper15Enabled === true} onChange={v => updateField('strategy', 'scalper15Enabled', v)} />
+                    {config.strategy?.scalper15Enabled === true && (() => {
+                      const st = config.strategy ?? {};
+                      const numIn = (key: string, value: number, min: number, max: number, step: number) => (
+                        <Input type="number" value={value} min={min} max={max} step={step} className="h-9 text-sm"
+                          onChange={e => { const n = Number(e.target.value); updateField('strategy', key, Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min); }} />
+                      );
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pl-4 border-l-2 border-primary/30">
+                          {(config.tradingStyle?.mode ?? 'scalper') !== 'scalper' && (
+                            <p className="sm:col-span-3 text-[11px] text-destructive">Trading style is not Scalper — Scalper15 stays off until it is.</p>
+                          )}
+                          <FieldGroup label="Min reward (R)" description="Skip a setup unless the 1H target is at least this many R away. Checked when the order is placed and again at the fill price.">
+                            {numIn('scalper15MinPlannedR', st.scalper15MinPlannedR ?? 1.0, 0.5, 10, 0.1)}
+                          </FieldGroup>
+                          <FieldGroup label="Stop buffer (pips)" description="How far beyond the zone's far edge the stop sits.">
+                            {numIn('scalper15StopBufferPips', st.scalper15StopBufferPips ?? 1, 0, 20, 0.5)}
+                          </FieldGroup>
+                          <FieldGroup label="Min stop (pips)" description="Optional floor on the stop distance; 0 = none. 15m zones can give stops of a few pips, where the spread is a large share of the risk.">
+                            {numIn('scalper15MinStopPips', st.scalper15MinStopPips ?? 0, 0, 100, 1)}
+                          </FieldGroup>
+                        </div>
+                      );
+                    })()}
                     {/* ── Direction Engine: these settings existed only in the saved config until 2026-10-30 ── */}
                     {(() => {
                       const styleMode = (config.tradingStyle?.mode as string) ?? "scalper";

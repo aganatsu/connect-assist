@@ -60,10 +60,12 @@ Deno.test("every exit from the hunt is recorded, including the fill", () => {
   // Candidate C shadow: the hunt pushes through `huntObs`, which IS
   // confirmationHunt for every A order (a shadow order gets its own sink), and
   // C's own hypothetical-fill exit adds one push — 12 A exits + 1 C exit.
+  // Scalper15 adds one: a confirmed fill whose R to the fixed 1H target fell below the minimum.
+  assert(/outcome: "SCALPER15_R_BELOW_MIN"/.test(scanner), "a Scalper15 fill refused on R must be recorded");
   assert(scanner.includes("const huntObs = isShadow ? shadowObservations : confirmationHunt;"));
   assertEquals((scanner.match(/confirmationHunt\.push\(\{/g) ?? []).length, 0, "every hunt push is routed");
   assertEquals(
-    (scanner.match(/huntObs\.push\(\{/g) ?? []).length, 13,
+    (scanner.match(/huntObs\.push\(\{/g) ?? []).length, 14,
     "one push per exit, and no path left silent",
   );
 });
