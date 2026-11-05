@@ -77,6 +77,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum", "gate 19", "market structure", "ob", "fvg", "premium discount"] },
   { tab: "strategy", label: "Direction Engine", keywords: ["direction", "bias", "trend", "engine", "long", "short"] },
   { tab: "strategy", label: "Breaker Shadow (flip zones)", keywords: ["breaker", "flip", "inversion", "broken", "zone", "shadow", "ifvg"] },
+  { tab: "strategy", label: "15m Impulse Scalper (Scalper15)", keywords: ["scalper15", "scalper", "15m", "15 minute", "impulse", "1h", "direction", "min reward", "stop buffer", "min stop"] },
   { tab: "strategy", label: "Stable Bias Trend", keywords: ["confirmed", "trend", "bias", "stable"] },
   { tab: "strategy", label: "Bias Break Extension", keywords: ["fib", "factor", "extension", "bias"] },
   { tab: "strategy", label: "Bias Swing Size", keywords: ["swing", "lookback", "bias"] },

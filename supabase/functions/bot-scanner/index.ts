@@ -6368,7 +6368,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         }),
         current_price: analysis.lastPrice, stop_loss: s15Geo.stop, take_profit: s15Geo.target, size: s15Geo.size,
         entry_zone_type: `${S15_ZONE_PREFIX}-${s15Plan.zone.type}`, entry_zone_low: s15Plan.zone.low, entry_zone_high: s15Plan.zone.high,
-        refined_zone_low: null, refined_zone_high: null, status: "pending", expiry_minutes: ROUTE2_TTL_MINUTES, expires_at: s15ExpiresAt,
+        // The 15m zone IS the precise zone. Without a refined zone the hunt accepts only Tier 1 (close-based CHoCH) — a rule
+        // for broad HTF zones — and would throw away the rejection-wick / engulfing / wick-CHoCH confirmations this
+        // strategy is specified (and backtested) to take.
+        refined_zone_low: s15Plan.zone.low, refined_zone_high: s15Plan.zone.high, status: "pending", expiry_minutes: ROUTE2_TTL_MINUTES, expires_at: s15ExpiresAt,
         signal_reason: JSON.stringify({ bot: BOT_ID, summary: `Scalper15 — 15m ${s15Plan.zone.type} in the 1H ${s15Plan.direction} direction, target ${s15Plan.plannedR.toFixed(2)}R`,
           scalper15: s15Ctx,
           impulseZone: { impulse: { high: s15Plan.impulse.high, low: s15Plan.impulse.low }, bestZone: { type: s15Plan.zone.type, low: s15Plan.zone.low, high: s15Plan.zone.high, refinedEntry: null } },
