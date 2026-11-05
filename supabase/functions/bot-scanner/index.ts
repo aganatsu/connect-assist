@@ -159,6 +159,7 @@ import { recordStructureBarsWhileFull } from "../_shared/structure/recordWhileFu
 import { STRUCTURE_PAIRS } from "../_shared/structure/canonicalBars.ts";
 import { recordBrokerClose, recordBrokerOpen, recordBrokerOpenSkipped } from "../_shared/brokerPriceLog.ts";
 import { isV3Order, latestDecision, legAsImpulse, loadOnContext, planFromDecision, v3TrendNow, v3ZoneType, fxOpenAt, V3_ENGINE_VERSION, type OnContext, type ShadowDecisionRow } from "../_shared/iov3/onMode.ts";
+import { biasNow as s15BiasNow, closedBars, isScalper15Order, planScalper15, plannedR as s15PlannedR, resolveScalper15, S15_ZONE_PREFIX } from "../_shared/scalper15.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -2613,6 +2614,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     return _v3TrendCache.get(symbol)!;
   };
 
+  // ── Scalper15 (Bot Config → "15m Impulse Scalper") ── inert unless config_json.strategy.scalper15Enabled === true.
+  // Scalper style only: its Route 2 hunt confirms on 5m, which is what the strategy was specified (and backtested) with.
+  const s15 = resolveScalper15((config as any).__rawConfigJson ?? null);
+  const s15On = s15.enabled && resolvedStyle === "scalper";
+  if (s15.enabled && !s15On) console.warn(`[scalper15] enabled but trading style is ${resolvedStyle} — Scalper15 runs on the scalper style only; not active`);
+
   // ── Compute average commission per lot across active broker connections ──
   // Used in R:R gating and lot sizing. Reads commission_per_lot (user-set) or detected_commission_per_lot (auto-learned).
   let avgCommissionPerLot = 0;
@@ -3908,6 +3915,32 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         // The legacy thesis checks (direction re-run, FOTSI, Game Plan) are strategy filters: for V3 orders they do not cancel
         // (owner decision D1 = a). The one structural cancel is "V3 trend flipped" (the leg-broken cancel is the existing
         // impulse-broken check, fed the V3 leg). Fail-open: no snapshot → keep the order.
+        // ── Scalper15: the order's thesis is the 1H direction it was placed in (_shared/scalper15.ts), not the legacy
+        // direction engine — the legacy thesis checks are a different strategy's filters and do not cancel these orders.
+        // The structural cancel is "1H direction no longer agrees" (the same rule as the backtest). Fail-open on thin data.
+        if (isScalper15Order(pending)) {
+          try {
+            const s15H1 = closedBars(await huntFetch(pending.symbol, "1h", "5d", "pending_thesis_htf"), "1h", Date.now());
+            const s15Bias = s15H1.length >= 30 ? s15BiasNow(s15H1).bias : null;
+            if (s15Bias !== null && s15Bias !== (pending.direction === "long" ? 1 : -1)) {
+              const why = s15Bias === 0 ? "1H direction no longer set (no close beyond a confirmed 1H swing in the window)" : `1H direction flipped to ${s15Bias === 1 ? "long" : "short"}`;
+              await supabase.from("pending_orders").update({
+                status: "cancelled",
+                terminal_reason: "CANCELLED_DIRECTION_FLIP" as TerminalReason,
+                reset_reason: "direction_flip",
+                hard_invalidation: true,
+                cancel_reason: `Scalper15: ${why}`,
+                resolved_at: new Date().toISOString(),
+              }).eq("order_id", pending.order_id).eq("user_id", userId);
+              pollCtx.branch = "scalper15_direction_flip"; pollCtx.after = "cancelled";
+              if (!isShadow) pendingCancelled++;
+              console.log(`[pending] SCALPER15 DIRECTION: ${pending.symbol} ${pending.direction} — ${why}`);
+              continue;
+            }
+          } catch (s15Err: any) {
+            console.warn(`[pending] Scalper15 1H check error for ${pending.symbol}: ${s15Err?.message}`);
+          }
+        }
         if (isV3Order(pending)) {
           try {
             const v3Trend = await v3TrendFor(pending.symbol);
@@ -3942,7 +3975,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             console.warn(`[pending] V3 trend check error for ${pending.symbol}: ${v3Err?.message}`);
           }
         }
-        if ((config as any).thesisValidationEnabled !== false && !isV3Order(pending)) {
+        if ((config as any).thesisValidationEnabled !== false && !isV3Order(pending) && !isScalper15Order(pending)) {
           try {
             const thesisStyleAware = (config as any).thesisDirectionStyleAware === true;
             // Inputs built by _shared/thesisInputs.ts — the SAME builder the scanner's
@@ -4489,6 +4522,23 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             if (!isShadow) pendingCancelled++;
             continue;
+          }
+
+          // Scalper15: the target is a fixed 1H level, so the R it offers depends on where the fill lands. Re-check the
+          // placement's minimum at the real price; below it, the trade the setting asked for no longer exists.
+          if (isScalper15Order(pending)) {
+            const s15R = s15PlannedR(pending.direction === "long" ? 1 : -1, currentPrice, Number(pending.stop_loss), Number(pending.take_profit));
+            if (!(s15R >= s15.minPlannedR)) {
+              const why = `Scalper15: ${Number.isFinite(s15R) ? s15R.toFixed(2) : "no"}R to the 1H target at the confirmation price ${currentPrice} < ${s15.minPlannedR}R`;
+              await supabase.from("pending_orders").update({
+                status: "cancelled", cancel_reason: why, resolved_at: new Date().toISOString(),
+              }).eq("order_id", pending.order_id).eq("user_id", userId);
+              pollCtx.branch = "scalper15_r_below_min"; pollCtx.after = "cancelled";
+              if (!isShadow) pendingCancelled++;
+              huntObs.push({ symbol: pending.symbol, direction: pending.direction, orderId: pending.order_id, outcome: "SCALPER15_R_BELOW_MIN", tier: confirmationSignal.tier });
+              console.log(`[pending] ${pending.symbol} ${pending.direction} — ${why}`);
+              continue;
+            }
           }
 
           // Confirmation is go/no-go — fill at current market price (already inside refined zone)
@@ -6213,6 +6263,177 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         detail.status = `v3_${v3Placement.outcome}`;
         detail.skipReason = `V3 ON (${v3Arm}): order not placed — ${v3Placement.code}: ${v3Placement.error ?? ""}`;
         console.warn(`[v3-on] ${pair} ${detail.skipReason}`);
+      }
+      scanDetails.push(detail);
+      continue;
+    }
+
+    // ══ Scalper15 (Bot Config → "15m Impulse Scalper"; owner spec 2026-11-05, _shared/scalper15.ts) ═══════════════════════
+    // The 1H direction and the 15m Impulse zone decide the trade. It goes through the real Route 2 path exactly as V3 ON does:
+    // risk/account gates enforce, the legacy strategy gates run but only record, and sizing, dry run, the hunt (touch → 5m
+    // confirmation → fill) and broker mirroring are Route 2's own. Stop beyond the zone, target the 1H leg extreme. V3 ON
+    // keeps the pairs it owns. No legacy strategy step runs for the pair while this is on.
+    if (s15On && !v3OwnsPair) {
+      cap.reached_stage = "gates";
+      const s15Skip = (status: string, why: string, extra: Record<string, unknown> = {}) => {
+        detail.status = status; detail.skipReason = why; (detail as any).scalper15 = { ...((detail as any).scalper15 ?? {}), reason: why, ...extra };
+        scanDetails.push(detail);
+      };
+      if (isPaused) { s15Skip("paused", "Scalper15: account paused / entries locked"); continue; }
+      const s15Spec = SPECS[pair] || SPECS["EUR/USD"];
+      if (s15Spec.type !== "crypto" && !fxOpenAt(Date.now())) { s15Skip("scalper15_no_order", "Scalper15: FX closed"); continue; }
+      const s15Now = Date.now();
+      const [s15m5Raw, s15m15Raw] = await Promise.all([cachedFetch(pair, "5m", "5d"), cachedFetch(pair, "15m", "5d")]);
+      const s15Plan = planScalper15({
+        h1: closedBars(hourlyCandles, "1h", s15Now), m15: closedBars(s15m15Raw, "15m", s15Now), m5: closedBars(s15m5Raw, "5m", s15Now),
+        lastPrice: analysis.lastPrice, pipSize: s15Spec.pipSize, settings: s15,
+      });
+      (detail as any).scalper15 = { bias: s15Plan.bias.bias, legHigh: s15Plan.bias.legHigh, legLow: s15Plan.bias.legLow,
+        ...(s15Plan.ok ? { zone: s15Plan.zone, limit: s15Plan.limit, stop: s15Plan.stop, target: s15Plan.target, plannedR: s15Plan.plannedR } : {}) };
+      if (!s15Plan.ok) { s15Skip("scalper15_no_order", `Scalper15: ${s15Plan.reason}`); continue; }
+
+      const { data: s15Live } = await supabase.from("pending_orders").select("order_id,entry_price,direction,entry_zone_type,entry_zone_low,entry_zone_high,status")
+        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("symbol", pair).in("status", ["pending", "awaiting_confirmation"]);
+      // A touched Scalper15 zone is being hunted: leave it alone until it fills, resets or dies (the backtest's rule).
+      const s15Hunting = (s15Live ?? []).find((o: any) => isScalper15Order(o) && o.status === "awaiting_confirmation");
+      if (s15Hunting) { s15Skip("scalper15_order_kept", `Scalper15: order ${s15Hunting.order_id} is awaiting confirmation`); continue; }
+      const s15Same = (s15Live ?? []).find((o: any) => isScalper15Order(o) && o.direction === s15Plan.direction
+        && Math.abs(Number(o.entry_zone_low) - s15Plan.zone.low) <= s15Spec.pipSize * 0.5 && Math.abs(Number(o.entry_zone_high) - s15Plan.zone.high) <= s15Spec.pipSize * 0.5);
+      if (s15Same) { s15Skip("scalper15_order_kept", `Scalper15: order ${s15Same.order_id} already live on this zone`); continue; }
+
+      const s15Gates = (await runSafetyGates(
+        supabase, userId, pair, s15Plan.direction, analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
+        rateMap, null, null, propFirmGateResult?.enabled || false,
+      )).map((g: any) => {
+        const k = gateKeyOf(g);
+        if (!k || !V3_LOGGED_ONLY_GATE_IDS.has(k)) return g;
+        return g.passed ? { ...g, loggedOnly: true, wouldBlock: false } : { ...g, passed: true, loggedOnly: true, wouldBlock: true, reason: `[Scalper15: recorded only] ${g.reason}` };
+      });
+      detail.gates = s15Gates;
+      const s15Blocking = s15Gates.filter((g: any) => !g.passed);
+      if (s15Blocking.length) { s15Skip("scalper15_risk_blocked", `Scalper15: ${s15Blocking.map((g: any) => g.reason).join("; ")}`); continue; }
+      if (propFirmGateResult.enabled && !propFirmGateResult.allowed) { s15Skip("scalper15_risk_blocked", `Scalper15: risk profile — ${propFirmGateResult.reason}`); continue; }
+
+      // Route 2's own geometry, sizing and R:R gate, fed the Scalper15 stop as the only stop candidate (no floor here: the
+      // optional floor is already in s15Plan.stop) and the ratio that lands the target on the 1H leg extreme.
+      const s15H1Atr = hourlyCandles.length >= 15 ? calculateATR(hourlyCandles, 14) : null;
+      const s15Geo = shadowRoute2Geometry({
+        direction: s15Plan.direction, limit: s15Plan.limit, lastPrice: analysis.lastPrice, h1Atr: s15H1Atr,
+        marketSL: s15Plan.stop, tpRatio: s15Plan.plannedR, stopAnchor: "limit",
+        swingSL: s15Plan.stop, impulseSL: null, impulseCapPips: null, minSlPips: 1e-6,
+        pipSize: s15Spec.pipSize, symbol: pair, rateMap, commissionPerLot: avgCommissionPerLot,
+        orderRRMin: simp.orderRRMin, rrGateMode: simp.rrGateMode, sizingMode: simp.sizingMode, balance,
+        riskPercent: simp.riskPercent, maxLotsPerTrade: simp.maxLotsPerTrade,
+        legacyLots: (entry: number, stop: number) => computePositionSize({
+          balance, riskPercent: pairRiskPercent, entryPrice: entry, stopLoss: stop, symbol: pair,
+          method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize,
+          atrValue: atrForConsumers, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot,
+        }).lots,
+        halveLegacy: false,
+      });
+      if (!s15Geo.ok) { s15Skip(s15Geo.status, `Scalper15: ${s15Geo.reason}`); continue; }
+      const s15Tol = s15Spec.pipSize * 0.01;
+      if (Math.abs(s15Geo.stop - s15Plan.stop) > s15Tol || Math.abs(s15Geo.target - s15Plan.target) > s15Tol) {
+        s15Skip("scalper15_geometry_mismatch", `Scalper15: Route 2 stop/target ${s15Geo.stop}/${s15Geo.target} ≠ plan ${s15Plan.stop}/${s15Plan.target}`); continue;
+      }
+
+      const s15PlacedAt = new Date().toISOString(), s15ExpiresAt = route2ExpiresAt(s15PlacedAt);
+      const s15Cfg = (config as any).__configVersion as string | null;
+      if (!(typeof s15Cfg === "string" && /^[0-9a-f]{32}$/.test(s15Cfg))) { s15Skip("attribution_invalid", "Scalper15: canonical config hash unavailable"); continue; }
+      const s15Telem = buildRoute2OrderTelemetry({
+        zoneId: route2ZoneId(pair, "15m", s15Plan.direction, s15Plan.zone.high, s15Plan.zone.low), zoneTimeframe: "15m", zoneCreatedAt: null,
+        pendingCreatedAt: s15PlacedAt, entrySource: "zoneMid", pendingEntryPrice: s15Plan.limit, currentPriceAtCreation: analysis.lastPrice,
+        h1Atr: s15H1Atr, distanceAtr: s15Geo.distanceAtr, initialStopLoss: s15Geo.stop, initialTakeProfit: s15Geo.target,
+        configHash: s15Cfg, wouldHaveBeenRoute1: false, zoneStory: null,
+      });
+      const s15ExitFlags = {
+        trailingStopEnabled: pairConfig.trailingStopEnabled, trailingStopPips: pairConfig.trailingStopPips, trailingStopActivation: pairConfig.trailingStopActivation,
+        trailingStopActivated: false, trailingStopLevel: null as number | null,
+        breakEvenEnabled: pairConfig.breakEvenEnabled, breakEvenPips: pairConfig.breakEvenPips, breakEvenOffsetPips: pairConfig.breakEvenOffsetPips, breakEvenActivated: false,
+        partialTPEnabled: pairConfig.partialTPEnabled, partialTPPercent: pairConfig.partialTPPercent, partialTPLevel: pairConfig.partialTPLevel, partialTPActivated: false,
+        maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours, tpRatio: s15Plan.plannedR,
+      };
+      const s15Ctx = { settings: s15, bias: s15Plan.bias, zone: s15Plan.zone, impulse: s15Plan.impulse,
+        plan: { limit: s15Plan.limit, sl: s15Plan.stop, tp: s15Plan.target, plannedR: s15Plan.plannedR } };
+      // route2Stop.floorPips is null on purpose: Step 17-A's dry-run fill re-anchor would reset the target to the
+      // style's fixed ratio, which is not this strategy's target. With no floor it records floor_unknown and keeps the order's.
+      const s15Route2Stop = { ...(s15Geo.route2Stop as Record<string, unknown>), floorPips: null, source: "scalper15" };
+      const s15Row: Record<string, unknown> = {
+        user_id: userId, bot_id: BOT_ID, order_id: crypto.randomUUID().slice(0, 8), ...s15Telem,
+        symbol: pair, direction: s15Plan.direction, order_type: "limit", entry_price: s15Plan.limit,
+        frozen_strategy_context: buildFrozenDecision({
+          route: "pending-order", balanceAtEntry: balance, riskPercent: pairRiskPercent, sizeLots: s15Geo.size, entryPrice: s15Plan.limit,
+          stopAtEntry: s15Geo.stop, pipSize: s15Spec.pipSize, slFloor: null, sizing: { mode: simp.sizingMode, plannedSizing: s15Geo.plannedSizing },
+          tradingStyle: config.tradingStyle?.mode ?? null, leg: null,
+        }),
+        current_price: analysis.lastPrice, stop_loss: s15Geo.stop, take_profit: s15Geo.target, size: s15Geo.size,
+        entry_zone_type: `${S15_ZONE_PREFIX}-${s15Plan.zone.type}`, entry_zone_low: s15Plan.zone.low, entry_zone_high: s15Plan.zone.high,
+        refined_zone_low: null, refined_zone_high: null, status: "pending", expiry_minutes: ROUTE2_TTL_MINUTES, expires_at: s15ExpiresAt,
+        signal_reason: JSON.stringify({ bot: BOT_ID, summary: `Scalper15 — 15m ${s15Plan.zone.type} in the 1H ${s15Plan.direction} direction, target ${s15Plan.plannedR.toFixed(2)}R`,
+          scalper15: s15Ctx,
+          impulseZone: { impulse: { high: s15Plan.impulse.high, low: s15Plan.impulse.low }, bestZone: { type: s15Plan.zone.type, low: s15Plan.zone.low, high: s15Plan.zone.high, refinedEntry: null } },
+          gates: s15Gates, originalSL: s15Geo.stop, originalTP: s15Geo.target, exitFlags: s15ExitFlags }),
+        signal_score: analysis.score, setup_type: "scalper15", setup_confidence: null,
+        from_watchlist: false, staged_cycles: 0, staged_initial_score: null, exit_flags: s15ExitFlags, placed_at: s15PlacedAt,
+        dry_run: dryRunActive, dry_run_context: dryRunActive ? { switches: simp, scalper15: s15Ctx, orderRR: s15Geo.orderRR, route2Stop: s15Route2Stop, plannedSizing: s15Geo.plannedSizing } : null,
+        config_hash: s15Cfg,
+      };
+      let s15Attr: Record<string, unknown> | null = null;
+      try {
+        const pfDecision = propFirmGateResult.decision;
+        s15Attr = buildAttribution({
+          signalId: crypto.randomUUID(), decisionId: cap.id as string, scanCycleId, userId, botId: BOT_ID,
+          symbol: pair, direction: s15Plan.direction, dryRun: dryRunActive, decisionAt: s15PlacedAt, configVersion: s15Cfg,
+          strategyVersion: String((s15Telem as any).strategy_version ?? "unknown"), switches: simp, legacyRiskPercent: pairConfig.riskPerTrade,
+          management: { breakEvenEnabled: pairConfig.breakEvenEnabled, trailingStopEnabled: pairConfig.trailingStopEnabled,
+            partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
+          caps: resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig), impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
+          riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null, promotedFromWatchlist: null,
+          entrySource: "zoneMid", izGateMode: "hard", gamePlanEnabled: (config as any).gamePlanEnabled !== false,
+          gamePlanContext: (pairConfig as any)._gamePlanContext ?? null, directionVerdict: null,
+          impulse: { hasZone: true, selectedTF: "15m", impulse: s15Plan.impulse, bestZone: s15Plan.zone },
+          obFvgZone: null, unifiedDetected: null, unifiedComparison: null,
+          gateScore: Number.isFinite(analysis.score) ? analysis.score : null, decisionScoreGate: null,
+          factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+          gates: s15Gates as any, ictFvgGate: null, orderRR: s15Geo.orderRR as any, loggedOnlyWouldBlock: s15Gates.filter((g: any) => g.wouldBlock).map((g: any) => ({ gateId: gateKeyOf(g) ?? "unclassified", reason: String(g.reason) })),
+          tpSmallGate: null,
+          riskGate: propFirmGateResult.enabled ? {
+            enabled: true, allowed: propFirmGateResult.allowed, reason: propFirmGateResult.reason,
+            severity: pfDecision?.severity ?? null, trading_day: propFirmGateResult.tradingDay ?? null,
+            day_start_balance: pfDecision?.dayStartBalance ?? null, equity: pfDecision?.equity ?? null,
+            daily_loss_usd: pfDecision?.dailyLossUsd ?? null, thresholds: pfDecision?.thresholds ?? null,
+          } : { enabled: false, allowed: true, reason: "no active risk profile" },
+          zoneId: (s15Telem as any).zone_id ?? null, entryDepth: null,
+          limitPrice: s15Plan.limit, stopPrice: s15Geo.stop, targetPrice: s15Geo.target, pipSize: s15Spec.pipSize,
+          route2Stop: s15Route2Stop as any, plannedSizing: s15Geo.plannedSizing as any, balance, expiresAt: s15ExpiresAt,
+        });
+      } catch (e: any) {
+        s15Skip("attribution_invalid", `Scalper15: attribution build failed — ${e?.message ?? e}`); continue;
+      }
+      // Scalper15 owns the pair: a new order replaces every live order on it (untouched Scalper15 orders on an old zone,
+      // and any Impulse order left from before the switch).
+      const s15Supersede = (s15Live ?? []).map((o: any) => ({ order_id: o.order_id, cancel_reason: "Scalper15: superseded by a new 15m zone" }));
+      const s15Placement = await placeRoute2Order(supabase, { attribution: s15Attr!, order: s15Row, supersede: s15Supersede });
+      (detail as any).scalper15 = { ...((detail as any).scalper15 ?? {}), outcome: s15Placement.outcome, superseded: s15Placement.superseded, orderRR: s15Geo.orderRR };
+      if (s15Placement.outcome === "placed") {
+        detail.status = "scalper15_order_placed";
+        detail.reason = `Scalper15: ${s15Plan.direction.toUpperCase()} 15m ${s15Plan.zone.type} ${s15Plan.zone.low}–${s15Plan.zone.high} · SL ${s15Geo.stop} · TP ${s15Geo.target} (${s15Plan.plannedR.toFixed(2)}R) · ${s15Geo.size} lots`;
+        console.log(`[scalper15] ${pair} ${detail.reason}${s15Placement.superseded.length ? ` (superseded ${s15Placement.superseded.length})` : ""}`);
+        if (!dryRunActive && telegramChatIds.length > 0 && shouldNotify("zone_setup_active")) {
+          const msg = `⚡ <b>Scalper15 Zone Setup ACTIVE</b>\n\n<b>Symbol:</b> ${pair}\n<b>Direction:</b> ${s15Plan.direction.toUpperCase()}\n<b>Zone:</b> ${s15Plan.zone.low} – ${s15Plan.zone.high}\n<b>SL:</b> ${s15Geo.stop}\n<b>TP:</b> ${s15Geo.target} (${s15Plan.plannedR.toFixed(2)}R)`;
+          await Promise.all(telegramChatIds.map(async (chatId: string) => {
+            try {
+              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                body: JSON.stringify({ chat_id: chatId, message: msg }),
+              });
+            } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+          }));
+        }
+      } else {
+        detail.status = `scalper15_${s15Placement.outcome}`;
+        detail.skipReason = `Scalper15: order not placed — ${s15Placement.code}: ${s15Placement.error ?? ""}`;
+        console.warn(`[scalper15] ${pair} ${detail.skipReason}`);
       }
       scanDetails.push(detail);
       continue;
