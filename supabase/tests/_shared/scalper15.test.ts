@@ -127,3 +127,14 @@ Deno.test("placement geometry: Route 2 reproduces the Scalper15 stop and 1H targ
     assert(g.size > 0);
   }
 });
+
+Deno.test("placement: S15 orders carry the 15m zone as their refined zone, so the hunt accepts every confirmation tier", async () => {
+  // Without a refined zone bot-scanner's hunt keeps only Tier 1 (`!hasRefZone && tier !== 1` → rejected): the rejection-wick,
+  // engulfing and wick-CHoCH confirmations Scalper15 is specified and backtested with would be thrown away.
+  const src = await Deno.readTextFile(new URL("../../functions/bot-scanner/index.ts", import.meta.url));
+  const at = src.indexOf("const s15Row: Record<string, unknown> = {");
+  assert(at > 0);
+  const row = src.slice(at, src.indexOf("config_hash: s15Cfg,", at));
+  assert(row.includes("refined_zone_low: s15Plan.zone.low, refined_zone_high: s15Plan.zone.high"));
+  assert(src.includes("const hasRefZone = rawRefLow > 0 && rawRefHigh > 0;"), "the hunt still keys the tier rule on the refined zone");
+});

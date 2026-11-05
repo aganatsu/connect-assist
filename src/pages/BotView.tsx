@@ -21,6 +21,7 @@ import {
   Eye, EyeOff, PanelRightClose, PanelRightOpen, MoreVertical, Wallet,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { Scalper15Panel } from "@/components/Scalper15Panel";
 import { IpoScanner } from "@/components/IpoScanner";
 import { IpoPaperMonitor } from "@/components/IpoPaperMonitor";
 
@@ -337,6 +338,7 @@ export default function BotView() {
     trade_placed_from_watchlist: 1,
     limit_order_placed: 2,
     zone_setup_active: 2,
+    scalper15_order_placed: 2,
     limit_order_from_watchlist: 3,
     zone_setup_from_watchlist: 3,
     staged_confirming: 4,
@@ -2003,6 +2005,9 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
         <span className={`text-[12px] font-bold ${statusColor}`}>{statusLabel}</span>
         <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
+
+      {/* 1b. Scalper15 — when it owns the pair, its decision comes first; the tier score below is recorded only */}
+      {d.scalper15 && <Scalper15Panel status={d.status} s={d.scalper15} skipReason={d.skipReason} reason={d.reason} />}
 
       {/* 2. Tier Score Summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
