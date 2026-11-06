@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles, Target } from "lucide-react";
+import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles, Target } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -25,7 +25,6 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "tradingStyle", label: "Trading Style", keywords: ["scalper", "day trader", "swing", "style", "mode"] },
   // Strategy
   { tab: "strategy", label: "Auto Scan Interval", keywords: ["scan", "interval", "scanner", "frequency"] },
-  { tab: "strategy", label: "Confluence Threshold", keywords: ["confluence", "score", "threshold", "minimum"] },
 
   { tab: "strategy", label: "Order Blocks", keywords: ["ob", "order block", "smc", "institutional"] },
   { tab: "strategy", label: "Fair Value Gaps", keywords: ["fvg", "imbalance", "gap"] },
@@ -46,12 +45,10 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "HTF Bias Hard Veto", keywords: ["htf", "veto", "hard", "block"] },
   { tab: "strategy", label: "Only Buy in Discount", keywords: ["premium", "discount", "long", "buy"] },
   { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
-  { tab: "strategy", label: "Regime Scoring", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "bonus", "penalty"] },
-  { tab: "strategy", label: "Regime Strength", keywords: ["regime", "strength", "multiplier", "scale", "aggressive", "subtle"] },
+  { tab: "strategy", label: "Regime Gate", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "gate"] },
   { tab: "strategy", label: "Thesis Conviction Tracker", keywords: ["thesis", "conviction", "decay", "evidence", "stale", "impulse credit", "revoke"] },
   { tab: "strategy", label: "Thesis Conviction Mode", keywords: ["thesis", "conviction", "shadow", "active", "mode", "block"] },
   { tab: "strategy", label: "Thesis Conviction Thresholds", keywords: ["thesis", "conviction", "revoke", "kill", "threshold", "decay", "recovery"] },
-  { tab: "strategy", label: "Normalized Scoring", keywords: ["normalize", "normalized", "percentage", "scoring", "scale", "auto-adjust", "factor toggle", "weight"] },
   { tab: "strategy", label: "OB Lookback Candles", keywords: ["ob", "order block", "lookback", "history", "advanced", "tuning"] },
   { tab: "strategy", label: "Structure Lookback", keywords: ["structure", "lookback", "bos", "choch", "advanced", "tuning"] },
   { tab: "strategy", label: "FVG Min Size", keywords: ["fvg", "min", "size", "pips", "filter", "advanced", "tuning"] },
@@ -67,14 +64,11 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Same-Direction Stacking", keywords: ["stacking", "duplicate", "same direction", "pyramid", "double"] },
   { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
   { tab: "risk", label: "Position Sizing Method", keywords: ["sizing", "lot", "fixed", "volatility", "atr", "position size"] },
-  { tab: "risk", label: "Conflict Threshold Raise", keywords: ["conflict", "opposing", "threshold", "raise", "counter", "bidirectional"] },
   { tab: "risk", label: "Conflict Hard Block", keywords: ["conflict", "block", "opposing", "veto", "counter", "bidirectional"] },
   { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
   { tab: "entry_exit", label: "Pending Zone Orders", keywords: ["zone", "setup", "pending", "order", "confirmation", "choch", "ob", "fvg", "entry type", "limit"] },
-  { tab: "strategy", label: "Tier 1 Gate Enabled", keywords: ["tier 1", "gate", "toggle", "disable", "enable", "gate 19", "core factors", "off"] },
-  { tab: "strategy", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum", "gate 19", "market structure", "ob", "fvg", "premium discount"] },
   { tab: "strategy", label: "Direction Engine", keywords: ["direction", "bias", "trend", "engine", "long", "short"] },
   { tab: "strategy", label: "Breaker Shadow (flip zones)", keywords: ["breaker", "flip", "inversion", "broken", "zone", "shadow", "ifvg"] },
   { tab: "strategy", label: "15m Impulse Scalper (Scalper15)", keywords: ["scalper15", "scalper", "15m", "15 minute", "impulse", "1h", "direction", "min reward", "stop buffer", "min stop"] },
@@ -87,7 +81,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Thesis Check", keywords: ["thesis", "cancel", "invalidation", "pre-check"] },
   { tab: "strategy", label: "Thesis Check: Direction Flip", keywords: ["thesis", "direction", "flip", "cancel"] },
   { tab: "strategy", label: "Thesis Check Uses My Style's Engine", keywords: ["thesis", "style", "aware", "engine"] },
-  { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "soft", "off", "blocking", "skip"] },
+  { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "off", "blocking", "skip"] },
   { tab: "strategy", label: "Zone Entry Depth", keywords: ["zone", "entry", "depth", "limit", "fill", "near", "far", "edge", "penetration"] },
   { tab: "strategy", label: "Min Zone Score", keywords: ["zone", "score", "gate", "quality", "minimum", "threshold", "weak", "rejected", "conviction"] },
   { tab: "entry_exit", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity", "strict"] },
@@ -129,10 +123,6 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "protection", label: "Max Daily Loss ($)", keywords: ["daily loss", "kill switch", "dollar", "limit"] },
   { tab: "protection", label: "Max Consecutive Losses", keywords: ["consecutive", "losses", "streak", "pause"] },
   { tab: "protection", label: "Equity Circuit Breaker (%)", keywords: ["circuit breaker", "equity", "emergency", "stop"] },
-  // Factor Weights
-  { tab: "factorWeights", label: "Factor Weights", keywords: ["factor", "weight", "weights", "importance", "scoring", "tune", "ai", "advisor"] },
-  { tab: "factorWeights", label: "Spread Quality", keywords: ["spread", "quality", "penalty", "atr", "execution"] },
-  { tab: "factorWeights", label: "GP Key Level", keywords: ["game plan", "key level", "gp", "institutional", "dol"] },
   // Opening Range
   { tab: "openingRange", label: "Enable Opening Range", keywords: ["opening range", "or", "master"] },
   { tab: "openingRange", label: "Candle Count", keywords: ["candle", "count", "or", "range"] },
@@ -151,9 +141,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   // Per-Pair Gate Overrides
   { tab: "pairOverrides", label: "Per-Pair Gate Overrides", keywords: ["pair", "symbol", "override", "per pair", "per symbol", "specific", "individual"] },
   { tab: "pairOverrides", label: "Per-Pair Min R:R", keywords: ["risk reward", "rr", "effective", "spread", "pair specific"] },
-  { tab: "pairOverrides", label: "Per-Pair Tier 1", keywords: ["tier 1", "core factors", "pair", "minimum"] },
   { tab: "pairOverrides", label: "Per-Pair Stacking", keywords: ["stacking", "duplicate", "same direction", "max per symbol"] },
-  { tab: "pairOverrides", label: "Per-Pair Confluence", keywords: ["confluence", "score", "threshold", "pair"] },
   { tab: "pairOverrides", label: "Per-Pair Daily Loss", keywords: ["daily", "loss", "pnl", "dollar", "limit", "pair"] },
   { tab: "pairOverrides", label: "Per-Pair Consecutive Losses", keywords: ["consecutive", "losses", "cooldown", "pair"] },
 ];
@@ -235,16 +223,15 @@ const HighlightContext = createContext<Set<string>>(new Set());
 const BASE_CONFIG = {
   strategy: {
     enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-    confluenceThreshold: 55, htfBiasRequired: true, obLookbackCandles: 20,
+    htfBiasRequired: true, obLookbackCandles: 20,
     fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
     liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
-    regimeScoringEnabled: true, regimeScoringStrength: 1.0,
-    normalizedScoring: true,
+    regimeScoringEnabled: true,
   },
   risk: {
     riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
     fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 5, maxPositionsPerSymbol: 2, allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
-    conflictThresholdRaise: 4, conflictBlockAt: 6,
+    conflictBlockAt: 6,
   },
   entry: {
     defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
@@ -279,7 +266,6 @@ const BASE_CONFIG = {
   },
   account: { startingBalance: 10000, leverage: 100, mode: "paper" },
   openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
-  factorWeights: {},
 };
 
 const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day_trader" | "scalper"; description: string }> = {
@@ -289,17 +275,16 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     config: {
       strategy: {
         enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-        confluenceThreshold: 40, htfBiasRequired: true, obLookbackCandles: 20,
+        htfBiasRequired: true, obLookbackCandles: 20,
         fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
         liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
-        regimeScoringEnabled: true, regimeScoringStrength: 1.5,
-        normalizedScoring: true,
+        regimeScoringEnabled: true,
       },
       risk: {
         riskPerTrade: 1.5, maxDailyLoss: 3, maxDrawdown: 20, positionSizingMethod: "percent_risk",
         fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 2, maxPositionsPerSymbol: 1,
         allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 2.5,
-        conflictThresholdRaise: 4, conflictBlockAt: 6,
+        conflictBlockAt: 6,
       },
       entry: {
         defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "15m",
@@ -331,7 +316,6 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       protection: { maxDailyLoss: 500, maxConsecutiveLosses: 2, circuitBreakerPct: 20 },
       account: { startingBalance: 10000, leverage: 100, mode: "paper" },
       openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
-      factorWeights: {},
       tradingStyle: { mode: "swing_trader" },
     },
   },
@@ -341,17 +325,16 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     config: {
       strategy: {
         enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-        confluenceThreshold: 55, htfBiasRequired: true, obLookbackCandles: 20,
+        htfBiasRequired: true, obLookbackCandles: 20,
         fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
         liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
-        regimeScoringEnabled: true, regimeScoringStrength: 1.0,
-        normalizedScoring: true,
+        regimeScoringEnabled: true,
       },
       risk: {
         riskPerTrade: 1, maxDailyLoss: 3, maxDrawdown: 15, positionSizingMethod: "percent_risk",
         fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 4, maxPositionsPerSymbol: 2,
         allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
-        conflictThresholdRaise: 4, conflictBlockAt: 6,
+        conflictBlockAt: 6,
       },
       entry: {
         defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
@@ -383,7 +366,6 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       protection: { maxDailyLoss: 300, maxConsecutiveLosses: 3, circuitBreakerPct: 15 },
       account: { startingBalance: 10000, leverage: 100, mode: "paper" },
       openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
-      factorWeights: {},
       tradingStyle: { mode: "day_trader" },
     },
   },
@@ -393,17 +375,16 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     config: {
       strategy: {
         enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-        confluenceThreshold: 40, htfBiasRequired: true, obLookbackCandles: 20,
+        htfBiasRequired: true, obLookbackCandles: 20,
         fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
         liquidityPoolMinTouches: 2, premiumDiscountEnabled: false, onlyBuyInDiscount: false, onlySellInPremium: false,
-        regimeScoringEnabled: false, regimeScoringStrength: 1.0,
-        normalizedScoring: true,
+        regimeScoringEnabled: false,
       },
       risk: {
         riskPerTrade: 0.5, maxDailyLoss: 3, maxDrawdown: 10, positionSizingMethod: "percent_risk",
         fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 3, maxPositionsPerSymbol: 1,
         allowSameDirectionStacking: false, maxPortfolioHeat: 5, minRiskReward: 1.5,
-        conflictThresholdRaise: 4, conflictBlockAt: 6,
+        conflictBlockAt: 6,
       },
       entry: {
         defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "1m",
@@ -435,7 +416,6 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       protection: { maxDailyLoss: 300, maxConsecutiveLosses: 4, circuitBreakerPct: 10 },
       account: { startingBalance: 10000, leverage: 100, mode: "paper" },
       openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
-      factorWeights: {},
       tradingStyle: { mode: "scalper" },
     },
   },
@@ -575,7 +555,6 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     { id: "sessions", label: "Sessions", icon: Clock },
     { id: "protection", label: "Protection", icon: ShieldAlert },
     { id: "pairOverrides", label: "Per-Pair Gates", icon: Target },
-    { id: "factorWeights", label: "Factor Weights", icon: SlidersHorizontal },
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
     { id: "gamePlan", label: "Game Plan", icon: Crosshair },
     { id: "ict2022", label: "ICT 2022", icon: Sparkles },
@@ -820,7 +799,6 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                               <span>HTF Bias: <strong className="text-foreground">{params.htfTimeframe}</strong></span>
                               <span>TP Ratio: <strong className="text-foreground">{params.tpRatio}:1</strong></span>
                               <span>SL Buffer: <strong className="text-foreground">{params.slBufferPips} pip</strong></span>
-                              <span>Threshold: <strong className="text-foreground">{params.confluenceThreshold}%</strong></span>
                               <span>Max Hold: <strong className="text-foreground">{params.maxHoldHours === 0 ? "None" : `${params.maxHoldHours}h`}</strong></span>
                             </div>
                             <div className="mt-1.5 pt-1.5 border-t border-border/50 grid grid-cols-3 gap-x-2 gap-y-0.5 text-[8px] text-muted-foreground">
@@ -863,13 +841,6 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         Server cron runs every 5 min. If interval hasn't elapsed since last scan, the cron cycle is skipped.
                       </p>
                     </FieldGroup>
-                    <FieldGroup label="Confluence Threshold" description="Minimum percentage (0-100%) of enabled factor max required to trigger a trade">
-                      <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.confluenceThreshold ?? 55]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={20} max={90} step={5} className="flex-1" />
-                        <StyleControlled style={config.tradingStyle?.mode} value={STYLE_FORCED[config.tradingStyle?.mode ?? 'day_trader']?.scanIntervalMinutes ?? '—'} />
-                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.confluenceThreshold ?? 55}%</span>
-                      </div>
-                    </FieldGroup>
                     <FieldGroup label="Min Zone Score" description="Minimum impulse zone quality score (0–9) to accept a trade. Zones below this threshold are rejected as low-conviction.">
                       <div className="flex items-center gap-4">
                         <Slider value={[config.strategy?.minZoneScore ?? 4]} onValueChange={v => updateField('strategy', 'minZoneScore', v[0])} min={0} max={9} step={0.5} className="flex-1" />
@@ -879,20 +850,6 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         Zone score = fibDepth + S/R confirmed + LTF refined + HTF confluence. Set to 0 to disable this gate.
                       </p>
                     </FieldGroup>
-                    <ToggleField label="Tier 1 Gate Enabled" description="When OFF, the Tier 1 core factors gate (Gate 19) is completely disabled — setups will pass regardless of how many core factors they have. Use this to let your score threshold and R:R gates handle quality filtering instead." checked={config.strategy?.tier1GateEnabled ?? true} onChange={v => updateField('strategy', 'tier1GateEnabled', v)} />
-                    {(config.strategy?.tier1GateEnabled ?? true) && (<>
-                    <FieldGroup label="Min Tier 1 Core Factors" description="Minimum number of Tier 1 factors (Market Structure, OB, FVG, Premium/Discount & Fib, Unicorn, HTF FVG/OB/Fib) required to pass Gate 19. Lower = more trades, higher = stricter quality filter.">
-                      <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.minTier1Factors ?? 3]} onValueChange={v => updateField('strategy', 'minTier1Factors', v[0])} min={1} max={5} step={1} className="flex-1" />
-                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.minTier1Factors ?? 3}/5</span>
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-1.5">
-                        Default: 3. Set to 2 for more aggressive trading, 4–5 for ultra-conservative (fewer signals).
-                      </p>
-                    </FieldGroup>
-                    <ToggleField label="Require Price Inside the OB/FVG" description="Positional, not existential — the impulse zone gate already guarantees an OB or FVG exists. This demands price be INSIDE it rather than merely near the zone. Measured across Era C (from 2026-09-02 16:00, when R:R became 2:1): trades taken with price at the POI won 60.0% for +12.40R and +$3,404, against 35.0% for −7.04R and −$2,832 when only near the zone. Break-even at 2:1 is 33.3%, so the near-only bucket is a genuine losing edge, not variance. Note this would have blocked 40 of 60 trades, so it shrinks the book as well as filtering it." checked={config.strategy?.tier1RequireAtPOI ?? false} onChange={v => updateField('strategy', 'tier1RequireAtPOI', v)} />
-                    </>)}
-                    {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
                     <ToggleField label="Use Unified's Entry & Stop" description="When the Unified engine confirms a setup, trade it with Unified's own entry and stop. Off: Unified only confirms, and the trade uses the Impulse engine's entry and stop. Either way, Require Unified Zone above still lets only confirmed setups through." checked={config.simplification?.unifiedModifiersEnabled !== false} onChange={v => updateField('simplification', 'unifiedModifiersEnabled', v)} />
                     <ToggleField label="Breaker Shadow (flip zones)" description="When a 30-minute candle closes through a Unified zone, the zone flips to the other side (a broken buy zone becomes a sell zone). The bot records pretend trades on those flips (with confirmation, and with a plain limit order) and shows them in Zone Story → Breakers. Never places a real order. The 5-minute version of this rule lost on past data (−0.13R a trade after costs) and the 30-minute version is untested, so it is recorded, not traded." checked={config.strategy?.breakerShadowEnabled === true} onChange={v => updateField('strategy', 'breakerShadowEnabled', v)} />
@@ -968,24 +925,19 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     {/* ── Impulse Zone Gate Mode ── */}
                     <FieldGroup label="Impulse Zone Gate Mode" description="Controls how strictly the impulse zone requirement is enforced when Unified Zone is OFF.">
                       <div className="flex items-center gap-3">
-                        <Select value={config.strategy?.impulseZoneGateMode ?? 'hard'} onValueChange={(v: string) => updateField('strategy', 'impulseZoneGateMode', v)}>
+                        <Select value={(config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard' ? 'hard' : 'off'} onValueChange={(v: string) => updateField('strategy', 'impulseZoneGateMode', v)}>
                           <SelectTrigger className="h-9 text-sm w-48"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="hard">Hard — no zone = skip pair</SelectItem>
-                            <SelectItem value="soft">Soft — score penalty only</SelectItem>
                             <SelectItem value="off">Off — zones informational</SelectItem>
                           </SelectContent>
                         </Select>
-                        {(config.strategy?.impulseZoneGateMode ?? 'hard') !== 'off' && (
-                          <Badge variant="outline" className={`text-[9px] font-mono ${
-                            (config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard' ? 'text-loss border-loss/40' : 'text-warn border-warn/40'
-                          }`}>
-                            {(config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard' ? 'BLOCKING' : 'SCORING'}
-                          </Badge>
+                        {(config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard' && (
+                          <Badge variant="outline" className="text-[9px] font-mono text-loss border-loss/40">BLOCKING</Badge>
                         )}
                       </div>
                       <p className="text-[9px] text-muted-foreground mt-1.5">
-                        Hard = pair is skipped if no valid impulse zone exists. Soft = score penalty ({config.strategy?.impulseZonePenalty ?? 2.0} pts) but trade can still proceed. Off = zones are shown in the Zone Story but don't affect trade decisions.
+                        Hard = pair is skipped if no valid impulse zone exists. Off = zones are shown in the Zone Story but don't affect trade decisions.
                       </p>
                     </FieldGroup>
                     {/* ── Zone Entry Depth ── */}
@@ -1052,10 +1004,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     <div className="border border-border/50 rounded-lg p-3 bg-muted/30">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold mb-2">Entry Decision Flow</p>
                       <div className="text-[10px] font-mono text-muted-foreground space-y-1">
-                        <p>1. Scanner detects confluence signal for pair</p>
+                        <p>1. Scanner finds a direction for the pair</p>
                         <p>2. Impulse Zone Gate checks:</p>
                         <p className="pl-3">• Hard → must have valid zone or pair is skipped</p>
-                        <p className="pl-3">• Soft → penalty applied, trade may proceed</p>
                         <p className="pl-3">• Off → no zone requirement</p>
                         <p>3. If Unified Zone Confirmation = ON:</p>
                         <p className="pl-3">• Must reach "triggered" state (impulse→zone→liq→confirm)</p>
@@ -1073,20 +1024,20 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       <ToggleField label="Fair Value Gaps" description="Identify FVG imbalances" checked={config.strategy?.useFVG ?? true} onChange={v => updateField('strategy', 'useFVG', v)} />
                       <ToggleField label="Liquidity Sweeps" description="Track liquidity pool sweeps" checked={config.strategy?.useLiquiditySweep ?? true} onChange={v => updateField('strategy', 'useLiquiditySweep', v)} />
                       <ToggleField label="Structure Breaks" description="BOS / CHoCH detection" checked={config.strategy?.useStructureBreak ?? true} onChange={v => updateField('strategy', 'useStructureBreak', v)} />
-                      <ToggleField label="Displacement Detection" description="Score bonus when OBs/FVGs form with strong displacement candles" checked={config.strategy?.useDisplacement ?? true} onChange={v => updateField('strategy', 'useDisplacement', v)} />
+                      <ToggleField label="Displacement Detection" description="Detect OBs/FVGs that form with strong displacement candles" checked={config.strategy?.useDisplacement ?? true} onChange={v => updateField('strategy', 'useDisplacement', v)} />
                       <ToggleField label="Breaker Blocks" description="Detect failed OBs that flip into support/resistance" checked={config.strategy?.useBreakerBlocks ?? true} onChange={v => updateField('strategy', 'useBreakerBlocks', v)} />
-                      <ToggleField label="Unicorn Model" description="Highest conviction: Breaker + FVG overlap zone (1.5 pts)" checked={config.strategy?.useUnicornModel ?? true} onChange={v => updateField('strategy', 'useUnicornModel', v)} />
-                      <ToggleField label="Silver Bullet Windows" description="ICT macro windows (London 08-09, AM 15-16, PM 19-20 UTC). +1.0 pt, +0.5 combo bonus when overlapping a kill zone" checked={config.strategy?.useSilverBullet ?? true} onChange={v => updateField('strategy', 'useSilverBullet', v)} />
-                      <ToggleField label="ICT Macro Windows" description="8 institutional reprice windows (~20min each). +0.5 pt, +0.5 combo bonus when overlapping a Silver Bullet" checked={config.strategy?.useMacroWindows ?? true} onChange={v => updateField('strategy', 'useMacroWindows', v)} />
-                      <ToggleField label="SMT Divergence" description="Compares pair vs correlated pair (e.g. EUR/USD vs GBP/USD). +1.0 pt when one sweeps liquidity but the other holds" checked={config.strategy?.useSMT ?? true} onChange={v => updateField('strategy', 'useSMT', v)} />
-                      <ToggleField label="SMT Opposite Veto" description="Block trades where SMT divergence opposes signal direction. Hard veto — trade will not be placed regardless of score" checked={config.strategy?.smtOppositeVeto ?? true} onChange={v => updateField('strategy', 'smtOppositeVeto', v)} />
-                      <ToggleField label="Volume Profile" description="TPO-based volume profile: POC (Point of Control), HVN/LVN detection. +0.75 pts when price at key volume node" checked={config.strategy?.useVolumeProfile ?? true} onChange={v => updateField('strategy', 'useVolumeProfile', v)} />
-                      <ToggleField label="Daily Bias" description="Higher timeframe daily bias confirmation. +1.0 pts when daily candle structure aligns with trade direction" checked={config.strategy?.useDailyBias ?? true} onChange={v => updateField('strategy', 'useDailyBias', v)} />
-                      <ToggleField label="AMD Phase Detection" description="Accumulation→Manipulation→Distribution. +1.0 pt when bias-aligned phase detected. Power of 3 combo bonus (+1.0) when AMD + Sweep/Judas + Trend all align" checked={config.strategy?.useAMD ?? true} onChange={v => updateField('strategy', 'useAMD', v)} />
-                      <ToggleField label="FOTSI Currency Strength" description="Scores trades by currency flow (+1.5 pts when buying strong vs weak). Blocks trades when TSI exceeds +50 (overbought) or -50 (oversold) — prevents buying exhausted currencies" checked={config.strategy?.useFOTSI ?? true} onChange={v => updateField('strategy', 'useFOTSI', v)} />
+                      <ToggleField label="Unicorn Model" description="Breaker + FVG overlap zone" checked={config.strategy?.useUnicornModel ?? true} onChange={v => updateField('strategy', 'useUnicornModel', v)} />
+                      <ToggleField label="Silver Bullet Windows" description="ICT macro windows (London 08-09, AM 15-16, PM 19-20 UTC)" checked={config.strategy?.useSilverBullet ?? true} onChange={v => updateField('strategy', 'useSilverBullet', v)} />
+                      <ToggleField label="ICT Macro Windows" description="8 institutional reprice windows (~20min each)" checked={config.strategy?.useMacroWindows ?? true} onChange={v => updateField('strategy', 'useMacroWindows', v)} />
+                      <ToggleField label="SMT Divergence" description="Compares pair vs correlated pair (e.g. EUR/USD vs GBP/USD): one sweeps liquidity while the other holds" checked={config.strategy?.useSMT ?? true} onChange={v => updateField('strategy', 'useSMT', v)} />
+                      <ToggleField label="SMT Opposite Veto" description="Block trades where SMT divergence opposes signal direction. Hard veto — the trade is not placed" checked={config.strategy?.smtOppositeVeto ?? true} onChange={v => updateField('strategy', 'smtOppositeVeto', v)} />
+                      <ToggleField label="Volume Profile" description="TPO-based volume profile: POC (Point of Control), HVN/LVN detection" checked={config.strategy?.useVolumeProfile ?? true} onChange={v => updateField('strategy', 'useVolumeProfile', v)} />
+                      <ToggleField label="Daily Bias" description="Higher timeframe daily bias: does the daily candle structure align with the trade direction" checked={config.strategy?.useDailyBias ?? true} onChange={v => updateField('strategy', 'useDailyBias', v)} />
+                      <ToggleField label="AMD Phase Detection" description="Accumulation→Manipulation→Distribution phase detection" checked={config.strategy?.useAMD ?? true} onChange={v => updateField('strategy', 'useAMD', v)} />
+                      <ToggleField label="FOTSI Currency Strength" description="Currency flow (buying strong vs weak). Blocks trades when TSI exceeds +50 (overbought) or -50 (oversold) — prevents buying exhausted currencies" checked={config.strategy?.useFOTSI ?? true} onChange={v => updateField('strategy', 'useFOTSI', v)} />
                     </div>
                     <ToggleField label="Require HTF Bias Alignment" description="Only trade in the direction of higher timeframe bias" checked={config.strategy?.requireHTFBias ?? true} onChange={v => updateField('strategy', 'requireHTFBias', v)} />
-                    <ToggleField label="HTF Bias Hard Veto" description="Block longs unless daily is bullish, shorts unless daily is bearish (no ranging exception, no score override)" checked={config.strategy?.htfBiasHardVeto ?? false} onChange={v => updateField('strategy', 'htfBiasHardVeto', v)} />
+                    <ToggleField label="HTF Bias Hard Veto" description="Block longs unless daily is bullish, shorts unless daily is bearish (no ranging exception)" checked={config.strategy?.htfBiasHardVeto ?? false} onChange={v => updateField('strategy', 'htfBiasHardVeto', v)} />
                     <div className="border-t border-border pt-4 space-y-4">
                       <div className="flex items-center justify-between">
                         <div>
@@ -1130,21 +1081,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </div>
                     </div>
                     <div className="border-t border-border pt-4 space-y-4">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime-Aware Scoring</p>
-                      <ToggleField label="Enable Regime Scoring" description="Adjust confluence score based on market regime alignment. Bonus when setup matches regime (e.g. trend setup in trending market), penalty when mismatched" checked={config.strategy?.regimeScoringEnabled ?? true} onChange={v => updateField('strategy', 'regimeScoringEnabled', v)} />
-                      {(config.strategy?.regimeScoringEnabled ?? true) && (
-                        <FieldGroup label="Regime Strength" description="Scales the bonus/penalty multiplier. 0.25x = subtle adjustments, 1.0x = default, 2.0x = aggressive filtering">
-                          <div className="flex items-center gap-4">
-                            <Slider value={[config.strategy?.regimeScoringStrength ?? 1.0]} onValueChange={v => updateField('strategy', 'regimeScoringStrength', v[0])} min={0.25} max={2.0} step={0.25} className="flex-1" />
-                            <span className="text-sm font-mono font-bold text-primary w-12 text-right">{(config.strategy?.regimeScoringStrength ?? 1.0).toFixed(2)}x</span>
-                          </div>
-                          <div className="mt-2 rounded-md bg-muted/50 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
-                            <div><span className="text-profit font-medium">Aligned:</span> Trend setup in trending market → +0.25 to +0.5 bonus</div>
-                            <div><span className="text-loss font-medium">Mismatched:</span> Trend setup in choppy market → -0.75 to -1.5 penalty</div>
-                            <div className="text-muted-foreground/70">Range setups get the inverse. All values scaled by the multiplier above.</div>
-                          </div>
-                        </FieldGroup>
-                      )}
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime Gate</p>
+                      <ToggleField label="Regime Gate" description="Classify the market regime from daily candles (trending / ranging / choppy) and block setups whose type conflicts with it (e.g. a trend setup in a choppy market)." checked={config.strategy?.regimeScoringEnabled ?? true} onChange={v => updateField('strategy', 'regimeScoringEnabled', v)} />
                     </div>
                     <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Thesis Conviction Tracker</p>
@@ -1182,7 +1120,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                               <span className="text-sm font-mono font-bold text-primary w-8 text-right">{config.strategy?.thesisConvictionRecoveryPerCycle ?? 5}</span>
                             </div>
                           </FieldGroup>
-                          <FieldGroup label="Revoke Threshold" description="Conviction below this % → impulse-zone credit revoked. Trade must pass normal tier-1 threshold instead.">
+                          <FieldGroup label="Revoke Threshold" description="Conviction below this % → the thesis is labelled revoked in the logs.">
                             <div className="flex items-center gap-3">
                               <Slider value={[config.strategy?.thesisConvictionRevokeThreshold ?? 50]} onValueChange={v => updateField('strategy', 'thesisConvictionRevokeThreshold', v[0])} min={20} max={80} step={5} className="flex-1" />
                               <span className="text-sm font-mono font-bold text-primary w-8 text-right">{config.strategy?.thesisConvictionRevokeThreshold ?? 50}%</span>
@@ -1195,27 +1133,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                             </div>
                           </FieldGroup>
                           <div className="rounded-md bg-muted/50 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
-                            <div><span className="text-profit font-medium">80-100% conviction:</span> Impulse credit granted normally</div>
-                            <div><span className="text-warn font-medium">60-79% conviction:</span> Credit reduced, score penalty -5%</div>
-                            <div><span className="text-loss font-medium">Below revoke threshold:</span> Impulse credit revoked, score penalty -10%</div>
+                            <div><span className="text-profit font-medium">80-100% conviction:</span> granted</div>
+                            <div><span className="text-warn font-medium">60-79% conviction:</span> reduced</div>
+                            <div><span className="text-loss font-medium">Below revoke threshold:</span> revoked</div>
+                            <div className="text-muted-foreground/70">Recorded with each decision; it no longer changes a trade (the score it adjusted is gone).</div>
                             <div className="text-muted-foreground/70 pt-1">Evidence sources: Direction Verdict, 4H Regime, Opposing Factors, FOTSI, Game Plan Bias</div>
                           </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="border-t border-border pt-4 space-y-4">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Score Normalization</p>
-                      <ToggleField label="Percentage Scoring" description="Score expressed as a percentage (0-100%) of the maximum possible from your enabled factors. 55% always means 55% of what's possible, regardless of which factors are enabled." checked={config.strategy?.normalizedScoring ?? true} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
-                      {(config.strategy?.normalizedScoring ?? true) ? (
-                        <div className="rounded-md bg-badge-profit border border-emerald-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
-                          <div><span className="text-profit font-medium">Active:</span> Score = (raw points / max possible) × 100%</div>
-                          <div><span className="text-warn font-medium">Example:</span> Raw 10.5 / max 19.0 = 55.3% confluence</div>
-                          <div className="text-muted-foreground/70">Disabling factors doesn't change the effective threshold. The percentage auto-adjusts so your confluence threshold always means the same quality level regardless of which factors are enabled.</div>
-                        </div>
-                      ) : (
-                        <div className="rounded-md bg-badge-warn border border-amber-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
-                          <div><span className="text-warn font-medium">Legacy mode:</span> Score clamped to 0-10 scale</div>
-                          <div className="text-muted-foreground/70">Warning: Disabling factors silently raises the effective threshold. Consider switching to percentage scoring.</div>
                         </div>
                       )}
                     </div>
@@ -1236,7 +1159,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                           <Input type="number" value={config.strategy?.liquidityPoolMinTouches ?? 2} onChange={e => updateField('strategy', 'liquidityPoolMinTouches', parseInt(e.target.value) || 0)} min={2} max={10} step={1} className="h-9 text-sm" />
                         </FieldGroup>
                       </div>
-                      <ToggleField label="FVG Only Unfilled" description="Score only Fair Value Gaps that haven't been mitigated/filled yet. Recommended on." checked={config.strategy?.fvgOnlyUnfilled ?? true} onChange={v => updateField('strategy', 'fvgOnlyUnfilled', v)} />
+                      <ToggleField label="FVG Only Unfilled" description="Use only Fair Value Gaps that haven't been mitigated/filled yet. Recommended on." checked={config.strategy?.fvgOnlyUnfilled ?? true} onChange={v => updateField('strategy', 'fvgOnlyUnfilled', v)} />
                     </div>
                   </div>
                 )}
@@ -1450,14 +1373,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       {/* ── Conflict Counter Thresholds ── */}
                       <div className="border-t border-border pt-4 space-y-3">
                         <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Conflict Counter</p>
-                        <p className="text-[10px] text-muted-foreground italic">When multiple factors actively oppose the trade direction, the bot raises the bar or blocks entirely.</p>
-                        <FieldGroup label="Threshold Raise At" description="When this many factors oppose the trade, the minimum confluence threshold is raised by 10 percentage points.">
-                          <div className="flex items-center gap-4">
-                            <Slider value={[config.risk?.conflictThresholdRaise ?? 4]} onValueChange={v => updateField('risk', 'conflictThresholdRaise', v[0])} min={2} max={8} step={1} className="flex-1" />
-                            <span className="text-sm font-mono font-bold w-10 text-right">{config.risk?.conflictThresholdRaise ?? 4}</span>
-                          </div>
-                        </FieldGroup>
-                        <FieldGroup label="Hard Block At" description="When this many factors oppose the trade, the trade is blocked entirely regardless of score.">
+                        <p className="text-[10px] text-muted-foreground italic">When enough factors actively oppose the trade direction, the bot blocks it.</p>
+                        <FieldGroup label="Hard Block At" description="When this many factors oppose the trade, the trade is blocked.">
                           <div className="flex items-center gap-4">
                             <Slider value={[config.risk?.conflictBlockAt ?? 6]} onValueChange={v => updateField('risk', 'conflictBlockAt', v[0])} min={3} max={12} step={1} className="flex-1" />
                             <span className="text-sm font-mono font-bold w-10 text-right">{config.risk?.conflictBlockAt ?? 6}</span>
@@ -2038,10 +1955,6 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                   <PairOverridesTab config={config} setConfig={setConfig} />
                 )}
 
-                {effectiveActiveTab === "factorWeights" && (
-                  <FactorWeightsTab config={config} setConfig={setConfig} />
-                )}
-
                 {effectiveActiveTab === "openingRange" && (
                   <div className="space-y-5">
                     <SectionHeader title="Opening Range" description="Use the first N hourly candles of the trading day to derive bias, levels, and filters" />
@@ -2063,8 +1976,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                 )}
                 {effectiveActiveTab === "gamePlan" && (
                   <div className="space-y-5">
-                    <SectionHeader title="Pre-Session Game Plan" description="Automatically generates session bias, Draw on Liquidity targets, IPDA ranges, and weekly profiles before each session. Analysis is integrated into the scoring engine to boost aligned trades and penalize opposing ones." />
-                    <ToggleField label="Enable Game Plan" description="Master toggle — when enabled, the bot generates a game plan once per session and integrates it into scoring, TP placement, and scan priority" checked={config.gamePlanEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanEnabled: v }))} />
+                    <SectionHeader title="Pre-Session Game Plan" description="Automatically generates session bias, Draw on Liquidity targets, IPDA ranges, and weekly profiles before each session. Its bias can block opposing trades (Bias Gate Mode below)." />
+                    <ToggleField label="Enable Game Plan" description="Master toggle — when enabled, the bot generates a game plan once per session and uses it for the bias gate, TP placement, and scan priority" checked={config.gamePlanEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanEnabled: v }))} />
                     <ToggleField label="Telegram Notifications" description="Send the game plan summary to Telegram when a new plan is generated (once per session, not every scan)" checked={config.gamePlanNotify !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanNotify: v }))} />
 
                     <FieldGroup label="Refresh Interval (hours)" description="How often to regenerate the game plan within the same session. Default is 4 hours — the plan stays fresh for this long before a new one is generated.">
@@ -2085,7 +1998,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                           <SelectTrigger className="h-9 text-sm w-56"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="hard">Hard — block opposing trades</SelectItem>
-                            <SelectItem value="soft">Soft — score penalty only</SelectItem>
+                            <SelectItem value="soft">Soft — logged, never blocks</SelectItem>
                             <SelectItem value="off">Off — bias informational</SelectItem>
                           </SelectContent>
                         </Select>
@@ -2093,12 +2006,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                           <Badge variant="outline" className={`text-[9px] font-mono ${
                             (config.strategy?.gamePlanGateMode ?? 'soft') === 'hard' ? 'text-loss border-loss/40' : 'text-warn border-warn/40'
                           }`}>
-                            {(config.strategy?.gamePlanGateMode ?? 'soft') === 'hard' ? 'BLOCKING' : 'SCORING'}
+                            {(config.strategy?.gamePlanGateMode ?? 'soft') === 'hard' ? 'BLOCKING' : 'ADVISORY'}
                           </Badge>
                         )}
                       </div>
                       <p className="text-[9px] text-muted-foreground mt-1.5">
-                        Soft is the long-standing behaviour: the opposition is logged and a small scoring penalty applied ({'−'}0.19 at 55% confidence), which rarely changes the outcome. Hard blocks the trade outright, but only when the bias confidence clears the floor below. Measured 2026-09-03: of 14 trades that day, the 7 the game plan opposed lost {'−'}1,698 with none reaching take profit.
+                        Soft logs the opposition and lets the trade through. Hard blocks the trade outright, but only when the bias confidence clears the floor below. Measured 2026-09-03: of 14 trades that day, the 7 the game plan opposed lost {'−'}1,698 with none reaching take profit.
                       </p>
                     </FieldGroup>
 
@@ -2112,7 +2025,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                           className="h-9 text-sm"
                         />
                         <p className="text-[9px] text-muted-foreground mt-1.5">
-                          Default 50 — the same threshold the bias scoring already uses before applying any penalty. Blocking on every disagreement regardless of confidence tested worse: over the same period it discarded a +2.00R winner the plan opposed at only 45% confidence.
+                          Default 50. Blocking on every disagreement regardless of confidence tested worse: over the same period it discarded a +2.00R winner the plan opposed at only 45% confidence.
                         </p>
                       </FieldGroup>
                     )}
@@ -2123,7 +2036,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     {config.gamePlanEnabled && (
                       <div className="border border-border rounded p-3 bg-secondary/30">
                         <p className="text-[11px] text-muted-foreground">
-                          <strong className="text-foreground">How it works:</strong> The game plan runs once per session (London, NY, Asian). It analyzes D1/4H structure, identifies Draw on Liquidity targets, and generates conditional trade scenarios. The plan is cached for {config.gamePlanRefreshHours ?? 4} hours — subsequent scans reuse it without regenerating. Game plan bias, key levels, and DOL targets are integrated into the scoring engine — aligned trades score higher, opposing trades score lower. IPDA ranges and weekly profiles provide additional institutional context.
+                          <strong className="text-foreground">How it works:</strong> The game plan runs once per session (London, NY, Asian). It analyzes D1/4H structure, identifies Draw on Liquidity targets, and generates conditional trade scenarios. The plan is cached for {config.gamePlanRefreshHours ?? 4} hours — subsequent scans reuse it without regenerating. Game plan bias feeds the bias gate and DOL targets can extend take profit. IPDA ranges and weekly profiles provide additional institutional context.
                         </p>
                       </div>
                     )}
@@ -2148,188 +2061,6 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
             )}
             </HighlightContext.Provider>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Factor Weights Tab ───────────────────────────────────────────────────
-const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; tier: 1 | 2 | 3; tierPts: number; description: string }[] = [
-  // Tier 1 — Core Setup (×2 pts)
-  { key: "marketStructure", name: "Market Structure", defaultWeight: 2.5, tier: 1, tierPts: 2, description: "BOS/CHoCH + entry TF trend alignment (merged)" },
-  { key: "orderBlock", name: "Order Block", defaultWeight: 2.0, tier: 1, tierPts: 2, description: "Institutional order blocks" },
-  { key: "fairValueGap", name: "Fair Value Gap", defaultWeight: 2.0, tier: 1, tierPts: 2, description: "FVG imbalances" },
-  { key: "premiumDiscountFib", name: "Premium/Discount & Fib", defaultWeight: 2.0, tier: 1, tierPts: 2, description: "Fibonacci OTE zones" },
-  // Tier 2 — Confirmation (×1 pt)
-  { key: "pdPwLevels", name: "PD/PW Levels", defaultWeight: 1.0, tier: 2, tierPts: 1, description: "Previous day/week levels" },
-  { key: "liquiditySweep", name: "Liquidity Sweep", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Liquidity pool sweeps with rejection confirmation" },
-  { key: "displacement", name: "Displacement", defaultWeight: 1.0, tier: 2, tierPts: 1, description: "Strong institutional candles" },
-  { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Reversal at key levels — primary entry trigger" },
-  { key: "sessionQuality", name: "Session Quality", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Combined Kill Zone + Silver Bullet + Macro timing (7-tier scoring)" },
-  { key: "htfPoiAlignment", name: "HTF POI Alignment", defaultWeight: 2.0, tier: 2, tierPts: 1, description: "Price inside higher-timeframe OB/FVG/Breaker zone" },
-  { key: "htfFibPdLiquidity", name: "HTF Fib + PD + Liquidity", defaultWeight: 2.5, tier: 2, tierPts: 1, description: "HTF Fibonacci + Premium/Discount + Liquidity alignment" },
-  { key: "confluenceStack", name: "Confluence Stack", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Multiple POIs overlapping at same price level" },
-  // Tier 3 — Bonus (×0.5 pts)
-  { key: "currencyStrength", name: "Currency Strength", defaultWeight: 1.5, tier: 3, tierPts: 0.5, description: "FOTSI alignment" },
-  { key: "smtDivergence", name: "SMT Divergence", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Correlated pair divergence" },
-  { key: "dailyBias", name: "Daily Bias", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "HTF daily trend alignment" },
-  { key: "breakerBlock", name: "Breaker Block", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Failed OB flip zones" },
-  { key: "unicornModel", name: "Unicorn Model", defaultWeight: 1.5, tier: 3, tierPts: 0.5, description: "Breaker + FVG overlap" },
-  { key: "volumeProfile", name: "Volume Profile", defaultWeight: 0.75, tier: 3, tierPts: 0.5, description: "TPO-based POC/HVN/LVN (reduced: synthetic data)" },
-  { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Accumulation→Manipulation→Distribution" },
-  { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.75, tier: 3, tierPts: 0.5, description: "NY midnight-anchored fake breakout + liquidity sweep" },
-  { key: "pullbackHealth", name: "Pullback Health", defaultWeight: 0.5, tier: 3, tierPts: 0.5, description: "Pullback decay analysis — healthy retracement vs exhaustion" },
-  { key: "gamePlanKeyLevel", name: "GP Key Level", defaultWeight: 1.0, tier: 2, tierPts: 1, description: "Boosts score when entry is near a game plan key level (OBs, FVGs, PD levels, liquidity). Requires Game Plan enabled." },
-];
-
-const TIER_META: { tier: 1 | 2 | 3; label: string; subtitle: string; pts: string; color: string; borderColor: string }[] = [
-  { tier: 1, label: "TIER 1 — CORE SETUP", subtitle: "Must-have setup components. At least 2 required for any trade.", pts: "×2 pts", color: "text-tier1", borderColor: "border-tier1/40" },
-  { tier: 2, label: "TIER 2 — CONFIRMATION", subtitle: "Adds confidence to the setup.", pts: "×1 pt", color: "text-tier2", borderColor: "border-tier2/40" },
-  { tier: 3, label: "TIER 3 — BONUS", subtitle: "Nice-to-have extras that boost score.", pts: "×0.5 pts", color: "text-tier3", borderColor: "border-tier3/40" },
-];
-
-function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
-  const fw: Record<string, number> = config.factorWeights || {};
-  const hasOverrides = Object.keys(fw).length > 0;
-
-  const updateWeight = (key: string, value: number) => {
-    setConfig((prev: any) => ({
-      ...prev,
-      factorWeights: { ...(prev.factorWeights || {}), [key]: Math.round(value * 100) / 100 },
-    }));
-  };
-
-  const resetAllWeights = () => {
-    setConfig((prev: any) => ({ ...prev, factorWeights: {} }));
-    toast.info("All factor weights reset to defaults");
-  };
-
-  const resetSingleWeight = (key: string) => {
-    setConfig((prev: any) => {
-      const next = { ...(prev.factorWeights || {}) };
-      delete next[key];
-      return { ...prev, factorWeights: next };
-    });
-  };
-
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <SectionHeader title="Factor Weights" description="Fine-tune how much each confluence factor contributes to the overall score. AI Advisor recommendations can auto-apply here." />
-        {hasOverrides && (
-          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={resetAllWeights}>
-            <RotateCcw className="h-3 w-3" /> Reset All
-          </Button>
-        )}
-      </div>
-
-      <div className="rounded border border-border bg-muted/20 p-3 space-y-1.5">
-        <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">How Tiered Scoring Works</p>
-        <p className="text-[10px] text-muted-foreground">
-          Each factor has a <span className="font-bold text-foreground">tier base value</span> (T1 = 2pts, T2 = 1pt, T3 = 0.5pts) that determines its importance.
-          Your <span className="font-bold text-foreground">custom weight</span> multiplies this base value.
-          For example, Market Structure at weight 2.5 scores <span className="font-mono">2.5 × 2pts = 5pts</span> when present.
-        </p>
-        <p className="text-[10px] text-muted-foreground">
-          The final score is the sum of all present factors' weighted points, expressed as a percentage of the maximum possible.
-          No group caps — your weights work directly.
-        </p>
-      </div>
-
-      {TIER_META.map(tm => {
-        const tierFactors = FACTOR_WEIGHT_DEFS.filter(f => f.tier === tm.tier);
-        return (
-          <div key={tm.tier} className={`border ${tm.borderColor} p-4 space-y-3`}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className={`text-[10px] uppercase tracking-wider font-bold ${tm.color}`}>{tm.label}</p>
-                <p className="text-[10px] text-muted-foreground">{tm.subtitle}</p>
-              </div>
-              <Badge variant="outline" className={`text-[9px] font-mono font-bold ${tm.color} border-current`}>{tm.pts}</Badge>
-            </div>
-            {tierFactors.map(factor => {
-              const currentValue = fw[factor.key] ?? factor.defaultWeight;
-              const isOverridden = fw[factor.key] !== undefined;
-              const maxSlider = Math.max(factor.defaultWeight * 2, 3);
-              const effectivePoints = (currentValue * factor.tierPts).toFixed(1);
-              return (
-                <div key={factor.key} className={`space-y-1 p-2 -mx-2 transition-colors ${isOverridden ? "bg-primary/5 border border-primary/20" : ""}`}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">{factor.name}</span>
-                      {isOverridden && (
-                        <Badge variant="secondary" className="h-4 px-1.5 text-[9px] font-mono">custom</Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] text-muted-foreground font-mono">{currentValue.toFixed(2)} × {factor.tierPts}pts =</span>
-                      <span className="text-sm font-mono font-bold text-primary w-14 text-right">{effectivePoints}pts</span>
-                      {isOverridden && (
-                        <button
-                          onClick={() => resetSingleWeight(factor.key)}
-                          className="text-muted-foreground hover:text-foreground"
-                          title={`Reset to default (${factor.defaultWeight})`}
-                        >
-                          <RotateCcw className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">{factor.description} (default weight: {factor.defaultWeight})</p>
-                  <Slider
-                    value={[currentValue]}
-                    onValueChange={v => updateWeight(factor.key, v[0])}
-                    min={0}
-                    max={maxSlider}
-                    step={0.25}
-                    className="mt-1"
-                  />
-                  <div className="flex justify-between text-[9px] text-muted-foreground">
-                    <span>0 (disabled)</span>
-                    <span>{factor.defaultWeight} (default)</span>
-                    <span>{maxSlider} (max)</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
-
-      {/* Gates (not weight-adjustable) */}
-      <div className="border border-border p-4 space-y-3">
-        <div>
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">GATES (Pass/Fail)</p>
-          <p className="text-[10px] text-muted-foreground">These are binary checks — not scored. A failed gate rejects the trade regardless of score.</p>
-        </div>
-        <div className="space-y-1 p-2 -mx-2 opacity-70">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium">Tier 1 Minimum</span>
-            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">gate</Badge>
-          </div>
-          <p className="text-[10px] text-muted-foreground">At least 2 Tier 1 (Core) factors must be present for any trade to pass. Not adjustable.</p>
-        </div>
-        <div className="space-y-1 p-2 -mx-2 opacity-70">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium">Regime Alignment</span>
-            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">gate</Badge>
-          </div>
-          <p className="text-[10px] text-muted-foreground">Market regime must align with trade direction (e.g., trending market for trend trades). Fails if regime conflicts.</p>
-        </div>
-      </div>
-
-      {/* Spread Quality (info-only) */}
-      <div className="border border-border/50 p-4 space-y-2 opacity-60">
-        <div>
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">INFO ONLY</p>
-        </div>
-        <div className="space-y-1 p-2 -mx-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium">Spread Quality</span>
-            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono text-muted-foreground">info</Badge>
-          </div>
-          <p className="text-[10px] text-muted-foreground">Shows indicative spread-to-ATR ratio from market data. Does not block trades — your actual broker spread (ECN/raw) is checked at execution time. Displayed for awareness only.</p>
         </div>
       </div>
     </div>
@@ -2413,20 +2144,16 @@ function StyleControlled({ style, value }: { style?: string; value: string }) {
 }
 
 const RECOMMENDED_OVERRIDES: Record<string, Record<string, any>> = {
-  'EUR/JPY': { minTier1Factors: 1, allowSameDirectionStacking: true, maxPerSymbol: 2, minRiskReward: 0.8 },
+  'EUR/JPY': { allowSameDirectionStacking: true, maxPerSymbol: 2, minRiskReward: 0.8 },
   'GBP/USD': { protectionMaxDailyLossDollar: 5000, maxConsecutiveLosses: 8 },
-  'USD/CAD': { minTier1Factors: 2 },
   'USD/CHF': { minRiskReward: 0.8 },
   'NZD/CHF': { minRiskReward: 0.8 },
-  'XAU/USD': { minConfluence: 35 },
-  'BTC/USD': { minTier1Factors: 4, allowSameDirectionStacking: false, maxPerSymbol: 1 },
+  'BTC/USD': { allowSameDirectionStacking: false, maxPerSymbol: 1 },
 };
 
 const OVERRIDE_FIELDS = [
   { key: 'minRiskReward', label: 'Min R:R', type: 'number', min: 0.1, max: 5, step: 0.1, description: 'Effective R:R threshold (after spread/commission)' },
-  { key: 'minTier1Factors', label: 'Min Tier 1', type: 'number', min: 1, max: 5, step: 1, description: 'Minimum core factors (MS, OB, FVG, P/D, HTF)' },
   { key: 'minStopPips', label: 'Min Stop (pips)', type: 'number', min: 1, max: 2000, step: 1, description: 'Static stop floor for this pair, overriding the built-in MIN_SL_PIPS. BTC/USD defaults to 150 and its 1.5x ATR floor never binds (5m ATR measured 118.6); the 15m equivalent measured ~194.' },
-  { key: 'minConfluence', label: 'Min Confluence %', type: 'number', min: 10, max: 80, step: 5, description: 'Score threshold for this pair' },
   { key: 'maxPerSymbol', label: 'Max Per Symbol', type: 'number', min: 1, max: 5, step: 1, description: 'Max concurrent positions for this pair' },
   { key: 'allowSameDirectionStacking', label: 'Allow Stacking', type: 'toggle', description: 'Allow same-direction stacking' },
   { key: 'protectionMaxDailyLossDollar', label: 'Max Daily Loss ($)', type: 'number', min: 50, max: 10000, step: 50, description: 'Pair-specific daily P&L limit' },
@@ -2632,8 +2359,9 @@ function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) =
 
   const getEnabled = (field: string, fallback = true) =>
     strategy[field] !== undefined ? !!strategy[field] : fallback;
-  const getGate = (field: string): "off" | "soft" | "hard" =>
-    (strategy[field] as "off" | "soft" | "hard") || "off";
+  // The scanner runs anything but "hard" as off (a stored "soft" included: the score it adjusted is gone).
+  const getGate = (field: string): "off" | "hard" =>
+    strategy[field] === "hard" ? "hard" : "off";
 
   const enabledCount = ICT2022_MODULES.filter(m => getEnabled(m.enabledField)).length;
   const activeGates = ICT2022_MODULES.filter(m => m.hasGate && getGate(m.gateField) !== "off").length;
@@ -2659,11 +2387,10 @@ function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) =
         <p className="text-[10px] text-tier3 font-bold uppercase tracking-wider">How gate modes work</p>
         <p className="text-[10px] text-muted-foreground leading-relaxed">
           <span className="font-mono font-bold text-foreground">Off</span> — module logs its verdict but has zero impact on trades. Use this to observe behaviour first.{" "}
-          <span className="font-mono font-bold text-foreground">Soft</span> — module adds a score bonus when satisfied / penalty when violated.{" "}
           <span className="font-mono font-bold text-foreground">Hard</span> — module blocks the trade entirely when its rule is violated.
         </p>
         <p className="text-[10px] text-muted-foreground leading-relaxed">
-          Recommended rollout: leave on <span className="font-mono">Off</span> for a few sessions, watch the logs, then move one module at a time to <span className="font-mono">Soft</span>.
+          Recommended rollout: leave on <span className="font-mono">Off</span> for a few sessions, watch the logs, then move one module at a time to <span className="font-mono">Hard</span>.
         </p>
       </div>
 
@@ -2697,7 +2424,7 @@ function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) =
                   </Label>
                   <Select
                     value={gate || "off"}
-                    onValueChange={(v: "off" | "soft" | "hard") => updateStrategy(m.gateField, v)}
+                    onValueChange={(v: "off" | "hard") => updateStrategy(m.gateField, v)}
                     disabled={!enabled}
                   >
                     <SelectTrigger className="h-8 text-xs w-32">
@@ -2705,19 +2432,11 @@ function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) =
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="off" className="text-xs">Off — log only</SelectItem>
-                      <SelectItem value="soft" className="text-xs">Soft — score impact</SelectItem>
                       <SelectItem value="hard" className="text-xs">Hard — block trade</SelectItem>
                     </SelectContent>
                   </Select>
-                  {gate && gate !== "off" && (
-                    <Badge
-                      variant="outline"
-                      className={`text-[9px] font-mono ${
-                        gate === "hard" ? "text-loss border-loss/40" : "text-warn border-warn/40"
-                      }`}
-                    >
-                      {gate === "hard" ? "BLOCKING" : "SCORING"}
-                    </Badge>
+                  {gate === "hard" && (
+                    <Badge variant="outline" className="text-[9px] font-mono text-loss border-loss/40">BLOCKING</Badge>
                   )}
                 </div>
               )}

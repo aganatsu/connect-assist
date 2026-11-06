@@ -22,6 +22,7 @@
  * file, you're doing it wrong — add it here instead.
  */
 
+import { hardOrOff } from "./simplification.ts";
 import { normalizeSessionFilter } from "./sessions.ts";
 
 // ─── Runtime Defaults ─────────────────────────────────────────────────
@@ -30,12 +31,10 @@ import { normalizeSessionFilter } from "./sessions.ts";
 
 export const RUNTIME_DEFAULTS = {
   // ── Core Strategy ──
-  minConfluence: 55,  // Percentage (0-100) — must match normalizedScoring: true
   htfBiasRequired: true,
   htfBiasHardVeto: false,
   onlyBuyInDiscount: false,
   onlySellInPremium: false,
-  normalizedScoring: true,
 
   // ── Factor Toggles ──
   enableOB: true,
@@ -59,7 +58,6 @@ export const RUNTIME_DEFAULTS = {
 
   // ── Regime Scoring ──
   regimeScoringEnabled: true,
-  regimeScoringStrength: 1.0,
 
   // ── Risk Management ──
   maxDrawdown: 20,
@@ -72,7 +70,6 @@ export const RUNTIME_DEFAULTS = {
   allowSameDirectionStacking: false,
   portfolioHeat: 10,
   minRiskReward: 1.5,
-  conflictThresholdRaise: 4,
   conflictBlockAt: 6,
 
   // ── SL/TP Method ──
@@ -137,21 +134,9 @@ export const RUNTIME_DEFAULTS = {
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
 
-  // ── Tier 1 Gate ──
-  tier1GateEnabled: true,
-  minTier1Factors: 3,
-  // Require price to be INSIDE the Order Block / Fair Value Gap, not merely
-  // near the zone containing it. The impulse-zone hard gate already guarantees
-  // a POI exists — every zone is typed "fvg" or "ob" — so this is a
-  // positional requirement, not an existence one. Default OFF: it would have
-  // blocked 49 of 71 trades over the 30 days to 2026-09-09, changing the size
-  // of the book and not only its quality. See confluenceScoring.
-  tier1RequireAtPOI: false,
-  // ── Impulse Zone Scoring ──
+  // ── Impulse Zone ──
   impulseZoneEnabled: true,
-  impulseZonePenalty: 2.0,
-  impulseZoneBonus: 1.0,
-  impulseZoneGateMode: "hard" as "hard" | "soft" | "off",
+  impulseZoneGateMode: "hard" as "hard" | "off",
   minZoneScore: 4,
   impulseSlCapMultiplier: 4,
   /** Origin OB re-test: allow entries when price returns to the block that caused the impulse (fib 1.0). Default off. */
@@ -235,11 +220,6 @@ export const RUNTIME_DEFAULTS = {
   trailTightenFactor: 0.6,
   trailWidenFactor: 1.3,
 
-  // ── Setup Staging / Watchlist ──
-  stagingEnabled: true,
-  watchThreshold: 25,
-  stagingTTLMinutes: 240,
-  minStagingCycles: 1,
 
   // ── Limit Orders ──
   limitOrderEnabled: false,
@@ -266,8 +246,6 @@ export const RUNTIME_DEFAULTS = {
     mode: "day_trader" as "scalper" | "day_trader" | "swing_trader",
   },
 
-  // ── Factor Weights (config-driven, AI-tunable) ──
-  factorWeights: {} as Record<string, number>,
 
   // ── P1 Tuning Fields ──
   obLookbackCandles: 50,
@@ -279,44 +257,36 @@ export const RUNTIME_DEFAULTS = {
 
   // ── ICT HTF Framework ──
   ictHTFEnabled: true,
-  ictHTFGateMode: "off" as "hard" | "soft" | "off",
-  ictHTFAlignedBonus: 2.0,
-  ictHTFMisalignedPenalty: 3.0,
+  ictHTFGateMode: "off" as "hard" | "off",
   ictHTFMinContainment: 50,
   ictWeeklyBiasRequired: true,
   ictDailyContainmentRequired: true,
 
   // ── ICT Displacement MSS Validation ──
   ictDisplacementMSSEnabled: true,
-  ictDisplacementMSSGateMode: "off" as "hard" | "soft" | "off",
+  ictDisplacementMSSGateMode: "off" as "hard" | "off",
   ictDisplacementMSSMinBodyRatio: 0.6,
   ictDisplacementMSSMinRangeATR: 1.2,
   ictDisplacementMSSLookback: 3,
-  ictDisplacementMSSPenalty: 2.0,
 
   // ── ICT Judas Swing ──
   ictJudasSwingEnabled: true,
-  ictJudasSwingGateMode: "off" as "hard" | "soft" | "off",
+  ictJudasSwingGateMode: "off" as "hard" | "off",
   ictJudasSwingLookback: 10,
   ictJudasSwingMinDepthATR: 0.1,
   ictJudasSwingRequireCloseBack: true,
-  ictJudasSwingPenalty: 1.5,
 
   // ── ICT FVG Invalidation ──
   ictFVGInvalidationEnabled: true,
-  ictFVGInvalidationGateMode: "off" as "hard" | "soft" | "off",
+  ictFVGInvalidationGateMode: "off" as "hard" | "off",
   ictFVGBodyCloseOnly: true,
   ictFVGRuleOfTwo: true,
-  ictFVGExhaustedPenalty: 1.5,
-  ictFVGInvalidatedPenalty: 3.0,
 
   // ── ICT Kill Zone Time Filter ──
   ictKillZoneEnabled: true,
-  ictKillZoneGateMode: "off" as "hard" | "soft" | "off",
+  ictKillZoneGateMode: "off" as "hard" | "off",
   ictKillZoneSilverBullet: true,
   ictKillZonePMSession: true,
-  ictKillZoneOutsidePenalty: 1.0,
-  ictKillZonePrimeBonus: 1.5,
 
   // ── ICT Risk Management ──
   ictRiskEnabled: true,
@@ -369,14 +339,10 @@ export const RUNTIME_DEFAULTS = {
 export interface PairGateOverride {
   /** Min effective R:R after spread+commission (Gate 10). Default: global minRiskReward */
   minRiskReward?: number;
-  /** Min Tier 1 core factors required (Gate 19). Default: global minTier1Factors */
-  minTier1Factors?: number;
   /** Allow same-direction stacking (Gate 5). Default: global allowSameDirectionStacking */
   allowSameDirectionStacking?: boolean;
   /** Max positions per symbol (Gate 5). Default: global maxPerSymbol */
   maxPerSymbol?: number;
-  /** Min confluence score threshold. Default: global minConfluence */
-  minConfluence?: number;
   /** Dollar-based daily loss limit (Gate 15). Default: global protectionMaxDailyLossDollar */
   protectionMaxDailyLossDollar?: number;
   /** Max consecutive losses before cooldown (Gate 14). Default: global maxConsecutiveLosses */
@@ -421,9 +387,9 @@ export type RuntimeConfig = typeof RUNTIME_DEFAULTS;
  * by the UI) to the flat runtime config object used by both engines.
  *
  * This function handles:
- *   - Current UI field names (e.g. strategy.confluenceThreshold)
- *   - Legacy DB field names (e.g. minConfluenceScore)
- *   - Top-level flat fields (e.g. raw.minConfluence)
+ *   - Current UI field names (e.g. strategy.requireHTFBias)
+ *   - Legacy DB field names (e.g. htfBiasRequired)
+ *   - Top-level flat fields (e.g. raw.htfBiasRequired)
  *   - Auto-scaling legacy 0-10 values to percentage
  *   - Session filter normalization (sydney → offhours, etc.)
  *   - Active days conversion ({mon:true,...} → [1,2,...])
@@ -458,17 +424,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     ...RUNTIME_DEFAULTS,
 
     // ── Strategy mappings ──
-    minConfluence: (() => {
-      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? RUNTIME_DEFAULTS.minConfluence;
-      // Auto-scale legacy 0-10 values to percentage when normalizedScoring is on
-      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw.normalizedScoring ?? true)) {
-        return raw_mc * 10;
-      }
-      return raw_mc;
-    })(),
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? RUNTIME_DEFAULTS.htfBiasRequired,
     htfBiasHardVeto: strategy.htfBiasHardVeto ?? raw.htfBiasHardVeto ?? RUNTIME_DEFAULTS.htfBiasHardVeto,
-    normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? RUNTIME_DEFAULTS.normalizedScoring,
 
     // ── Factor Toggles ──
     enableOB: strategy.useOrderBlocks ?? strategy.enableOB ?? true,
@@ -492,7 +449,6 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
 
     // ── Regime Scoring ──
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? RUNTIME_DEFAULTS.regimeScoringEnabled,
-    regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? RUNTIME_DEFAULTS.regimeScoringStrength,
 
     // ── Premium/Discount Filters ──
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? RUNTIME_DEFAULTS.onlyBuyInDiscount,
@@ -506,15 +462,9 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw.liquidityPoolMinTouches ?? RUNTIME_DEFAULTS.liquidityPoolMinTouches,
     equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw.equalHighsLowsSensitivity ?? RUNTIME_DEFAULTS.equalHighsLowsSensitivity,
 
-    // ── Tier 1 Gate ──
-    tier1GateEnabled: strategy.tier1GateEnabled ?? raw.tier1GateEnabled ?? RUNTIME_DEFAULTS.tier1GateEnabled,
-    minTier1Factors: strategy.minTier1Factors ?? raw.minTier1Factors ?? RUNTIME_DEFAULTS.minTier1Factors,
-    tier1RequireAtPOI: strategy.tier1RequireAtPOI ?? raw.tier1RequireAtPOI ?? RUNTIME_DEFAULTS.tier1RequireAtPOI,
     // ── Impulse Zone ──
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? RUNTIME_DEFAULTS.impulseZoneEnabled,
-    impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? RUNTIME_DEFAULTS.impulseZonePenalty,
-    impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? RUNTIME_DEFAULTS.impulseZoneBonus,
-    impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode) as "hard" | "soft" | "off",
+    impulseZoneGateMode: hardOrOff(strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode),
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
     originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? RUNTIME_DEFAULTS.originOBRetest,
@@ -564,11 +514,6 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     trailTightenFactor: strategy.trailTightenFactor ?? raw.trailTightenFactor ?? RUNTIME_DEFAULTS.trailTightenFactor,
     trailWidenFactor: strategy.trailWidenFactor ?? raw.trailWidenFactor ?? RUNTIME_DEFAULTS.trailWidenFactor,
 
-    // ── Setup Staging / Watchlist ──
-    stagingEnabled: strategy.stagingEnabled ?? raw.stagingEnabled ?? RUNTIME_DEFAULTS.stagingEnabled,
-    watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? RUNTIME_DEFAULTS.watchThreshold,
-    stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? RUNTIME_DEFAULTS.stagingTTLMinutes,
-    minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? RUNTIME_DEFAULTS.minStagingCycles,
 
     // ── Risk Mappings ──
     riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? RUNTIME_DEFAULTS.riskPerTrade,
@@ -580,7 +525,6 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     maxPerSymbol: risk.maxPositionsPerSymbol ?? RUNTIME_DEFAULTS.maxPerSymbol,
     allowSameDirectionStacking: risk.allowSameDirectionStacking ?? RUNTIME_DEFAULTS.allowSameDirectionStacking,
     portfolioHeat: risk.maxPortfolioHeat ?? RUNTIME_DEFAULTS.portfolioHeat,
-    conflictThresholdRaise: risk.conflictThresholdRaise ?? raw.conflictThresholdRaise ?? RUNTIME_DEFAULTS.conflictThresholdRaise,
     conflictBlockAt: risk.conflictBlockAt ?? raw.conflictBlockAt ?? RUNTIME_DEFAULTS.conflictBlockAt,
 
     // ── Entry Mappings ──
@@ -678,7 +622,6 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     tradingStyle: { ...RUNTIME_DEFAULTS.tradingStyle, ...(raw.tradingStyle || {}) },
 
     // ── Factor Weights ──
-    factorWeights: raw.factorWeights || {},
 
     // ── Per-Instrument SL Buffer Overrides ──
     instrumentBuffers: raw.instrumentBuffers || entry.instrumentBuffers || {},
@@ -698,44 +641,36 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
 
     // ── ICT HTF Framework ──
     ictHTFEnabled: strategy.ictHTFEnabled ?? raw.ictHTFEnabled ?? RUNTIME_DEFAULTS.ictHTFEnabled,
-    ictHTFGateMode: (strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? RUNTIME_DEFAULTS.ictHTFGateMode) as "hard" | "soft" | "off",
-    ictHTFAlignedBonus: strategy.ictHTFAlignedBonus ?? raw.ictHTFAlignedBonus ?? RUNTIME_DEFAULTS.ictHTFAlignedBonus,
-    ictHTFMisalignedPenalty: strategy.ictHTFMisalignedPenalty ?? raw.ictHTFMisalignedPenalty ?? RUNTIME_DEFAULTS.ictHTFMisalignedPenalty,
+    ictHTFGateMode: hardOrOff(strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? RUNTIME_DEFAULTS.ictHTFGateMode),
     ictHTFMinContainment: strategy.ictHTFMinContainment ?? raw.ictHTFMinContainment ?? RUNTIME_DEFAULTS.ictHTFMinContainment,
     ictWeeklyBiasRequired: strategy.ictWeeklyBiasRequired ?? raw.ictWeeklyBiasRequired ?? RUNTIME_DEFAULTS.ictWeeklyBiasRequired,
     ictDailyContainmentRequired: strategy.ictDailyContainmentRequired ?? raw.ictDailyContainmentRequired ?? RUNTIME_DEFAULTS.ictDailyContainmentRequired,
 
     // ── ICT Displacement MSS Validation ──
     ictDisplacementMSSEnabled: strategy.ictDisplacementMSSEnabled ?? raw.ictDisplacementMSSEnabled ?? RUNTIME_DEFAULTS.ictDisplacementMSSEnabled,
-    ictDisplacementMSSGateMode: (strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? RUNTIME_DEFAULTS.ictDisplacementMSSGateMode) as "hard" | "soft" | "off",
+    ictDisplacementMSSGateMode: hardOrOff(strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? RUNTIME_DEFAULTS.ictDisplacementMSSGateMode),
     ictDisplacementMSSMinBodyRatio: strategy.ictDisplacementMSSMinBodyRatio ?? raw.ictDisplacementMSSMinBodyRatio ?? RUNTIME_DEFAULTS.ictDisplacementMSSMinBodyRatio,
     ictDisplacementMSSMinRangeATR: strategy.ictDisplacementMSSMinRangeATR ?? raw.ictDisplacementMSSMinRangeATR ?? RUNTIME_DEFAULTS.ictDisplacementMSSMinRangeATR,
     ictDisplacementMSSLookback: strategy.ictDisplacementMSSLookback ?? raw.ictDisplacementMSSLookback ?? RUNTIME_DEFAULTS.ictDisplacementMSSLookback,
-    ictDisplacementMSSPenalty: strategy.ictDisplacementMSSPenalty ?? raw.ictDisplacementMSSPenalty ?? RUNTIME_DEFAULTS.ictDisplacementMSSPenalty,
 
     // ── ICT Judas Swing ──
     ictJudasSwingEnabled: strategy.ictJudasSwingEnabled ?? raw.ictJudasSwingEnabled ?? RUNTIME_DEFAULTS.ictJudasSwingEnabled,
-    ictJudasSwingGateMode: (strategy.ictJudasSwingGateMode ?? raw.ictJudasSwingGateMode ?? RUNTIME_DEFAULTS.ictJudasSwingGateMode) as "hard" | "soft" | "off",
+    ictJudasSwingGateMode: hardOrOff(strategy.ictJudasSwingGateMode ?? raw.ictJudasSwingGateMode ?? RUNTIME_DEFAULTS.ictJudasSwingGateMode),
     ictJudasSwingLookback: strategy.ictJudasSwingLookback ?? raw.ictJudasSwingLookback ?? RUNTIME_DEFAULTS.ictJudasSwingLookback,
     ictJudasSwingMinDepthATR: strategy.ictJudasSwingMinDepthATR ?? raw.ictJudasSwingMinDepthATR ?? RUNTIME_DEFAULTS.ictJudasSwingMinDepthATR,
     ictJudasSwingRequireCloseBack: strategy.ictJudasSwingRequireCloseBack ?? raw.ictJudasSwingRequireCloseBack ?? RUNTIME_DEFAULTS.ictJudasSwingRequireCloseBack,
-    ictJudasSwingPenalty: strategy.ictJudasSwingPenalty ?? raw.ictJudasSwingPenalty ?? RUNTIME_DEFAULTS.ictJudasSwingPenalty,
 
     // ── ICT FVG Invalidation ──
     ictFVGInvalidationEnabled: strategy.ictFVGInvalidationEnabled ?? raw.ictFVGInvalidationEnabled ?? RUNTIME_DEFAULTS.ictFVGInvalidationEnabled,
-    ictFVGInvalidationGateMode: (strategy.ictFVGInvalidationGateMode ?? raw.ictFVGInvalidationGateMode ?? RUNTIME_DEFAULTS.ictFVGInvalidationGateMode) as "hard" | "soft" | "off",
+    ictFVGInvalidationGateMode: hardOrOff(strategy.ictFVGInvalidationGateMode ?? raw.ictFVGInvalidationGateMode ?? RUNTIME_DEFAULTS.ictFVGInvalidationGateMode),
     ictFVGBodyCloseOnly: strategy.ictFVGBodyCloseOnly ?? raw.ictFVGBodyCloseOnly ?? RUNTIME_DEFAULTS.ictFVGBodyCloseOnly,
     ictFVGRuleOfTwo: strategy.ictFVGRuleOfTwo ?? raw.ictFVGRuleOfTwo ?? RUNTIME_DEFAULTS.ictFVGRuleOfTwo,
-    ictFVGExhaustedPenalty: strategy.ictFVGExhaustedPenalty ?? raw.ictFVGExhaustedPenalty ?? RUNTIME_DEFAULTS.ictFVGExhaustedPenalty,
-    ictFVGInvalidatedPenalty: strategy.ictFVGInvalidatedPenalty ?? raw.ictFVGInvalidatedPenalty ?? RUNTIME_DEFAULTS.ictFVGInvalidatedPenalty,
 
     // ── ICT Kill Zone ──
     ictKillZoneEnabled: strategy.ictKillZoneEnabled ?? raw.ictKillZoneEnabled ?? RUNTIME_DEFAULTS.ictKillZoneEnabled,
-    ictKillZoneGateMode: (strategy.ictKillZoneGateMode ?? raw.ictKillZoneGateMode ?? RUNTIME_DEFAULTS.ictKillZoneGateMode) as "hard" | "soft" | "off",
+    ictKillZoneGateMode: hardOrOff(strategy.ictKillZoneGateMode ?? raw.ictKillZoneGateMode ?? RUNTIME_DEFAULTS.ictKillZoneGateMode),
     ictKillZoneSilverBullet: strategy.ictKillZoneSilverBullet ?? raw.ictKillZoneSilverBullet ?? RUNTIME_DEFAULTS.ictKillZoneSilverBullet,
     ictKillZonePMSession: strategy.ictKillZonePMSession ?? raw.ictKillZonePMSession ?? RUNTIME_DEFAULTS.ictKillZonePMSession,
-    ictKillZoneOutsidePenalty: strategy.ictKillZoneOutsidePenalty ?? raw.ictKillZoneOutsidePenalty ?? RUNTIME_DEFAULTS.ictKillZoneOutsidePenalty,
-    ictKillZonePrimeBonus: strategy.ictKillZonePrimeBonus ?? raw.ictKillZonePrimeBonus ?? RUNTIME_DEFAULTS.ictKillZonePrimeBonus,
 
     // ── ICT Risk Management ──
     ictRiskEnabled: strategy.ictRiskEnabled ?? raw.ictRiskEnabled ?? RUNTIME_DEFAULTS.ictRiskEnabled,
@@ -807,7 +742,6 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
  * is the honest test: the user either wrote the key or they did not.
  */
 export const STYLE_PROTECTED_SOURCES: Record<string, string[]> = {
-  minConfluence: ["strategy.confluenceThreshold", "strategy.minConfluenceScore", "minConfluence"],
   tpRatio: ["exit.tpRRRatio", "risk.defaultRR", "risk.minRiskReward", "tpRatio"],
   trailingStopEnabled: ["exit.trailingStop", "exit.trailingStopEnabled", "trailingStopEnabled"],
   trailingStopPips: ["exit.trailingStopPips", "trailingStopPips"],
@@ -847,11 +781,9 @@ export function applyPairOverrides<T extends RuntimeConfig>(config: T, symbol: s
   if (!overrides) return config;
 
   if (overrides.minRiskReward !== undefined) config.minRiskReward = overrides.minRiskReward;
-  if (overrides.minTier1Factors !== undefined) (config as any).minTier1Factors = overrides.minTier1Factors;
   if (overrides.allowSameDirectionStacking !== undefined) config.allowSameDirectionStacking = overrides.allowSameDirectionStacking;
   if (overrides.maxPerSymbol !== undefined) config.maxPerSymbol = overrides.maxPerSymbol;
   if (overrides.minStopPips !== undefined) (config as any).minStopPips = overrides.minStopPips;
-  if (overrides.minConfluence !== undefined) config.minConfluence = overrides.minConfluence;
   if (overrides.protectionMaxDailyLossDollar !== undefined) (config as any).protectionMaxDailyLossDollar = overrides.protectionMaxDailyLossDollar;
   if (overrides.maxConsecutiveLosses !== undefined) (config as any).maxConsecutiveLosses = overrides.maxConsecutiveLosses;
   // Clamped. A depth above 1 sits outside the zone entirely and a depth of 0

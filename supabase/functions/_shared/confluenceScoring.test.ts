@@ -2,12 +2,12 @@
  * confluenceScoring.test.ts — Confluence Scoring Snapshot & Behavior Tests
  * ──────────────────────────────────────────────────────────────────────────
  * Tests the shared runConfluenceAnalysis function with deterministic fixtures.
- * Includes snapshot tests that catch future silent drift.
+ * Includes snapshot tests that catch future silent drift in the detected factors.
  *
  * Run: deno test --allow-all supabase/functions/_shared/confluenceScoring.test.ts
  */
 
-import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS } from "./confluenceScoring.ts";
+import { runConfluenceAnalysis } from "./confluenceScoring.ts";
 import { type Candle } from "./smcAnalysis.ts";
 import {
   assertEquals,
@@ -296,7 +296,6 @@ const baseConfig = {
   instruments: ["EUR/USD"],
   scanInterval: "15min",
   riskPercent: 1,
-  minConfluence: 40,
   enabledSessions: ["london", "new_york"],
   htfBiasRequired: false,
   structureLookback: 50,
@@ -310,11 +309,11 @@ const baseConfig = {
 // SECTION 1: Behavioral tests
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("Fixture A (bullish): returns a valid score and direction", () => {
+Deno.test("Fixture A (bullish): returns a direction and a factor list", () => {
   const candles = generateBullishFixture();
   const dailyCandles = generateBullishDailyCandles();
   const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
-  assert(result.score >= 0, `Expected score >= 0, got ${result.score}`);
+  assert(result.factors.length > 0, "Expected a factor list");
   assert(
     result.direction === "long" || result.direction === "short",
     `Expected direction to be long or short, got ${result.direction}`
@@ -335,7 +334,7 @@ Deno.test("Fixture A (bullish): P/D factor correctly invalidated when retrace > 
     `P/D factor should be invalidated with >100% retrace, got present=${pdFactor.present} weight=${pdFactor.weight}`);
 });
 
-Deno.test("Fixture B (bearish): returns a valid score and direction", () => {
+Deno.test("Fixture B (bearish): returns a valid direction", () => {
   const candles = generateBearishFixture();
   const dailyCandles = generateBearishDailyCandles();
   const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
@@ -345,21 +344,7 @@ Deno.test("Fixture B (bearish): returns a valid score and direction", () => {
   );
 });
 
-Deno.test("Fixture B (bearish): score is non-negative", () => {
-  const candles = generateBearishFixture();
-  const dailyCandles = generateBearishDailyCandles();
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
-  assert(result.score >= 0, `Expected score >= 0, got ${result.score}`);
-});
-
-Deno.test("Fixture C (ranging): returns low score", () => {
-  const candles = generateRangingFixture();
-  const result = runConfluenceAnalysis(candles, null, baseConfig);
-  // Ranging market should produce lower score than trending
-  assert(result.score <= 60, `Expected score <= 60 for ranging, got ${result.score}`);
-});
-
-Deno.test("Fixture D (counter-HTF): bullish setup with bearish daily bias penalized", () => {
+Deno.test("Fixture D (counter-HTF): an opposing daily bias never adds confluence", () => {
   const candles = generateBullishFixture();
   const bearishDaily = generateBearishDailyCandles();
   const configWithHTF = { ...baseConfig, htfBiasRequired: true };
@@ -369,10 +354,11 @@ Deno.test("Fixture D (counter-HTF): bullish setup with bearish daily bias penali
   // With counter daily bias
   const counter = runConfluenceAnalysis(candles, bearishDaily, configWithHTF);
 
-  // Counter-HTF should score lower or same (the HTF bias factor won't fire)
+  // Counter-HTF should detect no more factors than the aligned case
+  const presentCount = (r: typeof aligned) => r.factors.filter((f: any) => f.present).length;
   assert(
-    counter.score <= aligned.score,
-    `Counter-HTF score (${counter.score}) should be <= aligned (${aligned.score})`
+    presentCount(counter) <= presentCount(aligned),
+    `Counter-HTF present factors (${presentCount(counter)}) should be <= aligned (${presentCount(aligned)})`
   );
 });
 
@@ -401,14 +387,13 @@ Deno.test("Fixture E (Silver Bullet window): atMs at 10:30 NY includes SB factor
     );
   }
   // Always assert the function doesn't crash with atMs
-  assertExists(resultSB.score);
-  assertExists(resultNoSB.score);
+  assertExists(resultSB.factors);
+  assertExists(resultNoSB.factors);
 });
 
 Deno.test("runConfluenceAnalysis returns all expected fields", () => {
   const candles = generateBullishFixture();
   const result = runConfluenceAnalysis(candles, null, baseConfig);
-  assertExists(result.score);
   assertExists(result.direction);
   assertExists(result.bias);
   assertExists(result.summary);
@@ -416,7 +401,9 @@ Deno.test("runConfluenceAnalysis returns all expected fields", () => {
   assertExists(result.structure);
   assertExists(result.pd);
   assertExists(result.session);
-  assertExists(result.tieredScoring);
+  assertExists(result.regimeGate);
+  assertExists(result.spreadGate);
+  assert(typeof result.opposingFactorCount === "number");
   assert(Array.isArray(result.factors));
   assert(result.factors.length > 0);
 });
@@ -431,23 +418,14 @@ Deno.test("runConfluenceAnalysis: factors have required shape", () => {
   }
 });
 
-Deno.test("runConfluenceAnalysis: tieredScoring has valid counts", () => {
+Deno.test("runConfluenceAnalysis: there is no confluence score, tier or tier tag", () => {
   const candles = generateBullishFixture();
-  const result = runConfluenceAnalysis(candles, null, baseConfig);
-  const ts = result.tieredScoring;
-  assert(ts.tier1Count >= 0 && ts.tier1Count <= ts.tier1Max);
-  assert(ts.tier2Count >= 0 && ts.tier2Count <= ts.tier2Max);
-  assert(ts.tier3Count >= 0);
-});
-
-Deno.test("DEFAULT_FACTOR_WEIGHTS has 17 configurable factors", () => {
-  // The engine uses 26+ internal factors but DEFAULT_FACTOR_WEIGHTS exposes
-  // the user-configurable ones (added htfPoiAlignment, htfFibPdLiquidity,
-  // confluenceStack, pullbackHealth in config-sync-fixes;
-  // gamePlanKeyLevel in gameplan-full-integration;
-  // sessionAffinity in session-affinity)
-  const keys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
-  assertEquals(keys.length, 23);
+  const result = runConfluenceAnalysis(candles, null, baseConfig) as Record<string, unknown>;
+  for (const k of ["score", "rawScore", "enabledMax", "strongFactorCount", "normalizedScoring", "tieredScoring"]) {
+    assert(!(k in result), `${k} must not exist`);
+  }
+  for (const f of (result.factors as any[])) assert(!("tier" in f), `${f.name} carries a tier tag`);
+  assert(!(result.summary as string).includes("% confluence"), "summary must not quote a percentage");
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -465,18 +443,14 @@ Deno.test("SNAPSHOT: bullish fixture produces stable output", async () => {
 
   // Extract the stable subset (exclude objects with internal references)
   const snapshot = {
-    score: result.score,
-    rawScore: result.rawScore,
     direction: result.direction,
     bias: result.bias,
-    strongFactorCount: result.strongFactorCount,
-    enabledMax: result.enabledMax,
-    tieredScoring: result.tieredScoring,
+    opposingFactorCount: result.opposingFactorCount,
+    regimeGate: result.regimeGate,
     factorSummary: result.factors.map((f: any) => ({
       name: f.name,
       present: f.present,
       weight: f.weight,
-      tier: f.tier,
     })),
   };
 
@@ -504,18 +478,14 @@ Deno.test("SNAPSHOT: bearish fixture produces stable output", async () => {
 
   const snapshotPath = new URL("./__snapshots__/confluenceScoring.bearish.snapshot.json", import.meta.url).pathname;
   const snapshot = {
-    score: result.score,
-    rawScore: result.rawScore,
     direction: result.direction,
     bias: result.bias,
-    strongFactorCount: result.strongFactorCount,
-    enabledMax: result.enabledMax,
-    tieredScoring: result.tieredScoring,
+    opposingFactorCount: result.opposingFactorCount,
+    regimeGate: result.regimeGate,
     factorSummary: result.factors.map((f: any) => ({
       name: f.name,
       present: f.present,
       weight: f.weight,
-      tier: f.tier,
     })),
   };
 
@@ -540,18 +510,14 @@ Deno.test("SNAPSHOT: ranging fixture produces stable output", async () => {
 
   const snapshotPath = new URL("./__snapshots__/confluenceScoring.ranging.snapshot.json", import.meta.url).pathname;
   const snapshot = {
-    score: result.score,
-    rawScore: result.rawScore,
     direction: result.direction,
     bias: result.bias,
-    strongFactorCount: result.strongFactorCount,
-    enabledMax: result.enabledMax,
-    tieredScoring: result.tieredScoring,
+    opposingFactorCount: result.opposingFactorCount,
+    regimeGate: result.regimeGate,
     factorSummary: result.factors.map((f: any) => ({
       name: f.name,
       present: f.present,
       weight: f.weight,
-      tier: f.tier,
     })),
   };
 
@@ -576,7 +542,7 @@ Deno.test("SNAPSHOT: ranging fixture produces stable output", async () => {
 Deno.test("OB aligned-only: bearish OB in long trade scores 0 points (not ×0.3 penalty)", async () => {
   // Generate a bullish fixture where the OB factor will be detected
   const candles = generateBullishFixture();
-  const result = runConfluenceAnalysis(candles, null, { factorWeights: DEFAULT_FACTOR_WEIGHTS });
+  const result = runConfluenceAnalysis(candles, null, {});
 
   // Find the OB factor
   const obFactor = result.factors.find((f: any) => f.name === "Order Block");
@@ -607,7 +573,7 @@ Deno.test("OB aligned-only: bearish OB in long trade scores 0 points (not ×0.3 
 Deno.test("OB aligned-only: bullish OB in short trade scores 0 points", async () => {
   // Generate a bearish fixture
   const candles = generateBearishFixture();
-  const result = runConfluenceAnalysis(candles, null, { factorWeights: DEFAULT_FACTOR_WEIGHTS });
+  const result = runConfluenceAnalysis(candles, null, {});
 
   const obFactor = result.factors.find((f: any) => f.name === "Order Block");
   if (!obFactor) {
@@ -629,7 +595,7 @@ Deno.test("OB aligned-only: bullish OB in short trade scores 0 points", async ()
 Deno.test("OB aligned-only: aligned OB retains full weight", async () => {
   // Generate a bullish fixture
   const candles = generateBullishFixture();
-  const result = runConfluenceAnalysis(candles, null, { factorWeights: DEFAULT_FACTOR_WEIGHTS });
+  const result = runConfluenceAnalysis(candles, null, {});
 
   const obFactor = result.factors.find((f: any) => f.name === "Order Block");
   if (!obFactor || !obFactor.present) {
@@ -639,11 +605,11 @@ Deno.test("OB aligned-only: aligned OB retains full weight", async () => {
 
   // If the OB is aligned with direction, weight should be the default OB weight (not reduced)
   if (result.direction === "long" && obFactor.detail.includes("bullish OB")) {
-    const defaultOBWeight = DEFAULT_FACTOR_WEIGHTS["Order Block"] || 2.0;
+    const defaultOBWeight = 2.0; // the Order Block factor's built-in strength
     assertEquals(obFactor.weight, defaultOBWeight, "Aligned OB should retain full default weight");
     assert(obFactor.detail.includes("aligned"), "Detail should confirm alignment");
   } else if (result.direction === "short" && obFactor.detail.includes("bearish OB")) {
-    const defaultOBWeight = DEFAULT_FACTOR_WEIGHTS["Order Block"] || 2.0;
+    const defaultOBWeight = 2.0; // the Order Block factor's built-in strength
     assertEquals(obFactor.weight, defaultOBWeight, "Aligned OB should retain full default weight");
     assert(obFactor.detail.includes("aligned"), "Detail should confirm alignment");
   }
@@ -693,21 +659,6 @@ Deno.test("Factor 26: No symbol in config produces neutral score", () => {
     "Without symbol, session affinity should produce 0 weight");
   assert(affinityFactor.detail.includes("No symbol"),
     `Detail should indicate no symbol available, got: ${affinityFactor.detail}`);
-});
-
-Deno.test("Factor 26: sessionAffinity weight=0 disables the factor", () => {
-  const candles = generateBullishFixture();
-  const dailyCandles = generateBullishDailyCandles();
-  const configDisabled = {
-    ...baseConfig,
-    _currentSymbol: "EUR/USD",
-    factorWeights: { sessionAffinity: 0 },
-  };
-  const result = runConfluenceAnalysis(candles, dailyCandles, configDisabled);
-  const affinityFactor = result.factors.find((f: any) => f.name === "Session Affinity");
-  assertExists(affinityFactor);
-  assertEquals(affinityFactor.weight, 0,
-    "With sessionAffinity weight=0, factor should contribute 0");
 });
 
 Deno.test("REGRESSION: existing factors unchanged when sessionAffinity added", () => {

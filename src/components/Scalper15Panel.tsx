@@ -1,7 +1,7 @@
 /**
  * Scan → Detail Breakdown: what Scalper15 decided for this pair (bot-scanner writes detail.scalper15 and
- * detail.skipReason / detail.reason). Shown above the confluence breakdown, which under Scalper15 is
- * recorded only — without this panel the screen answers a question the strategy no longer asks.
+ * detail.skipReason / detail.reason). Shown at the top of the detail: under Scalper15 the confluence
+ * factors below it are recorded only.
  */
 
 import { fmt, scalper15Headline, type Scalper15Detail } from "@/lib/scalper15";
@@ -25,7 +25,6 @@ export function Scalper15Panel({ status, s, skipReason, reason }: { status?: str
           {s.stop !== undefined && <span>Stop: {fmt(s.stop)}</span>}
           {s.plannedR !== undefined && <span>Planned: {s.plannedR.toFixed(2)}R</span>}
         </div>
-        <p className="text-[9px] text-muted-foreground/80 italic">The tier score below is the old confluence engine — recorded only; it does not block or allow Scalper15 trades.</p>
       </div>
     </div>
   );

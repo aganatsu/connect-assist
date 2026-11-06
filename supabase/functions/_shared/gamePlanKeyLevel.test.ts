@@ -251,27 +251,6 @@ Deno.test("GP Key Level: multiple nearby levels → multi-match bonus, capped at
   assert(gpFactor!.detail.includes("more within tolerance"), `Expected multi-match detail, got: ${gpFactor!.detail}`);
 });
 
-Deno.test("GP Key Level: factor is classified as Tier 2", () => {
-  const candles = makeBullishCandles(50);
-  const daily = makeDailyCandles(30);
-  const lastPrice = candles[candles.length - 1].close;
-  const config = {
-    ...baseConfig,
-    _gamePlanContext: {
-      bias: "bullish", biasConfidence: 70, dol: null,
-      keyLevels: [
-        { price: lastPrice + 0.0001, label: "Support", type: "support", significance: "high" },
-      ],
-      regime: "mild_trend", htfTrend: "bullish", h4Trend: "bullish",
-      tradeable: true, atr: 0.008, isFocusPair: false,
-    },
-  };
-  const result = runConfluenceAnalysis(candles, daily, config);
-  const gpFactor = result.factors.find((f: any) => f.name === "GP Key Level Alignment");
-  assert(gpFactor, "GP Key Level Alignment factor should exist");
-  assertEquals((gpFactor as any).tier, 2);
-});
-
 Deno.test("GP Key Level: no regression — absent _gamePlanContext produces same score as explicit null", () => {
   const candles = makeBullishCandles(50);
   const daily = makeDailyCandles(30);

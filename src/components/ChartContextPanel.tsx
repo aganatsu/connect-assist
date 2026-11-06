@@ -296,11 +296,6 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
               <span className={`font-bold text-xs ${sig.direction === 'long' ? 'text-profit' : 'text-loss'}`}>
                 {sig.direction.toUpperCase()}
               </span>
-              {sig.score != null && (
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-                  {Number(sig.score) > 10 ? `${Number(sig.score).toFixed(0)}%` : `${Number(sig.score).toFixed(1)}/10`}
-                </span>
-              )}
             </div>
             <div className="space-y-0.5 font-mono text-[10px]">
               {sig.entry && <div className="flex justify-between"><span className="text-muted-foreground">Entry</span><span>{fx(sig.entry)}</span></div>}

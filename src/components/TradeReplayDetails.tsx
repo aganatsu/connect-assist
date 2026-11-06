@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import type { TradeItem } from "./TradeReplaySidebar";
+import { FactorBreakdown, type FactorItem } from "./FactorBreakdown";
 
 interface Props {
   trade: TradeItem | null;
@@ -70,22 +71,6 @@ function extractManagementEvents(trade: TradeItem): MgmtEvent[] {
   return events;
 }
 
-/* ─── Scoring bar ─── */
-function ScoreBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
-  const pct = Math.min((value / max) * 100, 100);
-  return (
-    <div className="flex items-center gap-2 py-0.5">
-      <span className="text-[11px] text-muted-foreground min-w-[100px]">{label}</span>
-      <div className="flex-1 h-1 bg-accent/30 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
-      </div>
-      <span className="font-mono text-[11px] min-w-[32px] text-right" style={{ color }}>
-        {value.toFixed(1)}
-      </span>
-    </div>
-  );
-}
-
 export function TradeReplayDetails({ trade }: Props) {
   if (!trade) {
     return (
@@ -105,14 +90,12 @@ export function TradeReplayDetails({ trade }: Props) {
   const holdMins = Math.floor((holdMs % 3600000) / 60000);
   const currentR = entryPips > 0 ? (trade.pnl_pips ?? 0) / (entryPips * 10000) : 0;
 
-  // Extract scoring factors from signal_reason or scan_detail
-  const snapshot = trade.scan_detail?.analysis_snapshot || sr;
-  const factors = extractScoringFactors(snapshot);
-  const totalScore = factors.reduce((s, f) => s + f.value, 0);
-  const maxScore = factors.reduce((s, f) => s + f.max, 0);
-  const scorePct = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+  // The factors recorded at entry: signal_reason.factorScores, else the scan's analysis_snapshot
+  const factors: FactorItem[] = Array.isArray(sr.factorScores) && sr.factorScores.length > 0
+    ? sr.factorScores
+    : Array.isArray(trade.scan_detail?.analysis_snapshot?.factorScores) ? trade.scan_detail.analysis_snapshot.factorScores : [];
 
-  // ── Zone Qualifiers from impulseZoneEngine (not scored; qualifiers that gated the entry) ──
+  // ── Zone Qualifiers from impulseZoneEngine (qualifiers that gated the entry) ──
   const bestZone = sr?.impulseZone?.bestZone?.zone ?? null;
   const qualifiers: { label: string; value: string; color: string }[] = [];
   if (bestZone) {
@@ -184,10 +167,10 @@ export function TradeReplayDetails({ trade }: Props) {
         </div>
       </div>
 
-      {/* Entry Scoring */}
+      {/* Entry Factors */}
       <div className="p-3 overflow-y-auto">
         <SectionTitle dotColor="#22c55e">
-          Entry Scoring ({scorePct}%)
+          Entry Factors
         </SectionTitle>
         {qualifiers.length > 0 && (
           <div className="mb-3 pb-2 border-b border-border/40">
@@ -209,18 +192,10 @@ export function TradeReplayDetails({ trade }: Props) {
             </div>
           </div>
         )}
-        {factors.map((f, i) => (
-          <ScoreBar
-            key={i}
-            label={f.label}
-            value={f.value}
-            max={f.max}
-            color={f.tier === 1 ? "#22c55e" : f.tier === 2 ? "#06b6d4" : "#a855f7"}
-          />
-        ))}
+        {factors.length > 0 && <FactorBreakdown factors={factors} />}
         {factors.length === 0 && (
           <div className="text-[11px] text-muted-foreground py-4 text-center">
-            No scoring data available
+            No factor data recorded
           </div>
         )}
       </div>
@@ -249,50 +224,4 @@ function DetailRow({ label, value, valueColor }: { label: string; value: string;
       </span>
     </div>
   );
-}
-
-interface ScoringFactor {
-  label: string;
-  value: number;
-  max: number;
-  tier: number;
-}
-
-function extractScoringFactors(snapshot: any): ScoringFactor[] {
-  if (!snapshot) return [];
-
-  const factors: ScoringFactor[] = [];
-
-  // Try to extract from the analysis_snapshot structure
-  const tierMap: Record<string, { label: string; max: number; tier: number }> = {
-    marketStructure:   { label: "Market Structure", max: 2.0, tier: 1 },
-    orderBlock:        { label: "Order Block",      max: 2.0, tier: 1 },
-    fvg:               { label: "Fair Value Gap",   max: 2.0, tier: 1 },
-    premiumDiscount:   { label: "Premium/Disc.",    max: 1.5, tier: 1 },
-    sessionQuality:    { label: "Session",          max: 1.0, tier: 2 },
-    pdpwLevels:        { label: "PD/PW Levels",     max: 1.0, tier: 2 },
-    reversalCandle:    { label: "Reversal Candle",  max: 1.0, tier: 2 },
-    liquiditySweep:    { label: "Liq. Sweep",       max: 1.0, tier: 2 },
-    displacement:      { label: "Displacement",     max: 1.0, tier: 2 },
-    breakerBlock:      { label: "Breaker Block",    max: 1.0, tier: 3 },
-    unicornModel:      { label: "Unicorn Model",    max: 1.5, tier: 3 },
-    confluenceStack:   { label: "Confluence",       max: 1.5, tier: 3 },
-    sweepReclaim:      { label: "Sweep Reclaim",    max: 1.0, tier: 3 },
-    volumeProfile:     { label: "Volume Profile",   max: 0.5, tier: 3 },
-    dailyBias:         { label: "Daily Bias",       max: 0.5, tier: 3 },
-  };
-
-  for (const [key, meta] of Object.entries(tierMap)) {
-    const val = snapshot[key]?.score ?? snapshot[key]?.points ?? snapshot[key] ?? 0;
-    if (typeof val === "number" && val > 0) {
-      factors.push({ label: meta.label, value: val, max: meta.max, tier: meta.tier });
-    }
-  }
-
-  // If no structured data, try flat score fields
-  if (factors.length === 0 && typeof snapshot.score === "number") {
-    factors.push({ label: "Total Score", value: snapshot.score, max: 18, tier: 1 });
-  }
-
-  return factors;
 }

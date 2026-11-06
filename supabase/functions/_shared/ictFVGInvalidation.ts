@@ -13,7 +13,7 @@
  *   3. FVGs created by displacement candles are higher quality
  *   4. Only the FIRST return to an FVG is the highest probability entry
  *
- * Gate modes: "hard" | "soft" | "off"
+ * Gate modes: "hard" (blocks) | "off" (informational). There is no score to adjust.
  */
 
 import type { Candle } from "./smcAnalysis.ts";
@@ -21,17 +21,11 @@ import type { Candle } from "./smcAnalysis.ts";
 // ─── Configuration ────────────────────────────────────────────────────
 export interface FVGInvalidationConfig {
   enabled: boolean;
-  gateMode: "hard" | "soft" | "off";
+  gateMode: "hard" | "off";
   /** Use body close (ICT strict) vs any close for invalidation */
   bodyCloseOnly: boolean;
   /** Enable Rule of 2 (FVG touched twice = exhausted) */
   ruleOfTwo: boolean;
-  /** Score penalty for using an exhausted FVG (Rule of 2) */
-  exhaustedPenalty: number;
-  /** Score penalty for using an invalidated FVG */
-  invalidatedPenalty: number;
-  /** Bonus for first-touch FVG (highest probability) */
-  firstTouchBonus: number;
 }
 
 export const DEFAULT_FVG_INVALIDATION_CONFIG: FVGInvalidationConfig = {
@@ -39,9 +33,6 @@ export const DEFAULT_FVG_INVALIDATION_CONFIG: FVGInvalidationConfig = {
   gateMode: "off",
   bodyCloseOnly: true,
   ruleOfTwo: true,
-  exhaustedPenalty: -1.5,
-  invalidatedPenalty: -3.0,
-  firstTouchBonus: 0.5,
 };
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -61,7 +52,6 @@ export interface FVGValidationResult {
   touchCount: number;
   invalidatedAtIndex: number | null;
   consequentEncroachmentReached: boolean;
-  scoreAdjustment: number;
   passed: boolean;
   reason: string;
 }
@@ -69,7 +59,6 @@ export interface FVGValidationResult {
 export interface BatchFVGValidationResult {
   results: FVGValidationResult[];
   bestFVG: FVGValidationResult | null;
-  totalScoreAdjustment: number;
   passed: boolean;
   reason: string;
 }
@@ -94,7 +83,6 @@ export function validateFVG(
     touchCount: 0,
     invalidatedAtIndex: null,
     consequentEncroachmentReached: false,
-    scoreAdjustment: 0,
     passed: true,
     reason: "",
   };
@@ -194,39 +182,20 @@ export function validateFVG(
     status = "fresh";
   }
 
-  // Gate decision
+  // Gate decision. Only "hard" blocks; any other mode is informational.
   let passed = true;
-  let scoreAdjustment = 0;
   let reason = "";
-
-  if (config.gateMode === "off") {
-    passed = true;
-    scoreAdjustment = 0;
+  if (config.gateMode !== "hard") {
     reason = `[OFF] FVG status: ${status} (touches: ${touchCount}, CE: ${consequentEncroachmentReached})`;
   } else if (status === "invalidated") {
-    if (config.gateMode === "hard") {
-      passed = false;
-      reason = `FVG INVALIDATED: body closed through at candle ${invalidatedAtIndex}`;
-    } else {
-      passed = true;
-      scoreAdjustment = config.invalidatedPenalty;
-      reason = `FVG invalidated: ${config.invalidatedPenalty} penalty`;
-    }
+    passed = false;
+    reason = `FVG INVALIDATED: body closed through at candle ${invalidatedAtIndex}`;
   } else if (status === "exhausted") {
-    if (config.gateMode === "hard") {
-      passed = false;
-      reason = `FVG EXHAUSTED: Rule of 2 — touched ${touchCount} times without follow-through`;
-    } else {
-      passed = true;
-      scoreAdjustment = config.exhaustedPenalty;
-      reason = `FVG exhausted (Rule of 2): ${config.exhaustedPenalty} penalty`;
-    }
+    passed = false;
+    reason = `FVG EXHAUSTED: Rule of 2 — touched ${touchCount} times without follow-through`;
   } else if (status === "fresh") {
-    passed = true;
-    scoreAdjustment = config.firstTouchBonus;
-    reason = `FVG fresh — first touch entry (+${config.firstTouchBonus})`;
+    reason = `FVG fresh — first touch entry`;
   } else if (status === "first_touch") {
-    passed = true;
     reason = `FVG first touch — valid entry`;
   }
 
@@ -236,7 +205,6 @@ export function validateFVG(
     touchCount,
     invalidatedAtIndex,
     consequentEncroachmentReached,
-    scoreAdjustment,
     passed,
     reason,
   };
@@ -258,7 +226,6 @@ export function validateFVGBatch(
     return {
       results: [],
       bestFVG: null,
-      totalScoreAdjustment: 0,
       passed: true,
       reason: config.enabled ? "No FVGs to validate" : "FVG invalidation disabled",
     };
@@ -270,7 +237,6 @@ export function validateFVGBatch(
     return {
       results: [],
       bestFVG: null,
-      totalScoreAdjustment: 0,
       passed: true,
       reason: `No ${tradeDirection} FVGs found`,
     };
@@ -292,7 +258,6 @@ export function validateFVGBatch(
 
   // If no valid FVGs remain, apply gate logic
   let passed = true;
-  let totalScoreAdjustment = bestFVG ? bestFVG.scoreAdjustment : 0;
   let reason = "";
 
   if (!bestFVG && results.length > 0) {
@@ -300,19 +265,14 @@ export function validateFVGBatch(
     if (config.gateMode === "hard") {
       passed = false;
       reason = `All ${tradeDirection} FVGs invalidated/exhausted (${results.length} checked)`;
-    } else if (config.gateMode === "soft") {
-      passed = true;
-      totalScoreAdjustment = config.invalidatedPenalty;
-      reason = `All FVGs invalidated/exhausted: ${config.invalidatedPenalty} penalty`;
     } else {
-      passed = true;
-      reason = `[OFF] All FVGs invalidated/exhausted — would have penalized`;
+      reason = `[OFF] All FVGs invalidated/exhausted`;
     }
   } else if (bestFVG) {
     reason = bestFVG.reason;
   }
 
-  return { results, bestFVG, totalScoreAdjustment, passed, reason };
+  return { results, bestFVG, passed, reason };
 }
 
 // ─── Utility: Convert existing FVG data to validation format ──────────

@@ -92,7 +92,7 @@ Deno.test("the refresh does NOT extend expires_at — the window is fixed", () =
   // prose would otherwise match as if it were code.
   const code = block.replace(/\/\/.*$/gm, "");
   assert(!/expires_at/.test(code), "refresh must not touch expires_at");
-  assert(/signal_score: analysis\.score/.test(block), "the newer score should win");
+  assert(!/signal_score/.test(code), "there is no score to refresh");
   assert(!/status:/.test(block), "the refresh must not touch status");
   assert(
     !/confirmation_attempts/.test(block),

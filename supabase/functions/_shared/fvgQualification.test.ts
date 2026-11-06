@@ -4,7 +4,6 @@
  * Verifies:
  *   Fix A: Counter-directional FVGs are NOT scored (present: false)
  *   Fix B: FVGs filled >75% are disqualified (present: false)
- *   Fix C: FVG without displacement is demoted from Tier 1 → Tier 2
  *
  * Run: deno test --allow-read --allow-env --allow-net supabase/functions/_shared/fvgQualification.test.ts
  */
@@ -356,105 +355,6 @@ Deno.test("Fix B: FVG filled <=30% should still be present with full score", () 
       "Low-fill FVG should not be marked as dead zone");
   }
 });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TEST: Fix C — FVG without displacement is demoted from Tier 1 → Tier 2
-// ═══════════════════════════════════════════════════════════════════════════
-Deno.test("Fix C: FVG with displacement should remain Tier 1", () => {
-  const candles = generateAlignedBullishFVGFixture();
-  const dailyCandles = generateDailyCandles(candles);
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
-
-  const fvgFactor = result.factors.find(f => f.name === "Fair Value Gap");
-  assertExists(fvgFactor, "FVG factor should exist");
-
-  if (fvgFactor.present && (fvgFactor as any)._hasDisplacement) {
-    assertEquals((fvgFactor as any).tier, 1,
-      "FVG with displacement should remain Tier 1");
-    assert(!fvgFactor.detail.includes("demoted"),
-      "FVG with displacement should NOT be demoted");
-  }
-});
-
-Deno.test("Fix C: FVG without displacement should be demoted to Tier 2", () => {
-  // Create a fixture with a small FVG (no displacement — middle candle is NOT large)
-  const candles = generateAlignedBullishFVGFixture();
-
-  // Shrink the middle candle (candle 181) so it's NOT a displacement candle
-  // Keep the FVG valid but make the middle candle small
-  const fvgBase = candles[180].high;
-  candles[181] = {
-    datetime: candles[181].datetime,
-    open: Number((fvgBase + 0.0001).toFixed(5)),
-    high: Number((fvgBase + 0.0025).toFixed(5)),  // Smaller range
-    low: Number((fvgBase + 0.00005).toFixed(5)),
-    close: Number((fvgBase + 0.0008).toFixed(5)), // Small body — NOT displacement
-    volume: 1200,
-  };
-  // Adjust candle 182 so FVG still exists: c3.low > c1.high (fvgBase)
-  candles[182] = {
-    datetime: candles[182].datetime,
-    open: Number((fvgBase + 0.0022).toFixed(5)),
-    high: Number((fvgBase + 0.0030).toFixed(5)),
-    low: Number((fvgBase + 0.0015).toFixed(5)),  // c3.low > c1.high → FVG exists (15 pip gap)
-    close: Number((fvgBase + 0.0028).toFixed(5)),
-    volume: 1500,
-  };
-  // Adjust pullback candles to be inside the new FVG (near CE, low fill)
-  const newFvgLow = fvgBase; // c1.high
-  const newFvgHigh = fvgBase + 0.0015; // c3.low
-  const newCE = (newFvgLow + newFvgHigh) / 2;
-  for (let i = 183; i < 200; i++) {
-    candles[i] = {
-      datetime: candles[i].datetime,
-      open: Number((newCE + 0.0002).toFixed(5)),
-      high: Number((newCE + 0.0003).toFixed(5)),
-      low: Number((newCE + 0.0001).toFixed(5)),  // Stay in top portion (low fill)
-      close: Number((newCE + 0.0002).toFixed(5)),
-      volume: 1100,
-    };
-  }
-
-  const dailyCandles = generateDailyCandles(candles);
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
-
-  const fvgFactor = result.factors.find(f => f.name === "Fair Value Gap");
-  assertExists(fvgFactor, "FVG factor should exist");
-
-  if (fvgFactor.present) {
-    // Without displacement, FVG should be demoted to Tier 2
-    assertEquals((fvgFactor as any)._hasDisplacement, false,
-      "FVG should NOT have displacement flag set");
-    assertEquals((fvgFactor as any).tier, 2,
-      "FVG without displacement should be demoted to Tier 2");
-    assert(fvgFactor.detail.includes("demoted") || fvgFactor.detail.includes("Tier 2"),
-      "Detail should indicate demotion. Got: " + fvgFactor.detail);
-  }
-});
-
 // ═══════════════════════════════════════════════════════════════════════════
 // TEST: Regression — existing behavior preserved
 // ═══════════════════════════════════════════════════════════════════════════
-Deno.test("REGRESSION: Non-FVG Tier 1 factors unaffected by FVG fixes", () => {
-  const candles = generateAlignedBullishFVGFixture();
-  const dailyCandles = generateDailyCandles(candles);
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
-
-  const ms = result.factors.find(f => f.name === "Market Structure");
-  const ob = result.factors.find(f => f.name === "Order Block");
-  const pd = result.factors.find(f => f.name === "Premium/Discount & Fib");
-
-  if (ms && ms.present) assertEquals((ms as any).tier, 1, "Market Structure should be Tier 1");
-  if (ob && ob.present) assertEquals((ob as any).tier, 1, "Order Block should be Tier 1");
-  if (pd && pd.present) assertEquals((pd as any).tier, 1, "Premium/Discount should be Tier 1");
-});
-
-Deno.test("REGRESSION: Score is bounded 0-100% after FVG fixes", () => {
-  const candles = generateAlignedBullishFVGFixture();
-  const dailyCandles = generateDailyCandles(candles);
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
-
-  assert(result.score >= 0, "Score must be >= 0");
-  assert(result.score <= 100, "Score must be <= 100");
-  assert(result.rawScore >= 0, "rawScore must be >= 0");
-});

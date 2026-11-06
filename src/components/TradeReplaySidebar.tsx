@@ -9,7 +9,7 @@ export interface TradeItem {
   stop_loss: number;
   take_profit: number;
   current_sl?: number;
-  status: "open" | "closed" | "staged";
+  status: "open" | "closed";
   opened_at: string;
   closed_at?: string;
   exit_price?: number;
@@ -36,18 +36,16 @@ const fmtDate = (iso: string) => {
 };
 
 export function TradeReplaySidebar({ trades, selectedId, onSelect }: Props) {
-  const { open, closed, staged } = useMemo(() => {
+  const { open, closed } = useMemo(() => {
     const open: TradeItem[] = [];
     const closed: TradeItem[] = [];
-    const staged: TradeItem[] = [];
     for (const t of trades) {
       if (t.status === "open") open.push(t);
-      else if (t.status === "staged") staged.push(t);
       else closed.push(t);
     }
     // Sort closed by date descending
     closed.sort((a, b) => new Date(b.closed_at || b.opened_at).getTime() - new Date(a.closed_at || a.opened_at).getTime());
-    return { open, closed, staged };
+    return { open, closed };
   }, [trades]);
 
   const renderCard = (t: TradeItem) => {
@@ -71,19 +69,17 @@ export function TradeReplaySidebar({ trades, selectedId, onSelect }: Props) {
           <span
             className={cn(
               "text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide",
-              t.status === "staged"
-                ? "text-warn bg-amber-400/15"
-                : t.direction === "BUY"
+              t.direction === "BUY"
                 ? "text-profit bg-green-400/15"
                 : "text-loss bg-badge-loss"
             )}
           >
-            {t.status === "staged" ? "WATCH" : t.direction}
+            {t.direction}
           </span>
         </div>
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <span>{fmtDate(t.opened_at)}</span>
-          {t.status !== "staged" && t.pnl_pips !== undefined && (
+          {t.pnl_pips !== undefined && (
             <span
               className={cn(
                 "font-mono font-semibold",
@@ -91,11 +87,6 @@ export function TradeReplaySidebar({ trades, selectedId, onSelect }: Props) {
               )}
             >
               {isPositive ? "+" : ""}{fx(t.pnl_pips)} pips
-            </span>
-          )}
-          {t.status === "staged" && (
-            <span className="text-warn font-medium">
-              {t.signal_reason?.score ? `${t.signal_reason.score}%` : "—"}
             </span>
           )}
         </div>
@@ -122,12 +113,6 @@ export function TradeReplaySidebar({ trades, selectedId, onSelect }: Props) {
           <>
             <SectionTitle>Closed Trades</SectionTitle>
             {closed.map(renderCard)}
-          </>
-        )}
-        {staged.length > 0 && (
-          <>
-            <SectionTitle>Staged (Watching)</SectionTitle>
-            {staged.map(renderCard)}
           </>
         )}
         {trades.length === 0 && (

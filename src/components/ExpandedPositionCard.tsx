@@ -7,7 +7,7 @@ import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatPrice } from "@/lib/formatTime";
 import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
-import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
+import { FactorBreakdown } from "./FactorBreakdown";
 import { TradeOverrideEditor } from "./TradeOverrideEditor";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -257,10 +257,6 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   const factorMatch = summaryText.match(/(\d+)\/(\d+)\s+factors/i);
   const factorCount = factorMatch ? parseInt(factorMatch[1], 10) : null;
   const factorTotal = factorMatch ? parseInt(factorMatch[2], 10) : null;
-  // Try percentage format first (new), then legacy /10 format
-  const pctMatch = summaryText.match(/score:\s*([\d.]+)%/i);
-  const legacyScoreMatch = summaryText.match(/score:\s*([\d.]+)\/10/i);
-  const summaryScore = pctMatch ? parseFloat(pctMatch[1]) : (legacyScoreMatch ? parseFloat(legacyScoreMatch[1]) : null);
 
   // Setup info
   const setupType: string | null = sr.setupType ?? null;
@@ -378,8 +374,6 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
           <span className="text-muted-foreground">Current: <span className="text-foreground font-semibold">{formatPrice(current, p.symbol)}</span></span>
           <span className="text-muted-foreground/40">|</span>
           <span className="text-muted-foreground">P&L: <span className={`font-bold ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</span></span>
-          <span className="text-muted-foreground/40">|</span>
-          <span className="text-muted-foreground">Score: <span className="text-primary font-bold">{Number(p.signalScore) > 10 ? `${Number(p.signalScore).toFixed(1)}%` : `${p.signalScore}/10`}</span></span>
         </div>
       </div>
 
@@ -500,9 +494,6 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
             {hasWatchlistOrigin && (
               <div className="flex items-center gap-2 text-[10px] text-cyan-400/80">
                 <span>Watched {sr.watchlistOrigin.cyclesWatched} cycles</span>
-                {sr.watchlistOrigin.initialScore != null && (
-                  <span>\u00b7 Started at {sr.watchlistOrigin.initialScore.toFixed(1)}%</span>
-                )}
               </div>
             )}
           </div>
@@ -609,10 +600,8 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
             )}
             <span className="text-[11px] text-foreground/80 font-mono">
               {factorCount != null ? `${factorCount} factors${factorTotal ? ` (of ${factorTotal})` : ""}` : ""}
-              {summaryScore != null ? ` \u00B7 score ${summaryScore > 10 ? `${summaryScore.toFixed(1)}%` : `${summaryScore}/10`}` : ""}
             </span>
           </div>
-          {sr.tieredScoring && <div className="mt-1"><TierScoreSummary tieredScoring={sr.tieredScoring} /></div>}
           {setupType && (
             <div className="text-[11px] text-foreground/70 font-mono mt-0.5">
               Setup: {setupType}{setupConfidence != null ? ` ${Math.round(setupConfidence * 100)}% conf` : ""}
@@ -635,9 +624,9 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
         )}
       </div>
 
-      {/* ═══ ROW 4: Factor Breakdown (Tier-Grouped or Legacy Pills) ═══ */}
+      {/* ═══ ROW 4: Factor Breakdown (or Legacy Pills) ═══ */}
       {Array.isArray(sr.factorScores) && sr.factorScores.length > 0 ? (
-        <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring ?? null} compact />
+        <FactorBreakdown factors={sr.factorScores} compact />
       ) : alignedFactors.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {alignedFactors.map((f, i) => (

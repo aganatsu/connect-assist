@@ -7,12 +7,11 @@
  *   1. Runs weekly bias analysis (once per scan, shared across all pairs)
  *   2. Runs daily impulse/OB detection (per pair)
  *   3. Performs containment check (is the LTF zone inside the Daily OB?)
- *   4. Returns a unified result that the scanner can use as a gate or score modifier
+ *   4. Returns a unified result that the scanner can use as a gate
  *
  * Integration modes (configurable):
  *   - "hard": Weekly bias must align + LTF zone must be contained in Daily OB → skip if not
- *   - "soft": Score bonus/penalty based on alignment and containment
- *   - "off": Disabled (pure informational logging)
+ *   - "off": informational logging only (a stored legacy "soft" behaves the same)
  */
 import type { Candle } from "./smcAnalysis.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "./weeklyBiasDOL.ts";
@@ -23,12 +22,8 @@ import { analyzeDailyImpulse, checkContainment, type DailyImpulseResult, type Da
 export interface ICTHTFConfig {
   /** Enable/disable the ICT HTF framework. Default: true */
   ictHTFEnabled: boolean;
-  /** Gate mode: "hard" = skip if not aligned, "soft" = score adjustment, "off" = disabled */
-  ictHTFGateMode: "hard" | "soft" | "off";
-  /** Score bonus when fully aligned (weekly + daily + contained). Default: 2.0 */
-  ictHTFAlignedBonus: number;
-  /** Score penalty when misaligned. Default: 3.0 */
-  ictHTFMisalignedPenalty: number;
+  /** Gate mode: "hard" = skip if not aligned, "off" = informational (a stored legacy "soft" behaves the same) */
+  ictHTFGateMode: "hard" | "off";
   /** Minimum containment overlap percent. Default: 50 */
   ictHTFMinContainment: number;
   /** Whether weekly bias is required to match trade direction. Default: true */
@@ -39,9 +34,7 @@ export interface ICTHTFConfig {
 
 export const DEFAULT_ICT_HTF_CONFIG: ICTHTFConfig = {
   ictHTFEnabled: true,
-  ictHTFGateMode: "soft",  // Start soft — user can switch to hard once validated
-  ictHTFAlignedBonus: 2.0,
-  ictHTFMisalignedPenalty: 3.0,
+  ictHTFGateMode: "off",  // informational until switched to hard
   ictHTFMinContainment: 50,
   ictWeeklyBiasRequired: true,
   ictDailyContainmentRequired: true,
@@ -63,7 +56,6 @@ export interface ICTHTFResult {
   /** Is the LTF zone contained within the Daily OB? */
   zoneContained: boolean;
   /** Score adjustment to apply (positive = bonus, negative = penalty) */
-  scoreAdjustment: number;
   /** Human-readable gate reason */
   reason: string;
   /** Detailed reasons for logging */
@@ -81,7 +73,7 @@ export interface ICTHTFResult {
  * @param tradeDirection - The direction the bot wants to trade ("long" | "short")
  * @param ltfZone - The LTF zone selected by the impulse zone engine (high/low), null if no zone
  * @param config - ICT HTF configuration
- * @returns ICTHTFResult with pass/fail, score adjustment, and detailed analysis
+ * @returns ICTHTFResult with pass/fail and detailed analysis
  */
 export function runICTHTFAnalysis(
   weeklyCandles: Candle[] | null,
@@ -101,7 +93,6 @@ export function runICTHTFAnalysis(
     dailyOB: null,
     weeklyAligned: true,
     zoneContained: true,
-    scoreAdjustment: 0,
     reason: "ICT HTF analysis disabled or insufficient data",
     details: [],
   };
@@ -113,7 +104,6 @@ export function runICTHTFAnalysis(
   const details: string[] = [];
   let weeklyAligned = true;
   let zoneContained = true;
-  let scoreAdjustment = 0;
 
   // ── Step 1: Weekly Bias ──
   let weeklyBias: WeeklyBiasResult | null = null;
@@ -168,44 +158,16 @@ export function runICTHTFAnalysis(
     details.push("Containment check skipped: no LTF zone provided");
   }
 
-  // ── Step 4: Determine pass/fail and score adjustment ──
+  // ── Step 4: Determine pass/fail ──
+  // Hard mode blocks the trade if requirements fail; any other mode is informational.
   const weeklyFailed = cfg.ictWeeklyBiasRequired && !weeklyAligned;
   const containmentFailed = cfg.ictDailyContainmentRequired && !zoneContained;
+  const passed = cfg.ictHTFGateMode === "hard" ? !weeklyFailed && !containmentFailed : true;
 
-  // Off mode: always pass, no score adjustment (log-only)
-  // Soft mode: always pass, apply score adjustment
-  // Hard mode: block trade if requirements fail
-  let passed: boolean;
-  if (cfg.ictHTFGateMode === "off") {
-    passed = true;
-  } else if (cfg.ictHTFGateMode === "hard") {
-    passed = !weeklyFailed && !containmentFailed;
-  } else {
-    passed = true; // soft
-  }
-
-  // Score adjustment (computed always for logging, but only applied in soft/hard modes)
-  if (weeklyAligned && zoneContained && dailyOB?.isValid) {
-    // Full alignment: weekly + daily + contained
-    scoreAdjustment = cfg.ictHTFAlignedBonus;
-    details.push(`✓ Full ICT HTF alignment — +${scoreAdjustment.toFixed(1)} score bonus`);
-  } else if (weeklyAligned && dailyOB?.priceInZone) {
-    // Weekly aligned + price in Daily OB (even without LTF containment check)
-    scoreAdjustment = cfg.ictHTFAlignedBonus * 0.5;
-    details.push(`✓ Partial alignment (weekly + price in Daily OB) — +${scoreAdjustment.toFixed(1)} score bonus`);
-  } else if (!weeklyAligned) {
-    scoreAdjustment = -cfg.ictHTFMisalignedPenalty;
-    details.push(`✗ Weekly bias misaligned — ${scoreAdjustment.toFixed(1)} score penalty`);
-  } else if (!zoneContained) {
-    scoreAdjustment = -(cfg.ictHTFMisalignedPenalty * 0.5);
-    details.push(`✗ Zone not contained in Daily OB — ${scoreAdjustment.toFixed(1)} score penalty`);
-  }
-
-  // In "off" mode, zero out the score adjustment (it was computed for logging only)
-  if (cfg.ictHTFGateMode === "off") {
-    details.push(`[OFF MODE] Would have applied: ${scoreAdjustment > 0 ? "+" : ""}${scoreAdjustment.toFixed(1)} score adjustment`);
-    scoreAdjustment = 0;
-  }
+  if (weeklyAligned && zoneContained && dailyOB?.isValid) details.push("✓ Full ICT HTF alignment (weekly + daily + contained)");
+  else if (weeklyAligned && dailyOB?.priceInZone) details.push("✓ Partial alignment (weekly + price in Daily OB)");
+  else if (!weeklyAligned) details.push("✗ Weekly bias misaligned");
+  else if (!zoneContained) details.push("✗ Zone not contained in Daily OB");
 
   // Build reason string
   const reasons: string[] = [];
@@ -226,7 +188,6 @@ export function runICTHTFAnalysis(
     dailyOB,
     weeklyAligned,
     zoneContained,
-    scoreAdjustment,
     reason: passed
       ? (reasons.length > 0 ? `ICT HTF PASS: ${reasons.join(", ")}` : "ICT HTF: no data to check")
       : `ICT HTF FAIL: ${reasons.join(", ")}`,

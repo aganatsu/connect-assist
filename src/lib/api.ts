@@ -14,7 +14,7 @@ function getFunctionFallback(functionName: string, body: Record<string, any>) {
 
   if (functionName === "bot-scanner") {
     const action = body?.action;
-    if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) return [];
+    if (["scan_logs", "pending_orders", "active_pending"].includes(action)) return [];
     if (action === "manual_scan") return { error: "Scanner is temporarily unavailable. Please try again shortly.", started: false, pairsScanned: 0, signalsFound: 0, tradesPlaced: 0 };
     return { ok: false, error: "Scanner is temporarily unavailable. Please try again shortly.", fallback: true };
   }
@@ -151,7 +151,7 @@ export async function invokeFunction<T = any>(
   // the Bot page crash into a blank screen.
   if (functionName === "bot-scanner" && isTransient503(error, data)) {
     const action = body?.action;
-    if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) {
+    if (["scan_logs", "pending_orders", "active_pending"].includes(action)) {
       return [] as T;
     }
     if (action === "manual_scan") {
@@ -163,7 +163,7 @@ export async function invokeFunction<T = any>(
         tradesPlaced: 0,
       } as T;
     }
-    // Any other bot-scanner action (dismiss_staged, cancel_pending, etc.):
+    // Any other bot-scanner action (cancel_pending, etc.):
     // return a structured fallback rather than throwing into a blank screen.
     return {
       ok: false,
@@ -365,7 +365,7 @@ export const smcApi = {
 // ── Paper Trading ──
 export const paperApi = {
   status: () => invokeFunction("paper-trading", { action: "status" }),
-  placeOrder: (order: { symbol: string; direction: string; size: number; entryPrice: number; stopLoss?: number; takeProfit?: number; signalReason?: string; signalScore?: number }) =>
+  placeOrder: (order: { symbol: string; direction: string; size: number; entryPrice: number; stopLoss?: number; takeProfit?: number; signalReason?: string }) =>
     invokeFunction("paper-trading", { action: "place_order", ...order }),
   closePosition: (positionId: string, exitPrice?: number, reason?: string) =>
     invokeFunction("paper-trading", { action: "close_position", positionId, exitPrice, reason }),
@@ -508,39 +508,6 @@ export const scannerApi = {
     }
     return Array.isArray(dj) ? dj : [];
   },
-  // Setup Staging / Watchlist
-  activeStaged: async (): Promise<StagedSetup[]> => {
-    const { data, error } = await (supabase as any)
-      .from("staged_setups")
-      .select("*")
-      .eq("bot_id", "smc")
-      .eq("status", "watching")
-      .order("current_score", { ascending: false });
-    if (error) throw new Error(error.message);
-    return data || [];
-  },
-  allStaged: async (): Promise<StagedSetup[]> => {
-    const { data, error } = await (supabase as any)
-      .from("staged_setups")
-      .select("*")
-      .eq("bot_id", "smc")
-      .order("staged_at", { ascending: false })
-      .limit(50);
-    if (error) throw new Error(error.message);
-    return data || [];
-  },
-  dismissStaged: async (setupId: string) => {
-    const { error } = await (supabase as any)
-      .from("staged_setups")
-      .update({
-        status: "invalidated",
-        invalidation_reason: "Manually dismissed by user",
-        resolved_at: new Date().toISOString(),
-      })
-      .eq("id", setupId);
-    if (error) throw new Error(error.message);
-    return { success: true };
-  },
   // Pending / Limit Orders — routed through bot-scanner edge function (uses adminClient, bypasses RLS)
   activePending: async (): Promise<PendingOrder[]> => {
     return invokeFunction<PendingOrder[]>("bot-scanner", { action: "active_pending" });
@@ -552,40 +519,6 @@ export const scannerApi = {
     return invokeFunction("bot-scanner", { action: "cancel_pending", orderId });
   },
 };
-
-// ── Staged Setup Type ──
-export interface StagedSetup {
-  id: string;
-  user_id: string;
-  bot_id: string;
-  symbol: string;
-  direction: "long" | "short";
-  initial_score: number;
-  current_score: number;
-  watch_threshold: number;
-  initial_factors: Array<{ name: string; weight: number; tier?: string }>;
-  current_factors: Array<{ name: string; weight: number; tier?: string }>;
-  missing_factors: Array<{ name: string; weight: number; tier?: string }>;
-  entry_price: number | null;
-  sl_level: number | null;
-  tp_level: number | null;
-  status: "watching" | "promoted" | "expired" | "invalidated";
-  scan_cycles: number;
-  min_cycles: number;
-  ttl_minutes: number;
-  promotion_reason: string | null;
-  invalidation_reason: string | null;
-  setup_type: string | null;
-  tier1_count: number;
-  tier2_count: number;
-  tier3_count: number;
-  analysis_snapshot: any;
-  staged_at: string;
-  last_eval_at: string;
-  resolved_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 // ── Pending Order Type ──
 export interface PendingOrder {
@@ -611,12 +544,8 @@ export interface PendingOrder {
   filled_at: string | null;
   resolved_at: string | null;
   signal_reason: any;
-  signal_score: number;
   setup_type: string | null;
   setup_confidence: string | null;
-  from_watchlist: boolean;
-  staged_cycles: number;
-  staged_initial_score: number | null;
   exit_flags: any;
   placed_at: string;
   created_at: string;

@@ -92,13 +92,14 @@ Deno.test("detectICTWindow: Off hours (05:00-08:30 NY)", () => {
 
 // ─── Tests: Gate Evaluation ───────────────────────────────────────────
 
-Deno.test("evaluateICTKillZone: prime KZ gives bonus in soft mode", () => {
-  const config: ICTKillZoneConfig = { ...DEFAULT_ICT_KILLZONE_CONFIG, gateMode: "soft" };
+Deno.test("evaluateICTKillZone: prime KZ passes in hard mode and is labelled prime", () => {
+  const config: ICTKillZoneConfig = { ...DEFAULT_ICT_KILLZONE_CONFIG, gateMode: "hard" };
   const result = evaluateICTKillZone(nyTime(9, 30), config);
 
   assertEquals(result.passed, true);
   assertEquals(result.isPrime, true);
-  assertEquals(result.scoreAdjustment, config.primeKZBonus);
+  assertEquals(result.reason.includes("Prime Kill Zone"), true);
+  assertEquals("scoreAdjustment" in result, false);
 });
 
 Deno.test("evaluateICTKillZone: dead zone blocked in hard mode", () => {
@@ -110,12 +111,12 @@ Deno.test("evaluateICTKillZone: dead zone blocked in hard mode", () => {
   assertEquals(result.reason.includes("DEAD ZONE"), true);
 });
 
-Deno.test("evaluateICTKillZone: dead zone penalized in soft mode", () => {
-  const config: ICTKillZoneConfig = { ...DEFAULT_ICT_KILLZONE_CONFIG, gateMode: "soft" };
+Deno.test("evaluateICTKillZone: a stored legacy \"soft\" mode is informational, like off", () => {
+  const config = { ...DEFAULT_ICT_KILLZONE_CONFIG, gateMode: "soft" } as unknown as ICTKillZoneConfig;
   const result = evaluateICTKillZone(nyTime(12, 30), config);
 
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, config.deadZonePenalty);
+  assertEquals(result.reason.includes("[OFF]"), true);
 });
 
 Deno.test("evaluateICTKillZone: off hours blocked in hard mode", () => {
@@ -131,7 +132,6 @@ Deno.test("evaluateICTKillZone: off mode always passes", () => {
   const result = evaluateICTKillZone(nyTime(12, 30), config);
 
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, 0);
   assertEquals(result.reason.includes("[OFF]"), true);
 });
 

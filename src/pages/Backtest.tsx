@@ -29,7 +29,7 @@ import { getChartTheme } from "@/lib/chartTheme";
 interface BacktestTrade {
   id: string; symbol: string; direction: "long" | "short";
   entryTime: string; exitTime: string; entryPrice: number; exitPrice: number;
-  size: number; pnl: number; pnlPips: number; commission: number; confluenceScore: number;
+  size: number; pnl: number; pnlPips: number; commission: number;
   closeReason: string;
   factors: { name: string; present: boolean; weight: number }[];
   gatesBlocked: string[];
@@ -60,7 +60,6 @@ interface BacktestResponse {
     skippedSession: number;
     skippedDay: number;
     skippedNoDirection: number;
-    skippedBelowThreshold: number;
     skippedGateBlocked: number;
     skippedNoSLTP: number;
     skippedImpulseNoZone?: number;
@@ -69,13 +68,10 @@ interface BacktestResponse {
     signalsGenerated: number;
     tradesOpened: number;
     // Actionable advice fields
-    highestScoreSeen: number;
     enabledFactorCount: number;
     totalFactorCount: number;
-    scoreDistribution: { below20: number; below40: number; below60: number; below80: number; above80: number };
   };
   config?: {
-    minConfluence: number;
     enabledSessions: string[];
     enabledDays: number[];
     entryTimeframe: string;
@@ -557,13 +553,6 @@ export default function Backtest() {
                 {/* ── Strategy Tab ── */}
                 <TabsContent value="strategy" className="mt-3 space-y-3">
                   <SectionHeader title="Confluence Factors" description="Toggle each SMC factor on/off to test its impact on performance" icon={Crosshair} />
-                  <FieldRow label="Min Confluence Score" description="Minimum percentage score to trigger a trade">
-                    <div className="flex items-center gap-3">
-                      <Slider value={[config.strategy.confluenceThreshold]} onValueChange={v => updateConfig("strategy", "confluenceThreshold", v[0])}
-                        min={0} max={100} step={5} className="flex-1" />
-                      <span className="text-xs font-mono font-bold w-10 text-right">{config.strategy.confluenceThreshold}%</span>
-                    </div>
-                  </FieldRow>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
                     <Toggle label="Order Blocks" description="Institutional OB detection" checked={config.strategy.useOrderBlocks} onChange={v => updateConfig("strategy", "useOrderBlocks", v)} />
                     <Toggle label="Fair Value Gaps" description="FVG imbalance zones" checked={config.strategy.useFVG} onChange={v => updateConfig("strategy", "useFVG", v)} />
@@ -935,35 +924,11 @@ export default function Backtest() {
           const evaluated = d.totalCandlesEvaluated;
           const sessionPct = total > 0 ? Math.round((d.skippedSession / total) * 100) : 0;
           const noDirPct = evaluated > 0 ? Math.round((d.skippedNoDirection / evaluated) * 100) : 0;
-          const scored = evaluated - d.skippedNoDirection; // candles that got a score
-          const highScore = d.highestScoreSeen || 0;
-          const threshold = cfg?.minConfluence || 55;
           const enabledFactors = d.enabledFactorCount || 0;
           const totalFactors = d.totalFactorCount || 18;
-          const dist = d.scoreDistribution || { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 };
 
           // ── Build prioritized advice ──
           const advice: { priority: number; icon: string; title: string; detail: string; action: string }[] = [];
-
-          // Advice 1: Threshold too high (most common blocker)
-          if (d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 && highScore > 0) {
-            const suggestedThreshold = Math.max(20, Math.floor(highScore * 0.9));
-            advice.push({
-              priority: 1,
-              icon: "\u{1F3AF}",
-              title: "Threshold too high for current market",
-              detail: `Best score seen: ${highScore.toFixed(1)}% — but your threshold is ${threshold}%. ${scored} candle${scored !== 1 ? 's' : ''} scored below threshold.`,
-              action: `Lower confluence threshold to ~${suggestedThreshold}% to start seeing trades. You can always raise it later once you see what scores your config produces.`,
-            });
-          } else if (d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 && highScore === 0) {
-            advice.push({
-              priority: 1,
-              icon: "\u{1F3AF}",
-              title: "No candles scored above 0%",
-              detail: `${d.skippedBelowThreshold} candles were scored but none exceeded 0%. This usually means the scoring engine isn't finding any SMC patterns.`,
-              action: `Check that you have core factors enabled (Order Blocks, FVG, Structure Breaks). If using a very short date range, try extending it.`,
-            });
-          }
 
           // Advice 2: Session filter removing too many candles
           if (d.skippedSession > 0 && sessionPct > 50) {
@@ -984,8 +949,8 @@ export default function Backtest() {
               priority: 3,
               icon: "\u{1F9E9}",
               title: `Only ${enabledFactors} of ${totalFactors} factors enabled`,
-              detail: `With few factors enabled, the maximum possible score is limited. Scores are normalized to enabled factors only, but having more factors gives the engine more ways to find confluence.`,
-              action: `Enable more core factors: Order Blocks, FVG, Structure Breaks, Liquidity Sweeps, and Displacement are the foundation. Each adds scoring opportunities.`,
+              detail: `With few factors enabled, the engine has fewer ways to find a direction and a zone.`,
+              action: `Enable more core factors: Order Blocks, FVG, Structure Breaks, Liquidity Sweeps, and Displacement are the foundation.`,
             });
           }
 
@@ -1007,7 +972,7 @@ export default function Backtest() {
               priority: 5,
               icon: "\u{1F6E1}\uFE0F",
               title: `${d.skippedGateBlocked} signals blocked by safety gates`,
-              detail: topGate ? `Top blocker: ${topGate[0]} (${topGate[1]} times).` : `Signals passed the threshold but were blocked by risk management gates (max positions, drawdown limits, cooldown, etc.).`,
+              detail: topGate ? `Top blocker: ${topGate[0]} (${topGate[1]} times).` : `Signals were generated but blocked by risk management gates (max positions, drawdown limits, cooldown, etc.).`,
               action: `Check your Risk and Protection settings. Common blockers: max concurrent trades too low, cooldown too long, or max daily drawdown too tight.`,
             });
           }
@@ -1096,42 +1061,6 @@ export default function Backtest() {
                 </div>
               )}
 
-              {/* ── Score Distribution (when available) ── */}
-              {(dist.below20 > 0 || dist.below40 > 0 || dist.below60 > 0 || dist.below80 > 0 || dist.above80 > 0) && (
-                <div className="space-y-1.5">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Score Distribution</p>
-                  <div className="grid grid-cols-5 gap-1">
-                    {[
-                      { label: "0–20%", value: dist.below20, color: "bg-destructive/70" },
-                      { label: "20–40%", value: dist.below40, color: "bg-warning/70" },
-                      { label: "40–60%", value: dist.below60, color: "bg-warning/70" },
-                      { label: "60–80%", value: dist.below80, color: "bg-success/70" },
-                      { label: "80%+", value: dist.above80, color: "bg-cyan/70" },
-                    ].map(bucket => {
-                      const maxBucket = Math.max(dist.below20, dist.below40, dist.below60, dist.below80, dist.above80, 1);
-                      const barPct = Math.max(2, (bucket.value / maxBucket) * 100);
-                      return (
-                        <div key={bucket.label} className="text-center">
-                          <div className="h-12 flex items-end justify-center">
-                            <div className={`w-full rounded-t ${bucket.color}`} style={{ height: `${barPct}%` }} />
-                          </div>
-                          <p className="text-[9px] font-mono mt-0.5">{bucket.value}</p>
-                          <p className="text-[8px] text-muted-foreground">{bucket.label}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {highScore > 0 && (
-                    <p className="text-[10px] text-muted-foreground text-center">
-                      Highest score seen: <span className="font-mono font-bold text-foreground">{highScore.toFixed(1)}%</span>
-                      {' '}| Threshold: <span className="font-mono font-bold text-warning">{threshold}%</span>
-                      {highScore < threshold && (
-                        <span className="text-warning"> — gap of {(threshold - highScore).toFixed(1)}%</span>
-                      )}
-                    </p>
-                  )}
-                </div>
-              )}
 
               {/* ── Filtering Funnel ── */}
               <div className="space-y-2">
@@ -1168,7 +1097,6 @@ export default function Backtest() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
                     { label: "\u2796 No Direction", value: d.skippedNoDirection, warn: noDirPct > 60 },
-                    { label: "\u2796 Below Threshold", value: d.skippedBelowThreshold, warn: d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 },
                     { label: "\u2796 Gate Blocked", value: d.skippedGateBlocked, warn: d.skippedGateBlocked > 0 },
                     { label: "\u2796 No SL/TP", value: d.skippedNoSLTP, warn: d.skippedNoSLTP > 0 },
                   ].map(item => (
@@ -1196,7 +1124,7 @@ export default function Backtest() {
               {/* ── Config Summary ── */}
               {cfg && (
                 <div className="text-[10px] text-muted-foreground border-t border-border/30 pt-2 space-y-0.5">
-                  <p><strong>Config:</strong> threshold={threshold}%, sessions=[{cfg.enabledSessions.join(', ')}], days=[{cfg.enabledDays.join(',')}], tf={cfg.entryTimeframe}, factors={enabledFactors}/{totalFactors} enabled</p>
+                  <p><strong>Config:</strong> sessions=[{cfg.enabledSessions.join(', ')}], days=[{cfg.enabledDays.join(',')}], tf={cfg.entryTimeframe}, factors={enabledFactors}/{totalFactors} enabled</p>
                 </div>
               )}
             </CardContent>
@@ -1453,11 +1381,10 @@ export default function Backtest() {
                               <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{t.entryPrice.toFixed(5)}</span></div>
                               <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{t.exitPrice.toFixed(5)}</span></div>
                               <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{t.size.toFixed(2)} lots</span></div>
-                              <div><span className="text-muted-foreground">Score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</span></div>
                             </div>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {t.factors.filter(f => f.present).map((f, fi) => (
-                                <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{f.weight.toFixed(1)}</span>
+                                <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name}</span>
                               ))}
                             </div>
                           </div>
@@ -1475,7 +1402,6 @@ export default function Backtest() {
                           <th className="text-left py-2 px-1.5">Dir</th>
                           <th className="text-left py-2 px-1.5">Entry</th>
                           <th className="text-left py-2 px-1.5">Exit</th>
-                          <th className="text-right py-2 px-1.5">Score</th>
                           <th className="text-right py-2 px-1.5">P&L</th>
                           <th className="text-right py-2 px-1.5">Pips</th>
                           <th className="text-left py-2 px-1.5">Close</th>
@@ -1495,7 +1421,6 @@ export default function Backtest() {
                               </td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.entryTime.slice(0, 16).replace('T', ' ')}</td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.exitTime.slice(0, 16).replace('T', ' ')}</td>
-                              <td className="py-1.5 px-1.5 text-right"><Badge variant="outline" className="text-[9px] px-1.5">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</Badge></td>
                               <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${t.pnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(t.pnl, true)}</td>
                               <td className={`py-1.5 px-1.5 text-right font-mono ${t.pnlPips >= 0 ? 'text-success' : 'text-destructive'}`}>{t.pnlPips >= 0 ? '+' : ''}{t.pnlPips.toFixed(1)}</td>
                               <td className="py-1.5 px-1.5"><span className={`text-[10px] ${CLOSE_REASONS[t.closeReason]?.color || 'text-muted-foreground'}`}>{CLOSE_REASONS[t.closeReason]?.label || t.closeReason}</span></td>
@@ -1503,7 +1428,7 @@ export default function Backtest() {
                             </tr>
                             {expandedTrade === t.id && (
                               <tr key={`${t.id}-detail`}>
-                                <td colSpan={10} className="py-2 px-3 bg-secondary/10">
+                                <td colSpan={9} className="py-2 px-3 bg-secondary/10">
                                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
                                     <div><span className="text-[9px] text-muted-foreground">Entry Price</span><p className="text-xs font-mono">{t.entryPrice.toFixed(5)}</p></div>
                                     <div><span className="text-[9px] text-muted-foreground">Exit Price</span><p className="text-xs font-mono">{t.exitPrice.toFixed(5)}</p></div>
@@ -1515,7 +1440,7 @@ export default function Backtest() {
                                     <div className="flex flex-wrap gap-1 mt-1">
                                       {t.factors.map((f, fi) => (
                                         <Badge key={fi} variant={f.present ? "default" : "outline"} className={`text-[9px] ${f.present ? '' : 'opacity-40'}`}>
-                                          {f.name} {f.present ? `+${f.weight.toFixed(1)}` : ''}
+                                          {f.name}
                                         </Badge>
                                       ))}
                                     </div>

@@ -136,9 +136,7 @@ export function confluenceDetailShape(
 ): Record<string, unknown> {
   const x = a as unknown as Record<string, unknown>;
   return {
-    score: x.score ?? null,
     factorCount: Array.isArray(x.factors) ? (x.factors as unknown[]).length : null,
-    tieredScoring: x.tieredScoring ?? null,
     direction: x.direction ?? null,
     lastPrice: x.lastPrice ?? null,
   };

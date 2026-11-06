@@ -39,7 +39,6 @@ export interface MarketCandidate {
   zoneHigh: number | null;
   zoneLow: number | null;
 
-  confluenceScore: number | null;
   ictAligned: boolean | null;
   /** Session and kill zone derived from `atMs`, not from the wall clock. */
   sessionName: string | null;

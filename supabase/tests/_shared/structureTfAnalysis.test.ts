@@ -111,10 +111,11 @@ Deno.test("every index-vs-length recency check moved too", () => {
 });
 
 Deno.test("level-tolerance ATRs moved; the spread check did not", () => {
-  // Six ATR call sites serve level proximity or SL sizing and follow the levels.
+  // The ATR call sites that serve level proximity or SL sizing follow the levels
+  // (6 since the HTF tier-promotion block, which used one, went with the score).
   // The spread gate compares current spread to current volatility — a moment
   // check, and the only one that stays on the entry timeframe.
-  assertEquals((scoring.match(/calculateATR\(sc/g) ?? []).length, 7);
+  assertEquals((scoring.match(/calculateATR\(sc/g) ?? []).length, 6);
   assertEquals((scoring.match(/calculateATR\(candles/g) ?? []).length, 1);
   const i = scoring.indexOf("const spreadATR = calculateATR(candles, 14);");
   assert(i > -1, "the spread ATR must stay on the entry timeframe");

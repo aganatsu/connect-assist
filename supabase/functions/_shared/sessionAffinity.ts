@@ -23,8 +23,7 @@
  * any gates, factor weights, or scoring in confluenceScoring.ts.
  * It exports pure functions that the scanner can call to annotate results.
  *
- * To promote to a scoring factor, add it to confluenceScoring.ts as Factor 26
- * with a weight key "sessionAffinity" in DEFAULT_FACTOR_WEIGHTS.
+ * It is reported as a confluence factor (detected / not detected).
  */
 
 import { type SessionName, type SessionFilterKey, toNYTime, toNYTimeAt } from "./sessions.ts";

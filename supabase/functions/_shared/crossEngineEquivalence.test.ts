@@ -11,7 +11,7 @@
  * Run: deno test --no-check --allow-all supabase/functions/_shared/crossEngineEquivalence.test.ts
  */
 
-import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS, resolveWeightScale, applyWeightScale } from "./confluenceScoring.ts";
+import { runConfluenceAnalysis } from "./confluenceScoring.ts";
 import { type Candle } from "./smcAnalysis.ts";
 import {
   assertEquals,
@@ -64,7 +64,6 @@ const baseConfig = {
   instruments: ["EUR/USD"],
   scanInterval: "15min",
   riskPercent: 1,
-  minConfluence: 40,
   enabledSessions: ["london", "new_york"],
   htfBiasRequired: false,
   structureLookback: 50,
@@ -78,15 +77,15 @@ const baseConfig = {
 // SECTION 1: Same inputs → Same outputs (idempotency)
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("Idempotency: calling twice with same inputs produces identical score", () => {
+Deno.test("Idempotency: calling twice with same inputs produces the identical result", () => {
   const candles = makeFixture();
   const daily = makeDailyFixture();
   const fixedTime = new Date("2024-06-10T10:00:00Z").getTime();
   const r1 = runConfluenceAnalysis(candles, daily, baseConfig, undefined, fixedTime);
   const r2 = runConfluenceAnalysis(candles, daily, baseConfig, undefined, fixedTime);
-  assertEquals(r1.score, r2.score);
   assertEquals(r1.direction, r2.direction);
-  assertEquals(r1.rawScore, r2.rawScore);
+  assertEquals(r1.summary, r2.summary);
+  assertEquals(r1.opposingFactorCount, r2.opposingFactorCount);
 });
 
 Deno.test("Idempotency: factor list is identical across calls", () => {
@@ -103,12 +102,12 @@ Deno.test("Idempotency: factor list is identical across calls", () => {
   }
 });
 
-Deno.test("Idempotency: tieredScoring is identical across calls", () => {
+Deno.test("Idempotency: regime / spread gates are identical across calls", () => {
   const candles = makeFixture();
   const fixedTime = new Date("2024-06-10T10:00:00Z").getTime();
   const r1 = runConfluenceAnalysis(candles, null, baseConfig, undefined, fixedTime);
   const r2 = runConfluenceAnalysis(candles, null, baseConfig, undefined, fixedTime);
-  assertEquals(JSON.stringify(r1.tieredScoring), JSON.stringify(r2.tieredScoring));
+  assertEquals(JSON.stringify([r1.regimeGate, r1.spreadGate]), JSON.stringify([r2.regimeGate, r2.spreadGate]));
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -140,7 +139,7 @@ Deno.test("atMs: different timestamps can produce different session results", ()
 Deno.test("atMs: undefined (live mode) does not crash", () => {
   const candles = makeFixture();
   const result = runConfluenceAnalysis(candles, null, baseConfig, undefined, undefined);
-  assert(result.score >= 0);
+  assert(Array.isArray(result.factors));
   assert(result.factors.length > 0);
 });
 
@@ -163,76 +162,13 @@ Deno.test("Config: default config produces same result as explicit defaults", ()
   };
   const r1 = runConfluenceAnalysis(candles, null, minimal, undefined, fixedTime);
   const r2 = runConfluenceAnalysis(candles, null, explicit, undefined, fixedTime);
-  assertEquals(r1.score, r2.score);
+  assertEquals(JSON.stringify(r1.factors), JSON.stringify(r2.factors));
   assertEquals(r1.direction, r2.direction);
-});
-
-Deno.test("Config: weight overrides change score but not direction", () => {
-  const candles = makeFixture();
-  const fixedTime = new Date("2024-06-10T10:00:00Z").getTime();
-  const normalConfig = { ...baseConfig };
-  const boostedConfig = {
-    ...baseConfig,
-    factorWeights: { marketStructure: 2.0, orderBlock: 2.0 },
-  };
-  const r1 = runConfluenceAnalysis(candles, null, normalConfig, undefined, fixedTime);
-  const r2 = runConfluenceAnalysis(candles, null, boostedConfig, undefined, fixedTime);
-  // Direction should be the same (weights don't change direction logic)
-  assertEquals(r1.direction, r2.direction);
-  // But scores may differ if those factors are present
-  // (This is a behavioral invariant — weights affect magnitude, not direction)
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-// SECTION 4: resolveWeightScale and applyWeightScale helpers
-// ═══════════════════════════════════════════════════════════════════════
-
-Deno.test("resolveWeightScale: returns 1.0 for unset factor", () => {
-  const scale = resolveWeightScale("marketStructure", {});
-  assertEquals(scale, 1.0);
-});
-
-Deno.test("resolveWeightScale: returns config value / default weight as scale", () => {
-  // marketStructure default weight = 2.5, so 1.5 / 2.5 = 0.6
-  const scale = resolveWeightScale("marketStructure", { factorWeights: { marketStructure: 1.5 } });
-  assertAlmostEquals(scale, 0.6, 0.001);
-});
-
-Deno.test("resolveWeightScale: returns 0 when factor disabled", () => {
-  const scale = resolveWeightScale("marketStructure", { factorWeights: { marketStructure: 0 } });
-  assertEquals(scale, 0);
-});
-
-Deno.test("applyWeightScale: scales points correctly", () => {
-  // marketStructure default weight = 2.5, so config 2.0 / 2.5 = 0.8 scale
-  const result = applyWeightScale(10, "marketStructure", 8, { factorWeights: { marketStructure: 2.0 } });
-  assertEquals(result.pts, 8); // 10 * 0.8
-  assertEquals(result.displayWeight, 6.4); // 8 * 0.8
-});
-
-Deno.test("applyWeightScale: zero weight zeroes out", () => {
-  const result = applyWeightScale(10, "orderBlock", 8, { factorWeights: { orderBlock: 0 } });
-  assertEquals(result.pts, 0);
-  assertEquals(result.displayWeight, 0);
-});
-
-Deno.test("applyWeightScale: no config returns original values", () => {
-  const result = applyWeightScale(10, "fairValueGap", 8, {});
-  assertEquals(result.pts, 10);
-  assertEquals(result.displayWeight, 8);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
 // SECTION 5: Output shape invariants
 // ═══════════════════════════════════════════════════════════════════════
-
-Deno.test("Output: score is always between 0 and 100", () => {
-  const candles = makeFixture();
-  const fixedTime = new Date("2024-06-10T10:00:00Z").getTime();
-  const result = runConfluenceAnalysis(candles, null, baseConfig, undefined, fixedTime);
-  assert(result.score >= 0, `Score ${result.score} < 0`);
-  assert(result.score <= 100, `Score ${result.score} > 100`);
-});
 
 Deno.test("Output: direction is always long, short, or null", () => {
   const candles = makeFixture();
@@ -251,22 +187,6 @@ Deno.test("Output: bias matches direction", () => {
   if (result.direction === "long") assertEquals(result.bias, "bullish");
   else if (result.direction === "short") assertEquals(result.bias, "bearish");
   else assertEquals(result.bias, "neutral");
-});
-
-Deno.test("Output: enabledMax > 0", () => {
-  const candles = makeFixture();
-  const result = runConfluenceAnalysis(candles, null, baseConfig);
-  assert(result.enabledMax > 0, `enabledMax should be > 0, got ${result.enabledMax}`);
-});
-
-Deno.test("Output: rawScore <= enabledMax", () => {
-  const candles = makeFixture();
-  const fixedTime = new Date("2024-06-10T10:00:00Z").getTime();
-  const result = runConfluenceAnalysis(candles, null, baseConfig, undefined, fixedTime);
-  assert(
-    result.rawScore <= result.enabledMax,
-    `rawScore (${result.rawScore}) > enabledMax (${result.enabledMax})`
-  );
 });
 
 Deno.test("Output: summary is a non-empty string", () => {
@@ -292,25 +212,25 @@ Deno.test("Output: factors array has consistent length across calls", () => {
 Deno.test("Edge: minimum candles (10) does not crash", () => {
   const candles = makeFixture().slice(0, 10);
   const result = runConfluenceAnalysis(candles, null, baseConfig);
-  assert(result.score >= 0);
+  assert(Array.isArray(result.factors));
   assert(result.factors.length > 0);
 });
 
 Deno.test("Edge: single candle does not crash", () => {
   const candles = makeFixture().slice(0, 1);
   const result = runConfluenceAnalysis(candles, null, baseConfig);
-  assert(result.score >= 0);
+  assert(Array.isArray(result.factors));
 });
 
 Deno.test("Edge: empty daily candles (null) does not crash", () => {
   const candles = makeFixture();
   const result = runConfluenceAnalysis(candles, null, baseConfig);
-  assert(result.score >= 0);
+  assert(Array.isArray(result.factors));
   assert(result.pdLevels === null);
 });
 
 Deno.test("Edge: empty daily candles (empty array) does not crash", () => {
   const candles = makeFixture();
   const result = runConfluenceAnalysis(candles, [], baseConfig);
-  assert(result.score >= 0);
+  assert(Array.isArray(result.factors));
 });

@@ -136,8 +136,8 @@ Deno.test("wiring: the scanner uses splitByLevel with the pair's pip size; no ex
 
 Deno.test("same level: refreshed in place — same order_id and signal_id, no status/expiry/hunt-state change, no insert", () => {
   const c = code(sameBlock);
-  assert(/\.update\(\{\s*signal_score: analysis\.score,\s*current_price: analysis\.lastPrice,\s*stop_loss: limitSL,\s*take_profit: limitTP,\s*size: limitSize,\s*\}\)/.test(c),
-    "the refresh writes exactly score, price, stop, target, size");
+  assert(/\.update\(\{\s*current_price: analysis\.lastPrice,\s*stop_loss: limitSL,\s*take_profit: limitTP,\s*size: limitSize,\s*\}\)/.test(c),
+    "the refresh writes exactly price, stop, target, size (there is no score)");
   assert(/\.in\("order_id", samePriceOrders\.map/.test(c), "updates the existing order_id(s)");
   const payload = c.slice(c.indexOf(".update({"), c.indexOf("})", c.indexOf(".update({")) + 2);
   for (const f of ["expires_at", "status", "signal_id", "order_id", "confirmation_", "zone_touch_time", "reset_reason", "placed_at", "entry_price"]) {

@@ -11,7 +11,6 @@ export interface StyleOverrides {
   confirmationTimeframe: string;
   tpRatio: number;
   slBufferPips: number;
-  confluenceThreshold: number; // percentage (0-100%)
   // Management defaults (user can override per-broker):
   trailingStopEnabled: boolean;
   trailingStopPips: number;
@@ -33,7 +32,6 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     confirmationTimeframe: "5m",
     tpRatio: 2.0,
     slBufferPips: 1,
-    confluenceThreshold: 40,
     trailingStopEnabled: false,        // validated: 5m noise cuts winners short
     trailingStopPips: 8,
     trailingStopActivation: "after_1r",
@@ -50,7 +48,6 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     confirmationTimeframe: "15m",
     tpRatio: 2.0,
     slBufferPips: 2,
-    confluenceThreshold: 55,
     trailingStopEnabled: true,        // trailing AFTER partial TP
     trailingStopPips: 15,             // minimum trail; proportional (0.5× SL) may be larger
     trailingStopActivation: "after_1.5r", // activates after partial TP at 1R + buffer
@@ -67,7 +64,6 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     confirmationTimeframe: "1h",
     tpRatio: 3.0,
     slBufferPips: 5,
-    confluenceThreshold: 40,          // validated: cascade selectivity is the real filter
     trailingStopEnabled: false,        // validated: BE/trailing killed XAU/USD wins
     trailingStopPips: 25,
     trailingStopActivation: "after_2r",

@@ -30,7 +30,6 @@
 import { decideDirection, buildDirectionConfig } from "../supabase/functions/_shared/smcDirectionDecision.ts";
 import { buildHtfContext } from "../supabase/functions/_shared/smcHtfContext.ts";
 import { decideZone, hasMinZoneCandles, buildHtfConfluence } from "../supabase/functions/_shared/smcZoneDecision.ts";
-import { runConfluenceAnalysis } from "../supabase/functions/_shared/confluenceScoring.ts";
 import type { Candle } from "../supabase/functions/_shared/smcAnalysis.ts";
 import { loadCorpus, PRODUCTION_UNIVERSE, WINDOWS, tradeableAt, isCrypto } from "./smc-corpus-fetch.ts";
 import { COSTS } from "./smc-zone-replay.ts";
@@ -39,7 +38,6 @@ import { COSTS } from "./smc-zone-replay.ts";
 const SCAN_INTERVAL_MIN = 5;
 const TP_RATIO = 2.0;
 const SL_CAP_MULT = 1.5;
-const MIN_CONFLUENCE = 40;   // live strategy.confluenceThreshold
 const MIN_ZONE_SCORE = 4;
 const MIN_SL_PIPS: Record<string, number> = {
   "EUR/USD": 20, "USD/JPY": 25, "GBP/USD": 25,
@@ -106,7 +104,7 @@ function atr14(c: Candle[]): number | null {
 
 export interface R2Cand {
   symbol: string; t: string; session: string; direction: "long" | "short";
-  zoneScore: number; confluence: number; zoneTF: string | null;
+  zoneScore: number; zoneTF: string | null;
   entryPrice: number; entrySource: "unified" | "refinedEntry" | "zoneMid";
   zoneLow: number; zoneHigh: number;
   lastPrice: number; distPips: number; distAtrH1: number | null; atrH1: number | null;
@@ -193,14 +191,7 @@ if (import.meta.main) {
       const zoneScore = Number(bz.totalScore ?? NaN);
       if (!(zoneScore >= MIN_ZONE_SCORE)) continue;
 
-      const conf = runConfluenceAnalysis(
-        s.candles, s.dailyCandles.length >= 10 ? s.dailyCandles : null,
-        { tradingStyle: { mode: "scalper" }, entryTimeframe: "5m",
-          minConfluence: MIN_CONFLUENCE, tpRatio: TP_RATIO },
-        s.hourlyCandles.length ? s.hourlyCandles : undefined, tMs,
-      ) as { score?: number };
-      const confluence = conf?.score ?? null;
-      if (!(confluence !== null && confluence >= MIN_CONFLUENCE)) continue;
+      // (The confluence score gate is gone: tier scoring was removed.)
 
       // ── Route 1 arming (bot-scanner:7395-7400). Armed => Route 1, not Route 2.
       const zh = Number(bz.high), zl = Number(bz.low), zw = zh - zl;
@@ -243,7 +234,7 @@ if (import.meta.main) {
 
       cands.push({
         symbol: sym, t: new Date(tMs).toISOString(), session: sessionOf(new Date(tMs).toISOString()),
-        direction, zoneScore, confluence, zoneTF: z.unified.selectedTF ?? null,
+        direction, zoneScore, zoneTF: z.unified.selectedTF ?? null,
         entryPrice, entrySource, zoneLow: zl, zoneHigh: zh,
         lastPrice, distPips: dist / pip, distAtrH1: a ? dist / a : null, atrH1: a,
         touchMin, windowComplete: tapeEnd - tMs >= WALK_CAP_MIN * 60_000,

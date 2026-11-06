@@ -358,7 +358,6 @@ function generateBearish1HCandles(): Candle[] {
 // ─── Mock Config (matches DEFAULTS shape) ───────────────────────────────────
 
 const TEST_CONFIG = {
-  minConfluence: 55,
   htfBiasRequired: true,
   htfBiasHardVeto: false,
   onlyBuyInDiscount: false,
@@ -395,7 +394,6 @@ const TEST_CONFIG = {
   scanIntervalMinutes: 15,
   cooldownMinutes: 0,
   closeOnReverse: false,
-  normalizedScoring: true,
   useSMT: false,
   smtOppositeVeto: false,
   useFOTSI: false,
@@ -483,8 +481,7 @@ Deno.test("E2E Pipeline — Stage 1: Confluence scoring produces valid analysis"
   const analysis = runConfluenceAnalysis(candles, dailyCandles, TEST_CONFIG, hourlyCandles);
 
   // Basic shape validation
-  assert(typeof analysis.score === "number", "Score must be a number");
-  assert(analysis.score >= 0 && analysis.score <= 100, `Score ${analysis.score} must be 0-100`);
+  assert(!("score" in analysis), "There is no confluence score");
   assert(analysis.factors.length > 0, "Must have factors");
   assert(analysis.structure !== null, "Must have structure analysis");
   assert(analysis.lastPrice > 0, "Must have a last price");
@@ -495,7 +492,7 @@ Deno.test("E2E Pipeline — Stage 1: Confluence scoring produces valid analysis"
   assert(analysis.structure.swingPoints.length > 0, "Must detect swing points");
   assert(analysis.structure.trend !== undefined, "Must determine trend");
 
-  console.log(`✅ Stage 1: Score=${analysis.score.toFixed(1)}%, Direction=${analysis.direction}, Trend=${analysis.structure.trend}, Factors=${analysis.factors.filter(f => f.present).length}/${analysis.factors.length}`);
+  console.log(`✅ Stage 1: Direction=${analysis.direction}, Trend=${analysis.structure.trend}, Factors=${analysis.factors.filter(f => f.present).length}/${analysis.factors.length}`);
 });
 
 Deno.test("E2E Pipeline — Stage 2: Direction engine determines bias from HTF candles", () => {
@@ -557,10 +554,6 @@ Deno.test("E2E Pipeline — Stage 3: Safety gates run without crashes (all-pass 
   const dayOfWeek = new Date("2026-05-20T10:00:00Z").getUTCDay(); // 3 = Wednesday
   const dayEnabled = TEST_CONFIG.enabledDays.includes(dayOfWeek);
   gates.push({ passed: dayEnabled, reason: `Day ${dayOfWeek} enabled: ${dayEnabled}` });
-
-  // Gate 9: Score threshold
-  const scorePass = analysis.score >= TEST_CONFIG.minConfluence;
-  gates.push({ passed: scorePass, reason: `Score ${analysis.score.toFixed(1)} vs threshold ${TEST_CONFIG.minConfluence}` });
 
   // Gate 10: R:R check
   if (analysis.stopLoss && analysis.takeProfit) {
@@ -731,9 +724,9 @@ Deno.test("E2E Pipeline — Stage 7: Full pipeline produces trade-ready output",
   const h4Candles = generateBearish4HCandles();
   const h1Candles = generateBearish1HCandles();
 
-  // Stage 1: Confluence scoring
+  // Stage 1: Confluence factors
   const analysis = runConfluenceAnalysis(candles, dailyCandles, TEST_CONFIG, h1Candles);
-  assert(analysis.score >= 0, "Score must be non-negative");
+  assert(analysis.factors.length > 0, "Must have factors");
 
   // Stage 2: Direction engine
   const direction = determineDirection(dailyCandles, h4Candles, h1Candles);
@@ -799,7 +792,7 @@ Deno.test("E2E Pipeline — Stage 7: Full pipeline produces trade-ready output",
     entryPrice: lastPrice,
     stopLoss: sl,
     takeProfit: tp,
-    score: analysis.score,
+    factorsPresent: analysis.factors.filter((f) => f.present).length,
     setupType: setupClassification.setupType,
     htfBias: direction.bias,
   };
@@ -808,7 +801,7 @@ Deno.test("E2E Pipeline — Stage 7: Full pipeline produces trade-ready output",
   assert(tradeOutput.entryPrice > 0, "Entry must be positive");
   assert(tradeOutput.stopLoss > 0, "SL must be positive");
   assert(tradeOutput.takeProfit > 0, "TP must be positive");
-  assert(tradeOutput.score >= 0, "Score must be non-negative");
+  assert(tradeOutput.factorsPresent >= 0, "Factor count must be non-negative");
 
   const risk = Math.abs(tradeOutput.entryPrice - tradeOutput.stopLoss);
   const reward = Math.abs(tradeOutput.takeProfit - tradeOutput.entryPrice);
@@ -822,7 +815,7 @@ Deno.test("E2E Pipeline — Stage 7: Full pipeline produces trade-ready output",
   console.log(`   TP: ${tradeOutput.takeProfit.toFixed(5)} (${(reward / spec.pipSize).toFixed(1)} pips)`);
   console.log(`   R:R: ${rr.toFixed(2)}`);
   console.log(`   Size: ${tradeOutput.size} lots`);
-  console.log(`   Score: ${tradeOutput.score.toFixed(1)}%`);
+  console.log(`   Factors present: ${tradeOutput.factorsPresent}`);
   console.log(`   Setup: ${tradeOutput.setupType}`);
   console.log(`   HTF Bias: ${tradeOutput.htfBias}`);
 });
@@ -926,7 +919,7 @@ Deno.test("E2E Pipeline — Regression: Confluence scoring is deterministic", ()
   const result1 = runConfluenceAnalysis(candles, dailyCandles, TEST_CONFIG);
   const result2 = runConfluenceAnalysis(candles, dailyCandles, TEST_CONFIG);
 
-  assertEquals(result1.score, result2.score, "Score must be deterministic");
+  assertEquals(result1.summary, result2.summary, "Summary must be deterministic");
   assertEquals(result1.direction, result2.direction, "Direction must be deterministic");
   assertEquals(result1.structure.trend, result2.structure.trend, "Trend must be deterministic");
   assertEquals(result1.factors.length, result2.factors.length, "Factor count must be deterministic");
@@ -938,7 +931,7 @@ Deno.test("E2E Pipeline — Regression: Confluence scoring is deterministic", ()
     assertEquals(result1.factors[i].weight, result2.factors[i].weight, `Factor ${i} weight must match`);
   }
 
-  console.log(`✅ Regression: Scoring is deterministic (score=${result1.score.toFixed(1)}%, ${result1.factors.filter(f => f.present).length} factors present)`);
+  console.log(`✅ Regression: Confluence factors are deterministic (${result1.factors.filter(f => f.present).length} factors present)`);
 });
 
 Deno.test("E2E Pipeline — Regression: Direction engine is deterministic", () => {

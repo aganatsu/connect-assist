@@ -7,7 +7,8 @@ const SRC = Deno.readTextFileSync(new URL("../../functions/bot-scanner/index.ts"
 
 Deno.test("gates: every gates.push carries a key (gateKey, or the pre-existing gateId), and every key is classified", () => {
   const pushes = [...SRC.matchAll(/gates\.push\(\{([^\n]*)/g)].map((m) => m[1]);
-  assert(pushes.length >= 87, `${pushes.length} gate pushes`);
+  // 87 before the confluence score / Tier 1 gate were removed (score: 2 pushes, tier1: 3).
+  assert(pushes.length >= 82, `${pushes.length} gate pushes`);
   const untagged = pushes.filter((p) => !/^\s*(gateId|gateKey): "/.test(p));
   assertEquals(untagged, [], "a gate without a key could never be classified");
   const ids = new Set(pushes.map((p) => /(?:gateId|gateKey): "([a-z_0-9]+)"/.exec(p)![1]));
@@ -20,12 +21,14 @@ Deno.test("gates: the owner's split — account / risk rules stay enforcing unde
     assertEquals(GATE_CLASS[id as keyof typeof GATE_CLASS], "risk", id);
     assert(!V3_LOGGED_ONLY_GATE_IDS.has(id), id);
   }
-  for (const id of ["score", "direction_verdict", "game_plan", "smt", "fotsi", "tier1", "regime", "news_event", "news_alignment", "premium_discount", "htf_bias", "kill_zone"]) {
+  for (const id of ["direction_verdict", "game_plan", "smt", "fotsi", "regime", "news_event", "news_alignment", "premium_discount", "htf_bias", "kill_zone"]) {
     assert(V3_LOGGED_ONLY_GATE_IDS.has(id), id);
   }
+  // The confluence-score and Tier 1 gates no longer exist.
+  assert(!("score" in GATE_CLASS) && !("tier1" in GATE_CLASS));
 });
 
 Deno.test("gates: the 4a keys never touch gateId — attribution gate names (classifyGate prefers gateId) and the log-only switches are unchanged", () => {
   const ids = [...SRC.matchAll(/gates\.push\(\{ gateId: "([a-z_0-9]+)"/g)].map((m) => m[1]);
-  assertEquals([...new Set(ids)].sort(), ["news_alignment", "news_event", "reaction", "rr_legacy", "score"]);
+  assertEquals([...new Set(ids)].sort(), ["news_alignment", "news_event", "reaction", "rr_legacy"]);
 });

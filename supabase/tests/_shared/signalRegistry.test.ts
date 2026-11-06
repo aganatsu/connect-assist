@@ -50,9 +50,10 @@ Deno.test("enabled-but-ignored is its own category", () => {
   // useless for the thing it was built for.
   assert(/return "ignored";/.test(panel), "the category exists");
   assert(/Runs, then the result is thrown away/.test(panel), "and is named plainly");
-  // hard -> rejects, soft -> scores, anything else -> ignored
+  // hard -> rejects, anything else -> ignored. A stored "soft" is ignored too:
+  // the scanner runs it as off (hardOrOff) now the score it moved is gone.
   assert(/if \(gate === "hard"\) return "rejects";/.test(panel));
-  assert(/if \(gate === "soft"\) return "scores";/.test(panel));
+  assert(!/"scores"/.test(panel), "no score-only category: there is no score");
 });
 
 Deno.test("the observational entries are still observational", () => {

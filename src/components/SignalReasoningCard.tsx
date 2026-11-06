@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
+import { FactorBreakdown, type FactorItem } from "./FactorBreakdown";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -12,19 +12,8 @@ interface ParsedSummary {
   direction: "BUY" | "SELL" | null;
   factorCount: number | null;
   total: number | null;
-  score: number | null;
   alignedFactors: string[];
   extraContext: string[];
-}
-
-/** Shape of each factor saved in signal_reason.factorScores */
-interface FactorScore {
-  name: string;
-  present: boolean;
-  weight: number;
-  detail?: string;
-  group?: string;
-  tier?: number;
 }
 
 // ─── Summary text parser ────────────────────────────────────────────
@@ -34,7 +23,6 @@ function parseSummary(summary: string): ParsedSummary {
     direction: null,
     factorCount: null,
     total: null,
-    score: null,
     alignedFactors: [],
     extraContext: [],
   };
@@ -47,15 +35,6 @@ function parseSummary(summary: string): ParsedSummary {
   if (factorMatch) {
     result.factorCount = parseInt(factorMatch[1], 10);
     result.total = parseInt(factorMatch[2], 10);
-  }
-
-  // Try percentage format first (new), then legacy /10 format
-  const pctMatch = summary.match(/score:\s*([\d.]+)%/i);
-  if (pctMatch) {
-    result.score = parseFloat(pctMatch[1]);
-  } else {
-    const scoreMatch = summary.match(/score:\s*([\d.]+)\/10/i);
-    if (scoreMatch) result.score = parseFloat(scoreMatch[1]);
   }
 
   // Split off after first ". " — that's where factor list starts
@@ -95,7 +74,7 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
   const s = parseSummary(summaryText);
 
   // Fallback: nothing parseable
-  if (!s.direction && !s.factorCount && !s.score) {
+  if (!s.direction && !s.factorCount) {
     if (compact) {
       return (
         <span className="text-[10px] text-muted-foreground font-mono truncate inline-block max-w-full">
@@ -123,19 +102,15 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
       <span className={`text-[10px] font-mono ${dirColor}`}>
         {s.direction ?? "—"}
         {s.factorCount !== null ? ` · ${s.factorCount} factors` : ""}
-        {s.score !== null ? ` (${s.score > 10 ? `${s.score.toFixed(1)}%` : s.score})` : ""}
       </span>
     );
   }
 
   // Check for factor data
-  const factorScores: FactorScore[] | null =
+  const factorScores: FactorItem[] | null =
     Array.isArray(parsed?.factorScores) && parsed.factorScores.length > 0
       ? parsed.factorScores
       : null;
-
-  // Extract tieredScoring metadata if available
-  const tieredScoring: TieredScoringMeta | null = parsed?.tieredScoring ?? null;
 
   const setupType: string | null = parsed?.setupType ?? null;
   const setupConfidence: number | null = parsed?.setupConfidence ?? null;
@@ -206,20 +181,16 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
             {s.direction}
           </span>
         )}
-        {s.score !== null && (
-          <span className={`font-mono font-bold text-[11px] ${dirColor}`}>{s.score > 10 ? `${s.score.toFixed(1)}%` : `${s.score}/10`}</span>
-        )}
         {s.factorCount !== null && s.total !== null && (
           <span className="text-[9px] text-muted-foreground font-mono">
             {s.factorCount} factors aligned{s.total ? ` (of ${s.total})` : ""}
           </span>
         )}
-        {tieredScoring && <TierScoreSummary tieredScoring={tieredScoring} />}
       </div>
 
-      {/* ── Tier-Grouped Factor Breakdown ── */}
+      {/* ── Factor Breakdown ── */}
       {factorScores && factorScores.length > 0 ? (
-        <TierFactorBreakdown factors={factorScores} tieredScoring={tieredScoring} />
+        <FactorBreakdown factors={factorScores} />
       ) : (
         /* ── LEGACY: Aligned factor chips from summary text ── */
         s.alignedFactors.length > 0 && (

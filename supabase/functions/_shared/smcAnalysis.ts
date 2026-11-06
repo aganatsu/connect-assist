@@ -325,11 +325,11 @@ export const SMT_PAIRS: Record<string, string> = {
   "BTC/USD": "ETH/USD", "ETH/USD": "BTC/USD",
 };
 
-export const ASSET_PROFILES: Record<string, { slBufferMultiplier: number; proximityMultiplier: number; skipSessionGate: boolean; minConfluenceAdj: number }> = {
-  forex:     { slBufferMultiplier: 1.0, proximityMultiplier: 1.0, skipSessionGate: false, minConfluenceAdj: 0 },
-  index:     { slBufferMultiplier: 3.0, proximityMultiplier: 2.0, skipSessionGate: false, minConfluenceAdj: 0 },
-  commodity: { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: false, minConfluenceAdj: 0 },
-  crypto:    { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: true,  minConfluenceAdj: 0 },
+export const ASSET_PROFILES: Record<string, { slBufferMultiplier: number; proximityMultiplier: number; skipSessionGate: boolean }> = {
+  forex:     { slBufferMultiplier: 1.0, proximityMultiplier: 1.0, skipSessionGate: false },
+  index:     { slBufferMultiplier: 3.0, proximityMultiplier: 2.0, skipSessionGate: false },
+  commodity: { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: false },
+  crypto:    { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: true },
 };
 
 export function getAssetProfile(symbol: string) {
@@ -339,9 +339,9 @@ export function getAssetProfile(symbol: string) {
 }
 
 export const STYLE_OVERRIDES: Record<string, any> = {
-  scalper: { entryTimeframe: "5m", htfTimeframe: "1h", tpRatio: 1.5, slBufferPips: 1, minConfluence: 45 },
-  day_trader: { entryTimeframe: "15min", htfTimeframe: "1day", tpRatio: 2.0, slBufferPips: 2, minConfluence: 55 },
-  swing_trader: { entryTimeframe: "1h", htfTimeframe: "1w", tpRatio: 3.0, slBufferPips: 5, minConfluence: 65 },
+  scalper: { entryTimeframe: "5m", htfTimeframe: "1h", tpRatio: 1.5, slBufferPips: 1 },
+  day_trader: { entryTimeframe: "15min", htfTimeframe: "1day", tpRatio: 2.0, slBufferPips: 2 },
+  swing_trader: { entryTimeframe: "1h", htfTimeframe: "1w", tpRatio: 3.0, slBufferPips: 5 },
 };
 
 export const DEFAULTS = {
@@ -349,7 +349,6 @@ export const DEFAULTS = {
   htfTimeframe: "1day",
   htfBiasRequired: true,
   htfBiasHardVeto: false,
-  minConfluence: 55,
   onlyBuyInDiscount: true,
   onlySellInPremium: true,
   riskPerTrade: 1,
@@ -395,7 +394,6 @@ export const DEFAULTS = {
   killZoneOnly: false,
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
-  // Legacy minFactorCount removed — single percentage threshold (minConfluence) only
   useSMT: true,
   useVolumeProfile: true,
   useTrendDirection: true,
@@ -403,7 +401,6 @@ export const DEFAULTS = {
   useAMD: true,
   useFOTSI: true,
   regimeScoringEnabled: true,
-  regimeScoringStrength: 1.0,
   obLookbackCandles: 50,
   fvgMinSizePips: 0,
   fvgOnlyUnfilled: true,

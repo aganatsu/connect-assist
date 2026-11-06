@@ -4,12 +4,11 @@
  * Verifies:
  * 1. dolTPExtensionEnabled toggle gates DOL target passing in confluenceScoring
  * 2. ipdaRangesEnabled toggle gates IPDA computation in gamePlan
- * 3. Factor 25 (gamePlanKeyLevel) exists in DEFAULT_FACTOR_WEIGHTS
- * 4. Backward compatibility: toggles default to ON (existing behavior unchanged)
+ * 3. Backward compatibility: toggles default to ON (existing behavior unchanged)
  */
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { DEFAULT_FACTOR_WEIGHTS, runConfluenceAnalysis } from "./confluenceScoring.ts";
+import { runConfluenceAnalysis } from "./confluenceScoring.ts";
 import { generateInstrumentGamePlan } from "./gamePlan.ts";
 import { Candle, SPECS } from "./smcAnalysis.ts";
 
@@ -72,13 +71,6 @@ function makeEntryCandles(count: number, basePrice = 1.0800): Candle[] {
   return candles;
 }
 
-// ─── Test: Factor 25 exists in DEFAULT_FACTOR_WEIGHTS ────────────────────────
-
-Deno.test("Factor 25: gamePlanKeyLevel exists in DEFAULT_FACTOR_WEIGHTS with weight 1.0", () => {
-  assert("gamePlanKeyLevel" in DEFAULT_FACTOR_WEIGHTS, "gamePlanKeyLevel should be in DEFAULT_FACTOR_WEIGHTS");
-  assertEquals(DEFAULT_FACTOR_WEIGHTS.gamePlanKeyLevel, 1.0, "gamePlanKeyLevel default weight should be 1.0");
-});
-
 // ─── Test: dolTPExtensionEnabled toggle ──────────────────────────────────────
 
 Deno.test("dolTPExtensionEnabled: when false, DOL targets are NOT passed to calculateSLTP", () => {
@@ -94,8 +86,6 @@ Deno.test("dolTPExtensionEnabled: when false, DOL targets are NOT passed to calc
     slBufferPips: 2,
     fixedSLPips: 25,
     fixedTPPips: 50,
-    minConfluence: 0, // allow any score
-    normalizedScoring: true,
     dolTPExtensionEnabled: false,
     _gamePlanContext: {
       bias: "bullish",
@@ -110,7 +100,6 @@ Deno.test("dolTPExtensionEnabled: when false, DOL targets are NOT passed to calc
       isFocusPair: true,
     },
     _currentSymbol: "EUR/USD",
-    factorWeights: {},
   };
 
   const configEnabled = {
@@ -150,12 +139,9 @@ Deno.test("dolTPExtensionEnabled: defaults to true (backward compat)", () => {
     slBufferPips: 2,
     fixedSLPips: 25,
     fixedTPPips: 50,
-    minConfluence: 0,
-    normalizedScoring: true,
     // dolTPExtensionEnabled NOT set — should default to true
     _gamePlanContext: null,
     _currentSymbol: "EUR/USD",
-    factorWeights: {},
   };
 
   const candles = makeEntryCandles(100);

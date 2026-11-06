@@ -7,9 +7,9 @@
  *
  * Key invariants:
  *   1. null/undefined input → RUNTIME_DEFAULTS
- *   2. Current UI field names map correctly (e.g. confluenceThreshold → minConfluence)
- *   3. Legacy DB field names still work (e.g. minConfluenceScore → minConfluence)
- *   4. Legacy 0-10 values auto-scale to percentage when normalizedScoring=true
+ *   2. Current UI field names map correctly (e.g. risk.maxDailyDrawdown → maxDailyLoss)
+ *   3. Legacy DB field names still work (e.g. strategy.htfBiasRequired)
+ *   4. Removed confluence-score / tier / watchlist keys are ignored if still stored
  *   5. Session normalization (sydney → offhours, etc.)
  *   6. Active days conversion ({mon:true,...} → [1,2,...])
  *   7. All ICT 2022 fields map through
@@ -33,25 +33,21 @@ import {
 
 Deno.test("mapNestedToFlat: null input returns RUNTIME_DEFAULTS", () => {
   const result = mapNestedToFlat(null);
-  assertEquals(result.minConfluence, RUNTIME_DEFAULTS.minConfluence);
   assertEquals(result.htfBiasRequired, RUNTIME_DEFAULTS.htfBiasRequired);
   assertEquals(result.instruments, RUNTIME_DEFAULTS.instruments);
   assertEquals(result.enabledSessions, RUNTIME_DEFAULTS.enabledSessions);
   assertEquals(result.ictHTFEnabled, RUNTIME_DEFAULTS.ictHTFEnabled);
   assertEquals(result.limitOrderEnabled, RUNTIME_DEFAULTS.limitOrderEnabled);
-  assertEquals(result.stagingEnabled, RUNTIME_DEFAULTS.stagingEnabled);
   assertEquals(result.regimeAdaptiveTPEnabled, RUNTIME_DEFAULTS.regimeAdaptiveTPEnabled);
 });
 
 Deno.test("mapNestedToFlat: undefined input returns RUNTIME_DEFAULTS", () => {
   const result = mapNestedToFlat(undefined);
-  assertEquals(result.minConfluence, 55);
   assertEquals(result.impulseZoneGateMode, "hard");
 });
 
 Deno.test("mapNestedToFlat: empty object returns RUNTIME_DEFAULTS", () => {
   const result = mapNestedToFlat({});
-  assertEquals(result.minConfluence, RUNTIME_DEFAULTS.minConfluence);
   assertEquals(result.enableOB, true);
   assertEquals(result.enableFVG, true);
   assertEquals(result.ictHTFEnabled, true);
@@ -59,11 +55,17 @@ Deno.test("mapNestedToFlat: empty object returns RUNTIME_DEFAULTS", () => {
 
 // ─── Test 2: Current UI field names ─────────────────────────────────
 
-Deno.test("mapNestedToFlat: current UI strategy.confluenceThreshold maps to minConfluence", () => {
+Deno.test("mapNestedToFlat: removed score / tier / watchlist / weight keys are ignored if still stored", () => {
   const result = mapNestedToFlat({
-    strategy: { confluenceThreshold: 65 },
-  });
-  assertEquals(result.minConfluence, 65);
+    strategy: { confluenceThreshold: 65, minConfluenceScore: 6.5, normalizedScoring: true, tier1GateEnabled: false,
+      minTier1Factors: 2, tier1RequireAtPOI: true, stagingEnabled: true, watchThreshold: 30, impulseZonePenalty: 2, impulseZoneBonus: 1 },
+    factorWeights: { orderBlock: 0 },
+    minConfluence: 70,
+  }) as Record<string, unknown>;
+  for (const k of ["minConfluence", "normalizedScoring", "tier1GateEnabled", "minTier1Factors", "tier1RequireAtPOI",
+    "stagingEnabled", "watchThreshold", "stagingTTLMinutes", "minStagingCycles", "factorWeights", "impulseZonePenalty", "impulseZoneBonus"]) {
+    assertEquals(k in result, false, `${k} must not be mapped`);
+  }
 });
 
 Deno.test("mapNestedToFlat: current UI risk.maxDailyDrawdown maps to maxDailyLoss", () => {
@@ -103,14 +105,6 @@ Deno.test("mapNestedToFlat: current UI strategy.requireHTFBias maps to htfBiasRe
 
 // ─── Test 3: Legacy DB field names ──────────────────────────────────
 
-Deno.test("mapNestedToFlat: legacy minConfluenceScore maps to minConfluence (with auto-scale)", () => {
-  const result = mapNestedToFlat({
-    strategy: { minConfluenceScore: 6.5 },
-  });
-  // 6.5 is in 0-10 range → auto-scaled to 65
-  assertEquals(result.minConfluence, 65);
-});
-
 Deno.test("mapNestedToFlat: legacy htfBiasRequired at strategy level", () => {
   const result = mapNestedToFlat({
     strategy: { htfBiasRequired: false },
@@ -118,42 +112,7 @@ Deno.test("mapNestedToFlat: legacy htfBiasRequired at strategy level", () => {
   assertEquals(result.htfBiasRequired, false);
 });
 
-Deno.test("mapNestedToFlat: legacy top-level raw.minConfluence (already percentage)", () => {
-  const result = mapNestedToFlat({
-    minConfluence: 70,
-  });
-  assertEquals(result.minConfluence, 70);
-});
-
 // ─── Test 4: Auto-scaling legacy 0-10 → percentage ─────────────────
-
-Deno.test("mapNestedToFlat: value 5.5 auto-scales to 55 when normalizedScoring=true", () => {
-  const result = mapNestedToFlat({
-    strategy: { confluenceThreshold: 5.5, normalizedScoring: true },
-  });
-  assertEquals(result.minConfluence, 55);
-});
-
-Deno.test("mapNestedToFlat: value 10 auto-scales to 100 when normalizedScoring=true", () => {
-  const result = mapNestedToFlat({
-    strategy: { confluenceThreshold: 10 },
-  });
-  assertEquals(result.minConfluence, 100);
-});
-
-Deno.test("mapNestedToFlat: value 55 stays 55 (already percentage, > 10)", () => {
-  const result = mapNestedToFlat({
-    strategy: { confluenceThreshold: 55 },
-  });
-  assertEquals(result.minConfluence, 55);
-});
-
-Deno.test("mapNestedToFlat: value 0 stays 0 (edge case, no scaling)", () => {
-  const result = mapNestedToFlat({
-    strategy: { confluenceThreshold: 0 },
-  });
-  assertEquals(result.minConfluence, 0);
-});
 
 // ─── Test 5: Session normalization ──────────────────────────────────
 
@@ -216,15 +175,11 @@ Deno.test("mapNestedToFlat: ICT HTF fields from strategy section", () => {
     strategy: {
       ictHTFEnabled: false,
       ictHTFGateMode: "hard",
-      ictHTFAlignedBonus: 3.0,
-      ictHTFMisalignedPenalty: 5.0,
       ictHTFMinContainment: 70,
     },
   });
   assertEquals(result.ictHTFEnabled, false);
   assertEquals(result.ictHTFGateMode, "hard");
-  assertEquals(result.ictHTFAlignedBonus, 3.0);
-  assertEquals(result.ictHTFMisalignedPenalty, 5.0);
   assertEquals(result.ictHTFMinContainment, 70);
 });
 
@@ -236,15 +191,13 @@ Deno.test("mapNestedToFlat: ICT Displacement MSS fields", () => {
       ictDisplacementMSSMinBodyRatio: 0.7,
       ictDisplacementMSSMinRangeATR: 1.5,
       ictDisplacementMSSLookback: 5,
-      ictDisplacementMSSPenalty: 3.0,
     },
   });
   assertEquals(result.ictDisplacementMSSEnabled, false);
-  assertEquals(result.ictDisplacementMSSGateMode, "soft");
+  assertEquals(result.ictDisplacementMSSGateMode, "off", "a stored legacy \"soft\" reads as off");
   assertAlmostEquals(result.ictDisplacementMSSMinBodyRatio, 0.7);
   assertAlmostEquals(result.ictDisplacementMSSMinRangeATR, 1.5);
   assertEquals(result.ictDisplacementMSSLookback, 5);
-  assertEquals(result.ictDisplacementMSSPenalty, 3.0);
 });
 
 Deno.test("mapNestedToFlat: ICT Judas Swing fields", () => {
@@ -255,7 +208,6 @@ Deno.test("mapNestedToFlat: ICT Judas Swing fields", () => {
       ictJudasSwingLookback: 15,
       ictJudasSwingMinDepthATR: 0.2,
       ictJudasSwingRequireCloseBack: false,
-      ictJudasSwingPenalty: 2.5,
     },
   });
   assertEquals(result.ictJudasSwingEnabled, false);
@@ -263,7 +215,6 @@ Deno.test("mapNestedToFlat: ICT Judas Swing fields", () => {
   assertEquals(result.ictJudasSwingLookback, 15);
   assertAlmostEquals(result.ictJudasSwingMinDepthATR, 0.2);
   assertEquals(result.ictJudasSwingRequireCloseBack, false);
-  assertEquals(result.ictJudasSwingPenalty, 2.5);
 });
 
 Deno.test("mapNestedToFlat: ICT FVG Invalidation fields", () => {
@@ -273,16 +224,12 @@ Deno.test("mapNestedToFlat: ICT FVG Invalidation fields", () => {
       ictFVGInvalidationGateMode: "soft",
       ictFVGBodyCloseOnly: false,
       ictFVGRuleOfTwo: false,
-      ictFVGExhaustedPenalty: 2.0,
-      ictFVGInvalidatedPenalty: 4.0,
     },
   });
   assertEquals(result.ictFVGInvalidationEnabled, false);
-  assertEquals(result.ictFVGInvalidationGateMode, "soft");
+  assertEquals(result.ictFVGInvalidationGateMode, "off", "a stored legacy \"soft\" reads as off");
   assertEquals(result.ictFVGBodyCloseOnly, false);
   assertEquals(result.ictFVGRuleOfTwo, false);
-  assertEquals(result.ictFVGExhaustedPenalty, 2.0);
-  assertEquals(result.ictFVGInvalidatedPenalty, 4.0);
 });
 
 Deno.test("mapNestedToFlat: ICT Kill Zone fields", () => {
@@ -292,16 +239,12 @@ Deno.test("mapNestedToFlat: ICT Kill Zone fields", () => {
       ictKillZoneGateMode: "hard",
       ictKillZoneSilverBullet: false,
       ictKillZonePMSession: false,
-      ictKillZoneOutsidePenalty: 2.0,
-      ictKillZonePrimeBonus: 3.0,
     },
   });
   assertEquals(result.ictKillZoneEnabled, false);
   assertEquals(result.ictKillZoneGateMode, "hard");
   assertEquals(result.ictKillZoneSilverBullet, false);
   assertEquals(result.ictKillZonePMSession, false);
-  assertEquals(result.ictKillZoneOutsidePenalty, 2.0);
-  assertEquals(result.ictKillZonePrimeBonus, 3.0);
 });
 
 Deno.test("mapNestedToFlat: ICT Risk Management fields", () => {
@@ -535,12 +478,10 @@ Deno.test("mapNestedToFlat: full realistic config from BotConfigModal", () => {
   const result = mapNestedToFlat(fullConfig);
 
   // Strategy
-  assertEquals(result.minConfluence, 55);
   assertEquals(result.htfBiasRequired, true);
   assertEquals(result.enableOB, true);
   assertEquals(result.impulseZoneGateMode, "hard");
   assertEquals(result.ictHTFGateMode, "off");
-  assertEquals(result.normalizedScoring, true);
 
   // Risk
   assertEquals(result.riskPerTrade, 1);
@@ -567,26 +508,9 @@ Deno.test("mapNestedToFlat: full realistic config from BotConfigModal", () => {
   assertEquals(result.maxConsecutiveLosses, 3);
   assertEquals(result.protectionMaxDailyLossDollar, 500);
 
-  // Factor weights
-  assertEquals(result.factorWeights, { orderBlock: 1.2, fvg: 1.0 });
 });
 
 // ─── Test 14: Staging / Watchlist fields ────────────────────────────
-
-Deno.test("mapNestedToFlat: staging fields from strategy section", () => {
-  const result = mapNestedToFlat({
-    strategy: {
-      stagingEnabled: false,
-      watchThreshold: 30,
-      stagingTTLMinutes: 120,
-      minStagingCycles: 2,
-    },
-  });
-  assertEquals(result.stagingEnabled, false);
-  assertEquals(result.watchThreshold, 30);
-  assertEquals(result.stagingTTLMinutes, 120);
-  assertEquals(result.minStagingCycles, 2);
-});
 
 // ─── Test 15: Confirmed Trend fields ───────────────────────────────
 

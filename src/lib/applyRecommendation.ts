@@ -83,8 +83,6 @@ function resolveConfigPath(key: string): string | null {
     "maxPerSymbol": "risk.maxPerSymbol",
     "maxPositionsPerSymbol": "risk.maxPositionsPerSymbol",
     "fixedLotSize": "risk.fixedLotSize",
-    "confluenceThreshold": "strategy.confluenceThreshold",
-    "tier1Minimum": "strategy.tier1Minimum",
     "instrument_filter": "instruments",
     "excluded_instruments": "excludedInstruments",
     "newYorkEnd": "sessions.newYorkEnd",
@@ -131,7 +129,6 @@ function resolveConfigPath(key: string): string | null {
     "positionSizingMethod": "risk.positionSizingMethod",
     "allowSameDirectionStacking": "risk.allowSameDirectionStacking",
     "conflictBlockAt": "risk.conflictBlockAt",
-    "conflictThresholdRaise": "risk.conflictThresholdRaise",
     "atrVolatilityMultiplier": "risk.atrVolatilityMultiplier",
     // Instruments (advanced)
     "correlationFilterEnabled": "instruments.correlationFilterEnabled",
@@ -139,10 +136,8 @@ function resolveConfigPath(key: string): string | null {
     // Strategy
     "structureLookback": "strategy.structureLookback",
     "regimeScoringEnabled": "strategy.regimeScoringEnabled",
-    "regimeScoringStrength": "strategy.regimeScoringStrength",
     "htfBiasHardVeto": "strategy.htfBiasHardVeto",
     "requireHTFBias": "strategy.requireHTFBias",
-    "normalizedScoring": "strategy.normalizedScoring",
     "onlyBuyInDiscount": "strategy.onlyBuyInDiscount",
     "onlySellInPremium": "strategy.onlySellInPremium",
     "useOrderBlocks": "strategy.useOrderBlocks",
@@ -172,46 +167,6 @@ function resolveConfigPath(key: string): string | null {
   // Bare factor name → strategy toggle. If map already includes "strategy.", use as-is.
   const toggle = FACTOR_TOGGLE_MAP[key];
   if (toggle) return toggle.includes(".") ? toggle : `strategy.${toggle}`;
-
-  // Display-name → camelCase config key map for factor weights
-  const WEIGHT_KEY_MAP: Record<string, string> = {
-    "Market Structure": "marketStructure", "Order Block": "orderBlock",
-    "Fair Value Gap": "fairValueGap", "Premium/Discount & Fib": "premiumDiscountFib",
-    "Premium/Discount": "premiumDiscountFib",
-    "Session Quality": "sessionQuality",
-    "Session/Kill Zone": "sessionQuality",  // legacy alias
-    "Judas Swing": "judasSwing", "PD/PW Levels": "pdPwLevels",
-    "Reversal Candle": "reversalCandle", "Liquidity Sweep": "liquiditySweep",
-    "Displacement": "displacement", "Breaker Block": "breakerBlock",
-    "Unicorn Model": "unicornModel",
-    "Silver Bullet": "sessionQuality",  // legacy alias
-    "Macro Window": "sessionQuality",  // legacy alias
-    "Spread Quality": "spreadQuality",
-    "SMT Divergence": "smtDivergence",
-    "Volume Profile": "volumeProfile", "AMD Phase": "amdPhase",
-    "Currency Strength": "currencyStrength", "Trend Direction": "trendDirection",
-    "Daily Bias": "dailyBias",
-    "HTF POI Alignment": "htfPoiAlignment",
-    "HTF Fib + PD + Liquidity": "htfFibPdLiquidity",
-    "Confluence Stack": "confluenceStack",
-    "Pullback Health": "pullbackHealth",
-    "Game Plan Key Level": "gamePlanKeyLevel",
-    "Session Affinity": "sessionAffinity",
-  };
-  // Set of valid camelCase factor keys (the values of WEIGHT_KEY_MAP)
-  const KNOWN_FACTOR_KEYS = new Set(Object.values(WEIGHT_KEY_MAP));
-
-  // "<Factor>_weight" — display-name or camelCase with explicit suffix
-  if (/_weight$/.test(key)) {
-    const factorName = key.replace(/_weight$/, "");
-    const configKey = WEIGHT_KEY_MAP[factorName] || factorName;
-    return `factorWeights.${configKey}`;
-  }
-
-  // Bare camelCase factor key (e.g. "breakerBlock") → factorWeights.<key>
-  if (KNOWN_FACTOR_KEYS.has(key)) {
-    return `factorWeights.${key}`;
-  }
 
   return null;
 }
@@ -260,13 +215,10 @@ export function applyRecommendationToConfig(
 
     // Type-safety guard: never overwrite a string config (e.g. time "21:00") with
     // a boolean/number, and never overwrite a number with a non-numeric string.
-    // Exception: factorWeights paths allow "default" (string sentinel) → number replacement.
     if (from !== undefined && from !== null) {
       const fromType = typeof from;
       const newType = typeof newVal;
-      const isFactorWeightPath = path.startsWith("factorWeights.");
-      const isSentinelReplacement = isFactorWeightPath && from === "default" && newType === "number";
-      if (fromType !== newType && !isSentinelReplacement) {
+      if (fromType !== newType) {
         skipped.push({
           key,
           reason: `type mismatch: existing ${fromType} (${JSON.stringify(from)}), suggested ${newType} (${JSON.stringify(newVal)})`,

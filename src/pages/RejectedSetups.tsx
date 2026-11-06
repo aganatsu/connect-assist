@@ -33,9 +33,6 @@ interface RejectedSetup {
   direction: string;
   rejection_type: string;
   failed_gates: string[] | null;
-  confluence_score: number;
-  tier1_count: number;
-  tier1_factors: string[] | null;
   entry_price: number;
   stop_loss: number | null;
   take_profit: number | null;
@@ -124,12 +121,11 @@ function computeStats(setups: RejectedSetup[]) {
   const winnerBlockRate = resolved.length > 0 ? (winners.length / resolved.length) * 100 : 0;
   const avgMfe = resolved.length > 0 ? resolved.reduce((sum, s) => sum + rawPipsToDisplay(s.mfe_pips || 0, s.symbol), 0) / resolved.length : 0;
   const avgMae = resolved.length > 0 ? resolved.reduce((sum, s) => sum + rawPipsToDisplay(s.mae_pips || 0, s.symbol), 0) / resolved.length : 0;
-  const avgScore = setups.length > 0 ? setups.reduce((sum, s) => sum + s.confluence_score, 0) / setups.length : 0;
   const entryReachedRate = resolved.length > 0
     ? (resolved.filter(s => s.price_reached_entry).length / resolved.length) * 100
     : 0;
 
-  return { total: setups.length, resolved: resolved.length, winners: winners.length, losers: losers.length, winnerBlockRate, avgMfe, avgMae, avgScore, entryReachedRate };
+  return { total: setups.length, resolved: resolved.length, winners: winners.length, losers: losers.length, winnerBlockRate, avgMfe, avgMae, entryReachedRate };
 }
 
 // ── Gate Breakdown ──
@@ -169,10 +165,6 @@ function shortenGateLabel(gate: string): string {
   if (gate.startsWith("Selling in discount zone")) return "P/D Zone Rejection";
   if (gate.startsWith("Buying in premium zone")) return "P/D Zone Rejection";
   if (gate.includes("SMT divergence opposite")) return "SMT Divergence";
-  if (gate.includes("threshold")) {
-    const match = gate.match(/Score ([\d.]+) < (\d+)/);
-    return match ? `Score < ${match[2]}` : "Below Threshold";
-  }
   if (gate.length > 30) return gate.slice(0, 27) + "...";
   return gate;
 }
@@ -221,7 +213,6 @@ export default function RejectedSetups() {
       { metric: "Winner-Block Rate (%)", value: stats.winnerBlockRate.toFixed(2) },
       { metric: "Avg MFE (pips)", value: stats.avgMfe.toFixed(2) },
       { metric: "Avg MAE (pips)", value: stats.avgMae.toFixed(2) },
-      { metric: "Avg Confluence Score", value: stats.avgScore.toFixed(2) },
       { metric: "Entry Reached Rate (%)", value: stats.entryReachedRate.toFixed(2) },
     ];
     downloadFile(`rejected-summary-${tsStamp()}.csv`, toCSV(rows), "text/csv");
@@ -230,24 +221,7 @@ export default function RejectedSetups() {
   const downloadOverview = () => {
     const outcome = outcomeDistribution.map((o) => ({ section: "outcome_distribution", name: o.name, value: o.value }));
     const daily = dailyTrend.map((d) => ({ section: "daily_trend", date: d.date, total: d.total, would_won: d.wouldWon, would_lost: d.wouldLost }));
-    const scoreBuckets = (() => {
-      const buckets = [
-        { range: "30-40", won: 0, lost: 0 },
-        { range: "40-50", won: 0, lost: 0 },
-        { range: "50-60", won: 0, lost: 0 },
-        { range: "60-70", won: 0, lost: 0 },
-        { range: "70-80", won: 0, lost: 0 },
-        { range: "80+", won: 0, lost: 0 },
-      ];
-      for (const s of setups) {
-        const score = s.confluence_score;
-        const idx = score < 40 ? 0 : score < 50 ? 1 : score < 60 ? 2 : score < 70 ? 3 : score < 80 ? 4 : 5;
-        if (s.outcome_status === "would_have_won") buckets[idx].won++;
-        if (s.outcome_status === "would_have_lost") buckets[idx].lost++;
-      }
-      return buckets.map((b) => ({ section: "score_distribution", range: b.range, won: b.won, lost: b.lost }));
-    })();
-    downloadFile(`rejected-overview-${tsStamp()}.csv`, toCSV([...outcome, ...daily, ...scoreBuckets]), "text/csv");
+    downloadFile(`rejected-overview-${tsStamp()}.csv`, toCSV([...outcome, ...daily]), "text/csv");
   };
 
   const downloadGates = () => {
@@ -267,9 +241,6 @@ export default function RejectedSetups() {
       symbol: s.symbol,
       direction: s.direction,
       rejection_type: s.rejection_type,
-      confluence_score: s.confluence_score,
-      tier1_count: s.tier1_count,
-      tier1_factors: s.tier1_factors,
       failed_gates: s.failed_gates,
       entry_price: s.entry_price,
       stop_loss: s.stop_loss,
@@ -509,44 +480,6 @@ export default function RejectedSetups() {
               </Card>
             </div>
 
-            {/* Score Distribution */}
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <CardTitle className="text-sm font-medium">Confluence Score vs Outcome</CardTitle>
-              </CardHeader>
-              <CardContent className="px-2 pb-3">
-                {setups.length > 0 ? (
-                  <ChartContainer config={{ won: { label: "Would Have Won", color: "#22c55e" }, lost: { label: "Would Have Lost", color: "#ef4444" } }} className="h-[200px] w-full">
-                    <BarChart data={(() => {
-                      const buckets = [
-                        { range: "30-40", won: 0, lost: 0 },
-                        { range: "40-50", won: 0, lost: 0 },
-                        { range: "50-60", won: 0, lost: 0 },
-                        { range: "60-70", won: 0, lost: 0 },
-                        { range: "70-80", won: 0, lost: 0 },
-                        { range: "80+", won: 0, lost: 0 },
-                      ];
-                      for (const s of setups) {
-                        const score = s.confluence_score;
-                        let idx = score < 40 ? 0 : score < 50 ? 1 : score < 60 ? 2 : score < 70 ? 3 : score < 80 ? 4 : 5;
-                        if (s.outcome_status === "would_have_won") buckets[idx].won++;
-                        if (s.outcome_status === "would_have_lost") buckets[idx].lost++;
-                      }
-                      return buckets;
-                    })()} barGap={2}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} opacity={0.4} vertical={false} />
-                      <XAxis dataKey="range" tick={{ fontSize: 10, fill: chartTheme.axis }} axisLine={{ stroke: chartTheme.grid }} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: chartTheme.axis }} axisLine={false} tickLine={false} />
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                      <Bar dataKey="won" name="Would Have Won" fill="#22c55e" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="lost" name="Would Have Lost" fill="#ef4444" radius={[3, 3, 0, 0]} />
-                    </BarChart>
-                  </ChartContainer>
-                ) : (
-                  <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
-                )}
-              </CardContent>
-            </Card>
           </TabsContent>
 
           {/* Gate Analysis Tab */}
@@ -641,8 +574,6 @@ export default function RejectedSetups() {
                         </div>
                         <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                           <span>{formatBrokerTime(s.rejected_at)}</span>
-                          <span>Score: {s.confluence_score.toFixed(1)}</span>
-                          <span>T1: {s.tier1_count}</span>
                         </div>
                         {s.failed_gates && s.failed_gates.length > 0 && (
                           <div className="flex flex-wrap gap-1">
@@ -671,8 +602,6 @@ export default function RejectedSetups() {
                           <th className="text-left px-3 py-2 font-medium">Symbol</th>
                           <th className="text-left px-3 py-2 font-medium">Dir</th>
                           <th className="text-left px-3 py-2 font-medium">Type</th>
-                          <th className="text-left px-3 py-2 font-medium">Score</th>
-                          <th className="text-left px-3 py-2 font-medium">T1</th>
                           <th className="text-left px-3 py-2 font-medium">Failed Gates</th>
                           <th className="text-left px-3 py-2 font-medium">RR</th>
                           <th className="text-left px-3 py-2 font-medium">MFE</th>
@@ -695,8 +624,6 @@ export default function RejectedSetups() {
                                 </span>
                               </td>
                               <td className="px-3 py-2">{REJECTION_TYPE_LABELS[s.rejection_type] || s.rejection_type}</td>
-                              <td className="px-3 py-2 font-mono">{s.confluence_score.toFixed(1)}</td>
-                              <td className="px-3 py-2">{s.tier1_count}</td>
                               <td className="px-3 py-2 max-w-[200px]">
                                 <div className="flex flex-wrap gap-0.5">
                                   {(s.failed_gates || []).slice(0, 2).map((g, i) => (
@@ -712,7 +639,7 @@ export default function RejectedSetups() {
                             </tr>
                             {expandedRow === s.id && (
                               <tr>
-                                <td colSpan={11} className="px-3 py-0">
+                                <td colSpan={9} className="px-3 py-0">
                                   <TradeDetailCard
                                     symbol={s.symbol}
                                     direction={s.direction}
@@ -727,8 +654,6 @@ export default function RejectedSetups() {
                                     slHit={s.sl_hit}
                                     tpHitTimeMinutes={s.tp_hit_time_minutes}
                                     priceReachedEntry={s.price_reached_entry}
-                                    confluenceScore={s.confluence_score}
-                                    tier1Count={s.tier1_count}
                                     failedGates={s.failed_gates}
                                     sessionName={s.session_name}
                                     regime={s.regime}

@@ -162,14 +162,6 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               </Badge>
             )}
             <CohortChip value={order.would_have_been_route1} />
-            {!isHunting && order.from_watchlist && (
-              <Badge
-                variant="outline"
-                className="text-[10px] px-1.5 py-0 border-cyan-500/50 text-cyan-300 bg-cyan-500/10"
-              >
-                WL
-              </Badge>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -223,8 +215,6 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           {" "}[{Number(order.entry_zone_low).toFixed(5)} – {Number(order.entry_zone_high).toFixed(5)}]
           {" · "}
           Size: <span className="text-foreground">{order.size} lots</span>
-          {" · "}
-          Score: <span className="text-foreground">{Number(order.signal_score).toFixed(1)}%</span>
         </div>
 
         {/* Narrative sentence */}

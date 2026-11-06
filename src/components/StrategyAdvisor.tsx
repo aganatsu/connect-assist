@@ -27,12 +27,6 @@ interface GatesVerdict {
   under_filtering: string[];
 }
 
-interface ThresholdRec {
-  current_effective: number;
-  suggested: number;
-  reasoning: string;
-}
-
 interface SymbolSpecific {
   symbol: string;
   issue: string;
@@ -44,7 +38,6 @@ interface AdvisorResponse {
   profitability_score: number;
   recommendations: Recommendation[];
   gates_verdict?: GatesVerdict;
-  threshold_recommendation?: ThresholdRec;
   symbol_specific?: SymbolSpecific[];
   data_quality_warning?: string;
   analysis_summary?: any;
@@ -283,32 +276,6 @@ export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
                     </div>
                   );
                 })}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Threshold Recommendation */}
-          {result.threshold_recommendation && (
-            <Card className="border-border/50">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <Shield className="h-4 w-4 text-blue-400" />
-                  Threshold Recommendation
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-4 pb-3">
-                <div className="flex items-center gap-4 mb-2">
-                  <div className="text-center">
-                    <p className="text-xs text-muted-foreground">Current</p>
-                    <p className="text-lg font-bold text-destructive">{result.threshold_recommendation.current_effective}</p>
-                  </div>
-                  <ArrowRight className="h-5 w-5 text-muted-foreground" />
-                  <div className="text-center">
-                    <p className="text-xs text-muted-foreground">Suggested</p>
-                    <p className="text-lg font-bold text-emerald-400">{result.threshold_recommendation.suggested}</p>
-                  </div>
-                </div>
-                <p className="text-xs text-foreground/80">{result.threshold_recommendation.reasoning}</p>
               </CardContent>
             </Card>
           )}

@@ -22,7 +22,6 @@ Deno.test("applyPairOverrides: no overrides configured → config unchanged", ()
   const original = { ...config };
   applyPairOverrides(config, "EUR/JPY");
   assertEquals(config.minRiskReward, original.minRiskReward);
-  assertEquals(config.minConfluence, original.minConfluence);
   assertEquals(config.maxPerSymbol, original.maxPerSymbol);
   assertEquals(config.allowSameDirectionStacking, original.allowSameDirectionStacking);
 });
@@ -53,30 +52,28 @@ Deno.test("applyPairOverrides: multiple fields overridden for one pair", () => {
   const config = { ...RUNTIME_DEFAULTS, pairGateOverrides: {
     "EUR/JPY": {
       minRiskReward: 0.8,
-      minTier1Factors: 1,
       allowSameDirectionStacking: true,
       maxPerSymbol: 3,
-      minConfluence: 35,
+      minStopPips: 12,
     },
   }};
   applyPairOverrides(config, "EUR/JPY");
   assertEquals(config.minRiskReward, 0.8);
-  assertEquals((config as any).minTier1Factors, 1);
   assertEquals(config.allowSameDirectionStacking, true);
   assertEquals(config.maxPerSymbol, 3);
-  assertEquals(config.minConfluence, 35);
+  assertEquals((config as any).minStopPips, 12);
 });
 
 // ─── Test 5: Partial override only affects specified fields ────────────
 
 Deno.test("applyPairOverrides: partial override leaves other fields at global", () => {
   const config = { ...RUNTIME_DEFAULTS, pairGateOverrides: {
-    "XAU/USD": { minConfluence: 35 },
+    "XAU/USD": { minStopPips: 35 },
   }};
   const originalMinRR = config.minRiskReward;
   const originalMaxPerSymbol = config.maxPerSymbol;
   applyPairOverrides(config, "XAU/USD");
-  assertEquals(config.minConfluence, 35);
+  assertEquals((config as any).minStopPips, 35);
   assertEquals(config.minRiskReward, originalMinRR); // unchanged
   assertEquals(config.maxPerSymbol, originalMaxPerSymbol); // unchanged
 });
@@ -86,10 +83,10 @@ Deno.test("applyPairOverrides: partial override leaves other fields at global", 
 Deno.test("mapNestedToFlat: pairGateOverrides passed through from raw config", () => {
   const overrides = {
     "EUR/JPY": { minRiskReward: 0.8, allowSameDirectionStacking: true },
-    "BTC/USD": { maxPerSymbol: 1, minTier1Factors: 4 },
+    "BTC/USD": { maxPerSymbol: 1 },
   };
   const result = mapNestedToFlat({
-    strategy: { confluenceThreshold: 55 },
+    strategy: {},
     risk: { minRR: 1.5 },
     entry: {},
     instruments: {},
@@ -149,7 +146,6 @@ Deno.test("regression: mapNestedToFlat + applyPairOverrides with empty overrides
   applyPairOverrides(configWithOverrides, "EUR/USD");
 
   assertEquals(configWithOverrides.minRiskReward, configWithout.minRiskReward);
-  assertEquals(configWithOverrides.minConfluence, configWithout.minConfluence);
   assertEquals(configWithOverrides.maxPerSymbol, configWithout.maxPerSymbol);
   assertEquals(configWithOverrides.allowSameDirectionStacking, configWithout.allowSameDirectionStacking);
 });
@@ -168,27 +164,27 @@ Deno.test("applyPairOverrides: returns same config reference (mutation, not copy
 
 Deno.test("applyPairOverrides: different pairs get different override values", () => {
   const overrides = {
-    "EUR/JPY": { minRiskReward: 0.8, minTier1Factors: 1 },
-    "BTC/USD": { minRiskReward: 2.0, minTier1Factors: 4 },
-    "XAU/USD": { minConfluence: 35 },
+    "EUR/JPY": { minRiskReward: 0.8, maxPerSymbol: 1 },
+    "BTC/USD": { minRiskReward: 2.0, maxPerSymbol: 4 },
+    "XAU/USD": { minStopPips: 35 },
   };
 
   // EUR/JPY
   const config1 = { ...RUNTIME_DEFAULTS, pairGateOverrides: overrides };
   applyPairOverrides(config1, "EUR/JPY");
   assertEquals(config1.minRiskReward, 0.8);
-  assertEquals((config1 as any).minTier1Factors, 1);
+  assertEquals(config1.maxPerSymbol, 1);
 
   // BTC/USD
   const config2 = { ...RUNTIME_DEFAULTS, pairGateOverrides: overrides };
   applyPairOverrides(config2, "BTC/USD");
   assertEquals(config2.minRiskReward, 2.0);
-  assertEquals((config2 as any).minTier1Factors, 4);
+  assertEquals(config2.maxPerSymbol, 4);
 
   // XAU/USD
   const config3 = { ...RUNTIME_DEFAULTS, pairGateOverrides: overrides };
   applyPairOverrides(config3, "XAU/USD");
-  assertEquals(config3.minConfluence, 35);
+  assertEquals((config3 as any).minStopPips, 35);
   assertEquals(config3.minRiskReward, RUNTIME_DEFAULTS.minRiskReward); // not overridden
 });
 
@@ -215,48 +211,16 @@ Deno.test("applyPairOverrides: allowSameDirectionStacking=false is applied", () 
   assertEquals(config.allowSameDirectionStacking, false);
 });
 
-// ─── Test 14: tier1GateEnabled defaults to true ──────────────────────
+// ─── Test 14: removed overrides are ignored ──────────────────────────
+// minTier1Factors and minConfluence were per-pair overrides of the confluence score / Tier 1
+// gate. Both were removed; an override still stored in a config must change nothing.
 
-Deno.test("tier1GateEnabled: defaults to true in RUNTIME_DEFAULTS", () => {
-  assertEquals(RUNTIME_DEFAULTS.tier1GateEnabled, true);
-});
-
-// ─── Test 15: tier1GateEnabled maps through mapNestedToFlat ──────────
-
-Deno.test("tier1GateEnabled: mapNestedToFlat resolves from strategy field", () => {
-  const result = mapNestedToFlat({
-    strategy: { tier1GateEnabled: false },
-    risk: {},
-    entry: {},
-    instruments: {},
-    sessions: {},
-  });
-  assertEquals(result.tier1GateEnabled, false);
-});
-
-// ─── Test 16: tier1GateEnabled defaults when not set ─────────────────
-
-Deno.test("tier1GateEnabled: defaults to true when not in config", () => {
-  const result = mapNestedToFlat({
-    strategy: {},
-    risk: {},
-    entry: {},
-    instruments: {},
-    sessions: {},
-  });
-  assertEquals(result.tier1GateEnabled, true);
-});
-
-// ─── Test 17: tier1GateEnabled from legacy flat field ────────────────
-
-Deno.test("tier1GateEnabled: resolves from raw flat field when strategy not set", () => {
-  const result = mapNestedToFlat({
-    tier1GateEnabled: false,
-    strategy: {},
-    risk: {},
-    entry: {},
-    instruments: {},
-    sessions: {},
-  });
-  assertEquals(result.tier1GateEnabled, false);
+Deno.test("applyPairOverrides: stored minTier1Factors / minConfluence overrides are ignored", () => {
+  const config = { ...RUNTIME_DEFAULTS, pairGateOverrides: {
+    "EUR/JPY": { minTier1Factors: 1, minConfluence: 35 } as any,
+  }} as any;
+  applyPairOverrides(config, "EUR/JPY");
+  assertEquals("minTier1Factors" in config, false);
+  assertEquals("minConfluence" in config, false);
+  assertEquals("tier1GateEnabled" in RUNTIME_DEFAULTS, false);
 });

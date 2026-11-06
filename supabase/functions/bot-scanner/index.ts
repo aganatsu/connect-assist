@@ -70,12 +70,7 @@ import {
   analyzeNewsImpact, checkNewsAlignment, getNewsPairBias,
   type NewsEvent, type NewsImpactResult,
 } from "../_shared/newsImpact.ts";
-import {
-  runConfluenceAnalysis,
-  DEFAULT_FACTOR_WEIGHTS,
-  resolveWeightScale,
-  applyWeightScale,
-} from "../_shared/confluenceScoring.ts";
+import { runConfluenceAnalysis } from "../_shared/confluenceScoring.ts";
 import { recordStructureShadow } from "../_shared/structureShadow.ts";
 import {
   runPropFirmGate, propFirmEmergencyClose,
@@ -102,7 +97,7 @@ import {
 } from "../_shared/route2Confirmation.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
-import { applyLoggedOnlyGates, effectiveRiskPercent, gateKeyOf, orderEffectiveRR, resolveSimplification, unifiedVsImpulse, V3_LOGGED_ONLY_GATE_IDS } from "../_shared/simplification.ts";
+import { applyLoggedOnlyGates, effectiveRiskPercent, gateKeyOf, hardOrOff, orderEffectiveRR, resolveSimplification, unifiedVsImpulse, V3_LOGGED_ONLY_GATE_IDS } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
 import { buildAttribution } from "../_shared/attribution.ts";
@@ -139,7 +134,7 @@ import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, conf
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { loadThesisCandles, thesisValidationOpts } from "../_shared/thesisInputs.ts";
-import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
+import { logRejectedSetup, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
 import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
 import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type JudasSwingConfig, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
@@ -175,7 +170,6 @@ declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
 const BOT_ID = "smc";
 // ─── Default Config (overridden by bot_configs) ─────────────────────
 const DEFAULTS = {
-  minConfluence: 55,  // Percentage (0-100) — must match normalizedScoring: true
   htfBiasRequired: true,
   htfBiasHardVeto: false,
   onlyBuyInDiscount: false,
@@ -278,20 +272,12 @@ const DEFAULTS = {
   // ── Protection ──
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
-  // ── Strategy gates ── (collapsed to single percentage threshold: minConfluence)
-  // ── Normalized Scoring (opt-in) ──
-  // When true, raw score is normalized to percentage of enabled factors' max possible score,
-  // then scaled to 0-10. This means disabling factors auto-adjusts the scale so the
-  // minConfluence threshold always means "X% of enabled factors aligned".
-  normalizedScoring: true,  // Percentage-based scoring is now the default
   useSMT: true,
   smtOppositeVeto: true,  // When true, block trades where SMT divergence opposes signal direction
   useFOTSI: true,
   // ── Impulse Zone Scoring ──
   impulseZoneEnabled: true,       // When true, apply score penalty/bonus based on zone detection
-  impulseZonePenalty: 2.0,        // Score reduction (percentage points) when no valid zone found
-  impulseZoneBonus: 1.0,          // Score bonus (percentage points) when price IS at a valid zone
-  impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
+  impulseZoneGateMode: "hard" as "hard" | "off",
   minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
   impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
   originOBRetest: false,        // When true, allow entries at the OB that CAUSED the impulse (fib 1.0 re-test)
@@ -320,11 +306,6 @@ const DEFAULTS = {
   momentumFadeThreshold: 0.4,     // Body/range ratio below this = fading momentum
   trailTightenFactor: 0.6,        // Multiply trail distance by this when momentum fading
   trailWidenFactor: 1.3,          // Multiply trail distance by this when momentum strong
-  // ── Setup Staging / Watchlist ──
-  stagingEnabled: true,
-  watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
-  stagingTTLMinutes: 240,      // Time-to-live for staged setups (4h default)
-  minStagingCycles: 1,         // Minimum scan cycles before promotion allowed
   // ── Limit Orders ──
   limitOrderEnabled: false,     // When true, place limit orders at zone edges instead of market orders
   limitOrderExpiryMinutes: 60,  // How long a pending limit order stays active before expiring
@@ -336,44 +317,34 @@ const DEFAULTS = {
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
-  // ── Factor Weights (config-driven, AI-tunable) ──
-  factorWeights: {} as Record<string, number>,
   // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
   ictHTFEnabled: true,             // Enable ICT HTF analysis (weekly bias + daily impulse + containment)
-  ictHTFGateMode: "off" as "hard" | "soft" | "off",  // "off" = log only (no trade impact); "soft" = score adjust; "hard" = block
-  ictHTFAlignedBonus: 2.0,         // Score bonus when weekly + daily + containment all align
-  ictHTFMisalignedPenalty: 3.0,    // Score penalty when weekly bias opposes trade direction
+  ictHTFGateMode: "off" as "hard" | "off",
   ictHTFMinContainment: 50,        // Min % overlap between LTF zone and Daily OB for containment pass
   ictWeeklyBiasRequired: true,     // Require weekly bias alignment (when gate != off)
   ictDailyContainmentRequired: true, // Require LTF zone to be inside Daily OB (when gate != off)
   // ── ICT Displacement MSS Validation ──
   ictDisplacementMSSEnabled: true,
-  ictDisplacementMSSGateMode: "off" as "hard" | "soft" | "off",
+  ictDisplacementMSSGateMode: "off" as "hard" | "off",
   ictDisplacementMSSMinBodyRatio: 0.6,
   ictDisplacementMSSMinRangeATR: 1.2,
   ictDisplacementMSSLookback: 3,
-  ictDisplacementMSSPenalty: 2.0,
   // ── ICT Judas Swing (Liquidity Sweep before MSS) ──
   ictJudasSwingEnabled: true,
-  ictJudasSwingGateMode: "off" as "hard" | "soft" | "off",
+  ictJudasSwingGateMode: "off" as "hard" | "off",
   ictJudasSwingLookback: 10,
   ictJudasSwingMinDepthATR: 0.1,
   ictJudasSwingRequireCloseBack: true,
-  ictJudasSwingPenalty: 1.5,
   // ── ICT FVG Invalidation ──
   ictFVGInvalidationEnabled: true,
-  ictFVGInvalidationGateMode: "off" as "hard" | "soft" | "off",
+  ictFVGInvalidationGateMode: "off" as "hard" | "off",
   ictFVGBodyCloseOnly: true,
   ictFVGRuleOfTwo: true,
-  ictFVGExhaustedPenalty: 1.5,
-  ictFVGInvalidatedPenalty: 3.0,
   // ── ICT Kill Zone Time Filter ──
   ictKillZoneEnabled: true,
-  ictKillZoneGateMode: "off" as "hard" | "soft" | "off",
+  ictKillZoneGateMode: "off" as "hard" | "off",
   ictKillZoneSilverBullet: true,
   ictKillZonePMSession: true,
-  ictKillZoneOutsidePenalty: 1.0,
-  ictKillZonePrimeBonus: 1.5,
   // ── ICT Risk Management ──
   ictRiskEnabled: true,
   ictRiskBasePercent: 0.01,
@@ -525,7 +496,6 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     htfTimeframe: "1h",
     tpRatio: 2.0,                   // Validated: 2:1 R:R (ATR floor gives ~20p SL → 40p TP)
     slBufferPips: 1,
-    minConfluence: 40,              // Percentage — scalpers use lower threshold
     riskPerTrade: 0.5,              // Lower risk per trade (high frequency)
     impulseSlCapMultiplier: 1.5,    // Tight SL cap for scalper (validated)
     // Scalper management: NO BE, NO trailing — let trades run to TP or SL.
@@ -546,7 +516,6 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     htfTimeframe: "1day",
     tpRatio: 2.0,
     slBufferPips: 2,
-    minConfluence: 55,  // Percentage — day traders use moderate threshold
     // Day trader management: partial TP at 1R, then trailing kicks in, BE at 1R
     // On 15m chart with ~20-30 pip SL, BE at ~20-30 pips, trail at ~10-15 pips
     trailingStopEnabled: true,      // Changed: enable trailing AFTER partial TP
@@ -566,7 +535,6 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     htfTimeframe: "1w",
     tpRatio: 3.0,                   // Validated: 3:1 R:R (cascade SL gives proper structure-based risk)
     slBufferPips: 5,
-    minConfluence: 40,              // Validated: lower threshold — cascade zone selectivity is the real filter
     riskPerTrade: 1.5,              // Higher risk per trade (fewer trades, higher conviction)
     impulseSlCapMultiplier: 6,      // Wider SL cap for swing (larger impulses on Daily/4H)
     // Swing management: NO BE, NO trailing, NO partial — let trades run to TP or SL.
@@ -866,8 +834,7 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
 /**
  * Record a setup a gate refused, so outcome-tracker can grade it.
  *
- * The two producers at the tier/confluence gates below have fed this table
- * since 2026-08-10 — 1,527 graded setups by 2026-09-09, and the answer they
+ * Producers at the gates below have fed this table since 2026-08-10 — 1,527 graded setups by 2026-09-09, and the answer they
  * give is that rejected setups win 18.4% against a 33.3% break-even at 2:1.
  * The gate stack is collectively correct; every gate family in that sample is
  * net-negative to take.
@@ -885,7 +852,7 @@ async function recordRejectedSetup(
   pair: string,
   analysis: any,
   opts: {
-    rejectionType: "gate_blocked" | "below_threshold_strong_t1";
+    rejectionType: "gate_blocked";
     failedGates: string[];
     zoneLow?: number | null;
     zoneHigh?: number | null;
@@ -909,7 +876,6 @@ async function recordRejectedSetup(
       .limit(1);
     if (dupe && dupe.length > 0) return;
 
-    const t1 = (analysis.factors ?? []).filter((f: any) => f?.tier === 1 && f?.present);
     const sl = typeof analysis.stopLoss === "number" ? analysis.stopLoss : null;
     const tp = typeof analysis.takeProfit === "number" ? analysis.takeProfit : null;
     const risk = sl != null ? Math.abs(analysis.lastPrice - sl) : null;
@@ -922,9 +888,7 @@ async function recordRejectedSetup(
       direction: analysis.direction,
       rejection_type: opts.rejectionType,
       failed_gates: opts.failedGates,
-      confluence_score: Number(analysis.score ?? 0),
-      tier1_count: analysis.tieredScoring?.tier1Count ?? t1.length,
-      tier1_factors: t1.map((f: any) => f.name),
+      confluence_score: 0, // placeholder: NOT NULL legacy column — the confluence score no longer exists
       // What a market entry would have used at this moment. The executable
       // stop is computed much later in the pair loop, so analysis.stopLoss is
       // the honest answer here rather than a guess at the floored one.
@@ -949,7 +913,6 @@ async function recordRejectedSetup(
         zoneHigh: opts.zoneHigh ?? null,
         zoneScore: opts.zoneScore ?? null,
         zoneType: opts.zoneType ?? null,
-        tieredScoring: analysis.tieredScoring ?? null,
       },
     });
   } catch (e: any) {
@@ -1041,11 +1004,7 @@ async function recordDirectionBlock(
       direction,
       rejection_type: "direction_blocked",
       failed_gates: ["direction_engine"],
-      // Scoring ran but produced no setup, so there is no meaningful confluence
-      // figure. 0 would read as "scored zero"; these were never scored.
-      confluence_score: 0,
-      tier1_count: 0,
-      tier1_factors: [],
+      confluence_score: 0, // placeholder: NOT NULL legacy column — the confluence score no longer exists
       entry_price: entry,
       stop_loss: sl,
       take_profit: tp,
@@ -1121,17 +1080,6 @@ function _legacyLoadConfigMapping(_raw: any) {
   const merged = {
     ...DEFAULTS,
     // ── Strategy mappings ──
-    // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
-    // Auto-scale legacy 0-10 values to percentage when normalizedScoring is true
-    minConfluence: (() => {
-      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence;
-      // If value is in legacy 0-10 range and normalizedScoring is on, scale to percentage
-      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw.normalizedScoring ?? true)) {
-        return raw_mc * 10;
-      }
-      return raw_mc;
-    })(),
-    // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
     // UI writes: requireHTFBias; legacy DB: htfBiasRequired
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     // UI writes: htfBiasHardVeto — when true, only allow longs in bullish HTF, shorts in bearish HTF (no ranging exception)
@@ -1166,9 +1114,7 @@ function _legacyLoadConfigMapping(_raw: any) {
     useFOTSI: strategy.useFOTSI ?? true,
     // Impulse Zone Scoring (defaults true)
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? true,
-    impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? 2.0,
-    impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? 1.0,
-    impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
+    impulseZoneGateMode: hardOrOff(strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard"),
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
     originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? DEFAULTS.originOBRetest,
@@ -1201,10 +1147,6 @@ function _legacyLoadConfigMapping(_raw: any) {
     useDailyBias: strategy.useDailyBias ?? true,
     // Regime scoring (UI writes under strategy.*; scanner reads at top level)
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? true,
-    regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? 1.0,
-    // Normalized scoring (percentage-based scoring that auto-adjusts when factors are toggled)
-    // Default: true — aligns with DEFAULTS object, UI default, and confluenceScoring output (always percentage)
-    normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? true,
     // ── P1 tuning fields (now wired to scanner) ──
     obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? 50,
     fvgMinSizePips: strategy.fvgMinSizePips ?? raw.fvgMinSizePips ?? 0,
@@ -1235,7 +1177,6 @@ function _legacyLoadConfigMapping(_raw: any) {
     allowSameDirectionStacking: risk.allowSameDirectionStacking ?? DEFAULTS.allowSameDirectionStacking,
     portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
     // Conflict counter thresholds (bidirectional scoring)
-    conflictThresholdRaise: risk.conflictThresholdRaise ?? raw.conflictThresholdRaise ?? 4,
     conflictBlockAt: risk.conflictBlockAt ?? raw.conflictBlockAt ?? 6,
 
     // ── Entry mappings ──
@@ -1334,8 +1275,6 @@ function _legacyLoadConfigMapping(_raw: any) {
     openingRange: { ...DEFAULTS.openingRange, ...(raw.openingRange || {}) },
     tradingStyle: { ...DEFAULTS.tradingStyle, ...(raw.tradingStyle || {}) },
 
-    // ── Factor Weights (config-driven, AI-tunable) ──
-    factorWeights: raw.factorWeights || {},
     // ── Per-Instrument SL Buffer Overrides ──
     instrumentBuffers: raw.instrumentBuffers || entry.instrumentBuffers || {},
 
@@ -1357,48 +1296,35 @@ function _legacyLoadConfigMapping(_raw: any) {
     atrFilterMin: instruments.minATR ?? raw.atrFilterMin ?? DEFAULTS.atrFilterMin,
     atrFilterMax: instruments.maxATR ?? raw.atrFilterMax ?? DEFAULTS.atrFilterMax,
 
-    // ── Setup Staging / Watchlist ──
-    stagingEnabled: strategy.stagingEnabled ?? raw.stagingEnabled ?? DEFAULTS.stagingEnabled,
-    watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? DEFAULTS.watchThreshold,
-    stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? DEFAULTS.stagingTTLMinutes,
-    minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? DEFAULTS.minStagingCycles,
 
     // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
     ictHTFEnabled: strategy.ictHTFEnabled ?? raw.ictHTFEnabled ?? DEFAULTS.ictHTFEnabled,
-    ictHTFGateMode: (strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? DEFAULTS.ictHTFGateMode) as "hard" | "soft" | "off",
-    ictHTFAlignedBonus: strategy.ictHTFAlignedBonus ?? raw.ictHTFAlignedBonus ?? DEFAULTS.ictHTFAlignedBonus,
-    ictHTFMisalignedPenalty: strategy.ictHTFMisalignedPenalty ?? raw.ictHTFMisalignedPenalty ?? DEFAULTS.ictHTFMisalignedPenalty,
+    ictHTFGateMode: hardOrOff(strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? DEFAULTS.ictHTFGateMode),
     ictHTFMinContainment: strategy.ictHTFMinContainment ?? raw.ictHTFMinContainment ?? DEFAULTS.ictHTFMinContainment,
     ictWeeklyBiasRequired: strategy.ictWeeklyBiasRequired ?? raw.ictWeeklyBiasRequired ?? DEFAULTS.ictWeeklyBiasRequired,
         ictDailyContainmentRequired: strategy.ictDailyContainmentRequired ?? raw.ictDailyContainmentRequired ?? DEFAULTS.ictDailyContainmentRequired,
     // ── ICT Displacement MSS Validation ──
     ictDisplacementMSSEnabled: strategy.ictDisplacementMSSEnabled ?? raw.ictDisplacementMSSEnabled ?? DEFAULTS.ictDisplacementMSSEnabled,
-    ictDisplacementMSSGateMode: (strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? DEFAULTS.ictDisplacementMSSGateMode) as "hard" | "soft" | "off",
+    ictDisplacementMSSGateMode: hardOrOff(strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? DEFAULTS.ictDisplacementMSSGateMode),
     ictDisplacementMSSMinBodyRatio: strategy.ictDisplacementMSSMinBodyRatio ?? raw.ictDisplacementMSSMinBodyRatio ?? DEFAULTS.ictDisplacementMSSMinBodyRatio,
     ictDisplacementMSSMinRangeATR: strategy.ictDisplacementMSSMinRangeATR ?? raw.ictDisplacementMSSMinRangeATR ?? DEFAULTS.ictDisplacementMSSMinRangeATR,
     ictDisplacementMSSLookback: strategy.ictDisplacementMSSLookback ?? raw.ictDisplacementMSSLookback ?? DEFAULTS.ictDisplacementMSSLookback,
-    ictDisplacementMSSPenalty: strategy.ictDisplacementMSSPenalty ?? raw.ictDisplacementMSSPenalty ?? DEFAULTS.ictDisplacementMSSPenalty,
     // ── ICT Judas Swing ──
     ictJudasSwingEnabled: strategy.ictJudasSwingEnabled ?? raw.ictJudasSwingEnabled ?? DEFAULTS.ictJudasSwingEnabled,
-    ictJudasSwingGateMode: (strategy.ictJudasSwingGateMode ?? raw.ictJudasSwingGateMode ?? DEFAULTS.ictJudasSwingGateMode) as "hard" | "soft" | "off",
+    ictJudasSwingGateMode: hardOrOff(strategy.ictJudasSwingGateMode ?? raw.ictJudasSwingGateMode ?? DEFAULTS.ictJudasSwingGateMode),
     ictJudasSwingLookback: strategy.ictJudasSwingLookback ?? raw.ictJudasSwingLookback ?? DEFAULTS.ictJudasSwingLookback,
     ictJudasSwingMinDepthATR: strategy.ictJudasSwingMinDepthATR ?? raw.ictJudasSwingMinDepthATR ?? DEFAULTS.ictJudasSwingMinDepthATR,
     ictJudasSwingRequireCloseBack: strategy.ictJudasSwingRequireCloseBack ?? raw.ictJudasSwingRequireCloseBack ?? DEFAULTS.ictJudasSwingRequireCloseBack,
-    ictJudasSwingPenalty: strategy.ictJudasSwingPenalty ?? raw.ictJudasSwingPenalty ?? DEFAULTS.ictJudasSwingPenalty,
     // ── ICT FVG Invalidation ──
     ictFVGInvalidationEnabled: strategy.ictFVGInvalidationEnabled ?? raw.ictFVGInvalidationEnabled ?? DEFAULTS.ictFVGInvalidationEnabled,
-    ictFVGInvalidationGateMode: (strategy.ictFVGInvalidationGateMode ?? raw.ictFVGInvalidationGateMode ?? DEFAULTS.ictFVGInvalidationGateMode) as "hard" | "soft" | "off",
+    ictFVGInvalidationGateMode: hardOrOff(strategy.ictFVGInvalidationGateMode ?? raw.ictFVGInvalidationGateMode ?? DEFAULTS.ictFVGInvalidationGateMode),
     ictFVGBodyCloseOnly: strategy.ictFVGBodyCloseOnly ?? raw.ictFVGBodyCloseOnly ?? DEFAULTS.ictFVGBodyCloseOnly,
     ictFVGRuleOfTwo: strategy.ictFVGRuleOfTwo ?? raw.ictFVGRuleOfTwo ?? DEFAULTS.ictFVGRuleOfTwo,
-    ictFVGExhaustedPenalty: strategy.ictFVGExhaustedPenalty ?? raw.ictFVGExhaustedPenalty ?? DEFAULTS.ictFVGExhaustedPenalty,
-    ictFVGInvalidatedPenalty: strategy.ictFVGInvalidatedPenalty ?? raw.ictFVGInvalidatedPenalty ?? DEFAULTS.ictFVGInvalidatedPenalty,
     // ── ICT Kill Zone ──
     ictKillZoneEnabled: strategy.ictKillZoneEnabled ?? raw.ictKillZoneEnabled ?? DEFAULTS.ictKillZoneEnabled,
-    ictKillZoneGateMode: (strategy.ictKillZoneGateMode ?? raw.ictKillZoneGateMode ?? DEFAULTS.ictKillZoneGateMode) as "hard" | "soft" | "off",
+    ictKillZoneGateMode: hardOrOff(strategy.ictKillZoneGateMode ?? raw.ictKillZoneGateMode ?? DEFAULTS.ictKillZoneGateMode),
     ictKillZoneSilverBullet: strategy.ictKillZoneSilverBullet ?? raw.ictKillZoneSilverBullet ?? DEFAULTS.ictKillZoneSilverBullet,
     ictKillZonePMSession: strategy.ictKillZonePMSession ?? raw.ictKillZonePMSession ?? DEFAULTS.ictKillZonePMSession,
-    ictKillZoneOutsidePenalty: strategy.ictKillZoneOutsidePenalty ?? raw.ictKillZoneOutsidePenalty ?? DEFAULTS.ictKillZoneOutsidePenalty,
-    ictKillZonePrimeBonus: strategy.ictKillZonePrimeBonus ?? raw.ictKillZonePrimeBonus ?? DEFAULTS.ictKillZonePrimeBonus,
     // ── ICT Risk Management ──
     ictRiskEnabled: strategy.ictRiskEnabled ?? raw.ictRiskEnabled ?? DEFAULTS.ictRiskEnabled,
     ictRiskBasePercent: strategy.ictRiskBasePercent ?? raw.ictRiskBasePercent ?? DEFAULTS.ictRiskBasePercent,
@@ -1463,7 +1389,7 @@ export async function runSafetyGates(
         reason: `Direction CONFLICT: verdict is ${directionVerdict.verdict.toUpperCase()} but entry is ${direction.toUpperCase()} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)`,
       });
     } else {
-      gates.push({ gateKey: "direction_verdict", passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, adj: ${directionVerdict.scoreAdjustment >= 0 ? "+" : ""}${directionVerdict.scoreAdjustment.toFixed(2)}, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+      gates.push({ gateKey: "direction_verdict", passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
     }
   } else if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
     // Legacy fallback: original Gate 1 logic when verdict unavailable
@@ -1507,10 +1433,10 @@ export async function runSafetyGates(
     const fmtP = (p: number) => p > 10 ? p.toFixed(3) : p.toFixed(5);
     // "% of range" said nothing about WHICH range, and four different numbers in
     // the UI answer to the name premium/discount: this gate (last-5 swings on
-    // the ENTRY timeframe), the Tier 1 "Premium/Discount & Fib" factor (a zigzag
+    // the ENTRY timeframe), the "Premium/Discount & Fib" factor (a zigzag
     // retracement), the unused htfPDD/htfPD4H/htfPD1H, and the position within
     // the impulse leg shown by the zone story. On 2026-09-03 a XAU/USD setup
-    // read 100.0% here, 60.0% in Tier 1, and 73.9% against the 1H impulse — all
+    // read 100.0% here, 60.0% in the factor, and 73.9% against the 1H impulse — all
     // correct, all differently defined, and impossible to reconcile from the
     // screen. Name the timeframe and print the bounds.
     //
@@ -1707,13 +1633,6 @@ export async function runSafetyGates(
     } else {
       gates.push({ gateKey: "drawdown", passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
     }
-  }
-
-  // Gate 9: Min confluence (redundant but per spec)
-  if (analysis.score < config.minConfluence) {
-    gates.push({ gateId: "score", passed: false, reason: `Score ${analysis.score} < ${config.minConfluence} threshold` });
-  } else {
-    gates.push({ gateId: "score", passed: true, reason: `Score ${analysis.score} meets threshold` });
   }
 
   // Gate 9b: SMT Opposite Veto — block trades where SMT divergence opposes signal direction
@@ -1916,8 +1835,8 @@ export async function runSafetyGates(
           fotsi.strengths, fotsi.series,
         );
         if (veto.vetoed) {
-          // Softened: gate passes but -2.0 penalty is applied downstream to effectiveScore (line ~3756)
-          gates.push({ gateKey: "fotsi", passed: true, reason: `FOTSI WARNING (-2.0 penalty applied to effectiveScore): ${veto.reason}` });
+          // Softened to a warning: the gate passes and records the veto reason.
+          gates.push({ gateKey: "fotsi", passed: true, reason: `FOTSI WARNING (recorded, not blocking): ${veto.reason}` });
         } else {
           gates.push({ gateKey: "fotsi", passed: true, reason: veto.reason });
         }
@@ -2062,37 +1981,24 @@ export async function runSafetyGates(
     }
   }
 
-  // Gate 19: Tier 1 Minimum (must have at least 2 core factors)
-  if (analysis.tieredScoring) {
-    const ts = analysis.tieredScoring;
-    if (config.tier1GateEnabled === false) {
-      gates.push({ gateKey: "tier1", passed: true, reason: `Tier 1 gate DISABLED by config (${ts.tier1Count} core factors present)` });
-    } else if (!ts.tier1GatePassed) {
-      gates.push({ gateKey: "tier1", passed: false, reason: ts.tier1GateReason });
-    } else {
-      gates.push({ gateKey: "tier1", passed: true, reason: ts.tier1GateReason });
-    }
-  }
-
   // Gate 20: Regime Alignment — subsumed by Direction Verdict (Gate 1) when active.
   // When verdict is available, regime check is already incorporated into the verdict's
   // confidence calculation and veto logic. Gate always passes to avoid double-blocking.
   if (directionVerdict) {
     gates.push({ gateKey: "regime", passed: true, reason: `Regime gate: subsumed by Direction Verdict (regime context: ${directionVerdict.sources.find(s => s.name === "regime")?.detail || "N/A"})` });
-  } else if (analysis.tieredScoring) {
-    const ts = analysis.tieredScoring;
-    if (!ts.regimeGatePassed) {
-      gates.push({ gateKey: "regime", passed: false, reason: ts.regimeGateReason });
+  } else if (analysis.regimeGate) {
+    const rg = analysis.regimeGate;
+    if (!rg.passed) {
+      gates.push({ gateKey: "regime", passed: false, reason: rg.reason });
     } else {
-      gates.push({ gateKey: "regime", passed: true, reason: ts.regimeGateReason || "Regime gate: OK" });
+      gates.push({ gateKey: "regime", passed: true, reason: rg.reason || "Regime gate: OK" });
     }
   }
 
   // Gate 21: Spread Quality (INFO-ONLY — never rejects, uses indicative market data)
   // Real spread check happens at execution time via broker API.
-  if (analysis.tieredScoring) {
-    const ts = analysis.tieredScoring;
-    gates.push({ gateKey: "spread_info", passed: true, reason: `[Info] ${ts.spreadGateReason || "Spread data unavailable"}` });
+  if (analysis.spreadGate) {
+    gates.push({ gateKey: "spread_info", passed: true, reason: `[Info] ${analysis.spreadGate.reason || "Spread data unavailable"}` });
   }
 
   return gates;
@@ -2149,29 +2055,6 @@ if (import.meta.main) Deno.serve(async (req) => {
       return respond({ started: true, message: "Scan started" });
     }
 
-    // ── Setup Staging: Fetch active staged setups for the UI ──
-    if (action === "staged_setups") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const { data } = await adminClient.from("staged_setups").select("*")
-        .eq("user_id", userId).eq("bot_id", BOT_ID)
-        .order("staged_at", { ascending: false }).limit(50);
-      return respond(data || []);
-    }
-
-    // ── Setup Staging: Dismiss (manually invalidate) a staged setup ──
-    if (action === "dismiss_staged") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const setupId = body.setupId;
-      if (!setupId) return respond({ error: "Missing setupId" }, 400);
-      const { error: updateErr } = await adminClient.from("staged_setups").update({
-        status: "invalidated",
-        invalidation_reason: "Manually dismissed by user",
-        resolved_at: new Date().toISOString(),
-      }).eq("id", setupId).eq("user_id", userId);
-      if (updateErr) return respond({ error: updateErr.message }, 500);
-      return respond({ success: true });
-    }
-
     // ── Pending Orders: Get all pending orders (active + resolved) ──
     if (action === "pending_orders") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
@@ -2213,18 +2096,6 @@ if (import.meta.main) Deno.serve(async (req) => {
       return respond({ success: true });
     }
 
-    // ── Setup Staging: Get only active (watching) staged setups ──
-    if (action === "active_staged") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const { data } = await adminClient.from("staged_setups").select("*")
-        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "watching")
-        .order("current_score", { ascending: false });
-      return respond(data || []);
-    }
-
-    // ── Management-Only Cron (1-minute cycle) ──
-    // Refreshes prices, runs trailing/BE/partial TP, checks pending order fills/expiry.
-    // Does NOT run the full scan or place new trades. Designed for pg_cron every 1 min.
     if (action === "manage") {
       const { data: allAccounts } = await adminClient.from("paper_accounts").select("*")
         .eq("is_running", true).eq("kill_switch_active", false);
@@ -2451,7 +2322,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     const styleDefaults = STYLE_OVERRIDES[resolvedStyle];
     // These fields should NEVER be overwritten by style if the user set them:
     const userProtectedFields = new Set([
-      "minConfluence",
       // I2 Fix: tpRatio is user-tunable — don't silently overwrite with style default
       "tpRatio",
       // Management fields the user can tune per-broker:
@@ -2588,7 +2458,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   // `entries_locked` is the post-reset lock (migration 20261006040000): after
   // the $100k reset the account must not trade the old configuration, and the
   // app's Resume button only clears `is_paused`. Locked counts as paused for
-  // every new-entry path (staging, promotion, placement).
+  // every new-entry path (placement).
   //
   // Step 8 switches (config_json.simplification; absent = legacy behaviour).
   // DRY RUN: while entries are locked and dryRunWhenLocked is set, the full
@@ -3032,62 +2902,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   let tradesPlaced = 0;
   let rejectedCount = 0;
 
-  // ── Setup Staging: Fetch active staged setups for this user/bot ──
-  let activeStagedSetups: any[] = [];
-  const stagingEnabled = config.stagingEnabled !== false;
-  const watchThreshold = config.watchThreshold ?? 25;
-  const stagingTTLMinutes = config.stagingTTLMinutes ?? 240;
-  const minStagingCycles = config.minStagingCycles ?? 1;
-  let stagedPromoted = 0;
-  let stagedExpired = 0;
-  let stagedInvalidated = 0;
-  let stagedNew = 0;
   // Observability counters. Reported in the scan meta so a silently failing
   // snapshot writer is visible rather than inferred from an empty table.
   let snapshotsWritten = 0;
   let snapshotFailures = 0;
   let decisionsWritten = 0;
   let decisionFailures = 0;
-  if (stagingEnabled) {
-    try {
-      const { data: staged } = await supabase
-        .from("staged_setups")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("bot_id", BOT_ID)
-        .eq("status", "watching");
-      activeStagedSetups = staged || [];
-
-      // Expire stale setups (TTL exceeded)
-      const nowMs = Date.now();
-      for (const s of activeStagedSetups) {
-        const stagedAtMs = new Date(s.staged_at).getTime();
-        const ttl = (s.ttl_minutes || stagingTTLMinutes) * 60_000;
-        if (nowMs - stagedAtMs > ttl) {
-          await supabase.from("staged_setups").update({
-            status: "expired",
-            invalidation_reason: `TTL expired (${s.ttl_minutes || stagingTTLMinutes}min)`,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", s.id);
-          stagedExpired++;
-          console.log(`[staging] Expired ${s.symbol} ${s.direction} — TTL ${s.ttl_minutes || stagingTTLMinutes}min exceeded`);
-        }
-      }
-      // Remove expired from active list
-      activeStagedSetups = activeStagedSetups.filter(s => {
-        const stagedAtMs = new Date(s.staged_at).getTime();
-        const ttl = (s.ttl_minutes || stagingTTLMinutes) * 60_000;
-        return nowMs - stagedAtMs <= ttl;
-      });
-    } catch (e: any) {
-      console.warn(`[staging] Failed to fetch staged setups: ${e?.message}`);
-    }
-  }
-  // Map for quick lookup: "SYMBOL:DIRECTION" → staged setup row
-  const stagedMap = new Map<string, any>();
-  for (const s of activeStagedSetups) {
-    stagedMap.set(`${s.symbol}:${s.direction}`, s);
-  }
   // ── Thesis Conviction Tracker: in-memory state per pair+direction ──
   // Persisted to kv_cache at end of scan cycle. Loaded from kv_cache at start.
   const convictionStates = new Map<string, ThesisConvictionState>();
@@ -3287,7 +3107,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             open_time: pos.open_time || nowClose, closed_at: nowClose,
             close_reason: closeReason,
             pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
-            signal_score: pos.signal_score || "0",
             // NOT streamlined_decision_origin. That column belongs to the
             // streamlined-decision-lifecycle.v1 contract and its trigger refuses
             // anything else, so writing the position's frozen-decision.v1 blob
@@ -4606,8 +4425,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
               zoneType: pending.entry_zone_type,
               zoneLow: parseFloat(pending.entry_zone_low || "0"),
               zoneHigh: parseFloat(pending.entry_zone_high || "0"),
-              fromWatchlist: pending.from_watchlist,
-              stagedCycles: pending.staged_cycles,
             },
           };
 
@@ -4661,7 +4478,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             take_profit: pending.take_profit.toString(),
             open_time: nowStr,
             signal_reason: JSON.stringify(signalReason),
-            signal_score: pending.signal_score?.toString() || "0",
             order_id: orderId,
             position_status: "open",
             bot_id: BOT_ID,
@@ -4809,8 +4625,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             position_id: positionId,
             symbol: pending.symbol,
             direction: pending.direction,
-            confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-            summary: `[CONFIRMED ENTRY] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
+            confluence_score: 0, // placeholder: NOT NULL legacy column — the confluence score no longer exists
+            summary: `[CONFIRMED ENTRY] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
             bias: pending.direction === "long" ? "bullish" : "bearish",
             session: "confirmation_fill",
             timeframe: "5m",
@@ -4833,7 +4649,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             displacement: confirmationSignal.displacement, hasRefZone,
           });
 
-          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
+          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr });
 
           // Send Telegram notification for confirmed entry
           if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
@@ -4855,14 +4671,13 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
               `<b>Entry:</b> ${actualFillPrice.toFixed(5)}\n` +
               `<b>SL:</b> ${pending.stop_loss}\n` +
               `<b>TP:</b> ${pending.take_profit}\n` +
-              `<b>Score:</b> ${pending.signal_score}\n\n` +
+              `\n` +
               `🎯 <b>Confirmation</b>\n` +
               `<b>Signal:</b> ${typeLabel(confirmationRecord.type) ?? confirmationRecord.type} · ${confirmationRecord.timeframe ?? ""}` +
               (confirmationRecord.displacement !== null ? ` (disp: ${(confirmationRecord.displacement * 100).toFixed(0)}%${confirmationRecord.significance ? ", " + confirmationRecord.significance : ""})` : "") +
               confAttempts +
               confSupporting + `\n` +
-              `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
-              (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
+              `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]`;
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
               try {
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -5145,7 +4960,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   // ═══════════════════════════════════════════════════════════════════════════
   // ── Conflict counter thresholds (configurable via bot config) ──
   // Declared here (function scope) so they're accessible in both game plan and scoring sections.
-  const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
   const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
 
   // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
@@ -5578,7 +5392,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     const adjustedSlBuffer = symbolBufferOverride != null
       ? symbolBufferOverride
       : pairConfig.slBufferPips * pairAssetProfileInner.slBufferMultiplier;
-    const adjustedMinConfluence = Math.max(1, pairConfig.minConfluence + pairAssetProfileInner.minConfluenceAdj);
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)
     pairConfig._currentSymbol = pair;
@@ -5846,7 +5659,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       // overwritten every cycle and only survives as the last value before
       // resolution. One number makes the history answerable.
       lastPrice: analysis.lastPrice,
-      score: analysis.score,
       direction: analysis.direction,
       trend: analysis.structure.trend,
       zone: analysis.pd.currentZone,
@@ -5856,13 +5668,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       bias: analysis.bias,
       summary: analysis.summary,
       factorCount: analysis.factors.filter(f => f.present).length,
-      strongFactorCount: analysis.strongFactorCount || 0,
-      enabledMax: analysis.enabledMax || 0,
       factors: analysis.factors,
       // ── analysis_snapshot: per-factor + new-factor breakdown for dashboard ──
-      tieredScoring: analysis.tieredScoring || null,
       analysis_snapshot: {
-        factorScores: analysis.factors.map((f: any) => ({ name: f.name, weight: f.weight, present: f.present, detail: f.detail, tier: (f as any).tier })),
+        factorScores: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, detail: f.detail })),
         displacement: analysis.displacement ? { isDisplacement: analysis.displacement.isDisplacement, lastDirection: analysis.displacement.lastDirection } : null,
         breakerBlocks: (analysis.breakerBlocks || []).length,
         unicornSetups: (analysis.unicornSetups || []).length,
@@ -6203,8 +6012,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         signal_reason: JSON.stringify({ bot: BOT_ID, summary: `V3 ON (${v3Arm}) — shadow decision ${plan.decisionAt}`, v3: v3Ctx,
           impulseZone: { impulse: v3Impulse, bestZone: { type: plan.zone.type, low: plan.zone.low, high: plan.zone.high, refinedEntry: plan.zone.refinedEntry } },
           gates: v3Gates, originalSL: v3Geo.stop, originalTP: v3Geo.target, exitFlags: v3ExitFlags }),
-        signal_score: analysis.score, setup_type: `v3_${v3Arm}`, setup_confidence: null,
-        from_watchlist: false, staged_cycles: 0, staged_initial_score: null, exit_flags: v3ExitFlags, placed_at: v3PlacedAt,
+        setup_type: `v3_${v3Arm}`, setup_confidence: null,
+        exit_flags: v3ExitFlags, placed_at: v3PlacedAt,
         dry_run: dryRunActive, dry_run_context: dryRunActive ? { switches: simp, v3: v3Ctx, orderRR: v3Geo.orderRR, route2Stop: v3Geo.route2Stop, plannedSizing: v3Geo.plannedSizing } : null,
         config_hash: v3Cfg,
       };
@@ -6218,13 +6027,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           management: { breakEvenEnabled: pairConfig.breakEvenEnabled, trailingStopEnabled: pairConfig.trailingStopEnabled,
             partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
           caps: resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig), impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
-          riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null, promotedFromWatchlist: null,
+          riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null,
           entrySource: v3EntrySource, izGateMode: "hard", gamePlanEnabled: (config as any).gamePlanEnabled !== false,
           gamePlanContext: (pairConfig as any)._gamePlanContext ?? null, directionVerdict: null,
           impulse: { hasZone: true, selectedTF: "1h", impulse: v3Impulse, bestZone: plan.zone },
           obFvgZone: null, unifiedDetected: null, unifiedComparison: null,
-          gateScore: Number.isFinite(analysis.score) ? analysis.score : null, decisionScoreGate: null,
-          factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+          factors: analysis.factors ?? null,
           gates: v3Gates as any, ictFvgGate: null, orderRR: v3Geo.orderRR as any, loggedOnlyWouldBlock: v3Gates.filter((g: any) => g.wouldBlock).map((g: any) => ({ gateId: gateKeyOf(g) ?? "unclassified", reason: String(g.reason) })),
           tpSmallGate: null,
           riskGate: propFirmGateResult.enabled ? {
@@ -6376,8 +6184,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           scalper15: s15Ctx,
           impulseZone: { impulse: { high: s15Plan.impulse.high, low: s15Plan.impulse.low }, bestZone: { type: s15Plan.zone.type, low: s15Plan.zone.low, high: s15Plan.zone.high, refinedEntry: null } },
           gates: s15Gates, originalSL: s15Geo.stop, originalTP: s15Geo.target, exitFlags: s15ExitFlags }),
-        signal_score: analysis.score, setup_type: "scalper15", setup_confidence: null,
-        from_watchlist: false, staged_cycles: 0, staged_initial_score: null, exit_flags: s15ExitFlags, placed_at: s15PlacedAt,
+        setup_type: "scalper15", setup_confidence: null,
+        exit_flags: s15ExitFlags, placed_at: s15PlacedAt,
         dry_run: dryRunActive, dry_run_context: dryRunActive ? { switches: simp, scalper15: s15Ctx, orderRR: s15Geo.orderRR, route2Stop: s15Route2Stop, plannedSizing: s15Geo.plannedSizing } : null,
         config_hash: s15Cfg,
       };
@@ -6391,13 +6199,12 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           management: { breakEvenEnabled: pairConfig.breakEvenEnabled, trailingStopEnabled: pairConfig.trailingStopEnabled,
             partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
           caps: resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig), impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
-          riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null, promotedFromWatchlist: null,
+          riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null,
           entrySource: "zoneMid", izGateMode: "hard", gamePlanEnabled: (config as any).gamePlanEnabled !== false,
           gamePlanContext: (pairConfig as any)._gamePlanContext ?? null, directionVerdict: null,
           impulse: { hasZone: true, selectedTF: "15m", impulse: s15Plan.impulse, bestZone: s15Plan.zone },
           obFvgZone: null, unifiedDetected: null, unifiedComparison: null,
-          gateScore: Number.isFinite(analysis.score) ? analysis.score : null, decisionScoreGate: null,
-          factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+          factors: analysis.factors ?? null,
           gates: s15Gates as any, ictFvgGate: null, orderRR: s15Geo.orderRR as any, loggedOnlyWouldBlock: s15Gates.filter((g: any) => g.wouldBlock).map((g: any) => ({ gateId: gateKeyOf(g) ?? "unclassified", reason: String(g.reason) })),
           tpSmallGate: null,
           riskGate: propFirmGateResult.enabled ? {
@@ -6770,8 +6577,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           {
             ictHTFEnabled: pairConfig.ictHTFEnabled,
             ictHTFGateMode: pairConfig.ictHTFGateMode,
-            ictHTFAlignedBonus: pairConfig.ictHTFAlignedBonus,
-            ictHTFMisalignedPenalty: pairConfig.ictHTFMisalignedPenalty,
             ictHTFMinContainment: pairConfig.ictHTFMinContainment,
             ictWeeklyBiasRequired: pairConfig.ictWeeklyBiasRequired,
             ictDailyContainmentRequired: pairConfig.ictDailyContainmentRequired,
@@ -6800,7 +6605,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           } : null,
           weeklyAligned: ictHTFResult.weeklyAligned,
           zoneContained: ictHTFResult.zoneContained,
-          scoreAdjustment: ictHTFResult.scoreAdjustment,
           reason: ictHTFResult.reason,
           details: ictHTFResult.details,
         };
@@ -7004,77 +6808,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       }
     }
 
-    // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
-    const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
-    const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
-    // A staged setup is NOT invalidated when the entry-timeframe direction flips.
-    //
-    // It used to be: any staged setup in the opposite direction was killed with
-    // "Direction reversed to X". That is self-defeating. Reaching a demand zone
-    // below price requires price to FALL, and a falling entry timeframe reads
-    // bearish — so the move the setup is waiting for is the move that destroyed
-    // it. Mirror image for shorts waiting on a rally into supply. Every zone
-    // setup that behaved exactly as intended was cancelled on approach.
-    //
-    // Observed 2026-09-04: ten setups sat in the zone story and none fired.
-    //
-    // A zone is a price level. It stays valid until price breaks it. The rules
-    // that still kill a staged setup are all price- or time-based:
-    //   - sl_level breached          (below, the correct invalidation)
-    //   - TTL exceeded               (:2503, keyed off staged_at — a backstop,
-    //                                 120min for scalper)
-    //   - manually dismissed
-    //
-    // Promotion still requires analysis.direction to MATCH the staged direction,
-    // which is the right sequence: price falls into the zone with the entry
-    // timeframe bearish (setup waits), then reverses and turns bullish (setup
-    // promotes). Removing the invalidation is what lets it survive the first
-    // half of that.
-
-    // SL invalidation check for existing staged setups
-    if (existingStaged && existingStaged.sl_level && stagingEnabled) {
-      const slLevel = parseFloat(existingStaged.sl_level);
-      const slBreached = existingStaged.direction === "long"
-        ? analysis.lastPrice < slLevel
-        : analysis.lastPrice > slLevel;
-      if (slBreached) {
-        try {
-          await supabase.from("staged_setups").update({
-            status: "invalidated",
-            invalidation_reason: `SL level breached (price ${analysis.lastPrice.toFixed(5)} vs SL ${slLevel.toFixed(5)})`,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", existingStaged.id);
-          stagedInvalidated++;
-          stagedMap.delete(stagedKey!);
-          console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — SL breached (${analysis.lastPrice.toFixed(5)} vs ${slLevel.toFixed(5)})`);
-        } catch (e: any) {
-          console.warn(`[staging] Failed to invalidate SL-breached ${pair}: ${e?.message}`);
-        }
-        detail.status = "staged_invalidated";
-        detail.reason = `Staged setup invalidated — SL breached`;
-        detail.staging = { action: "invalidated", reason: "sl_breached" };
-        scanDetails.push(detail);
-        continue;
-      }
-    }
-
-    // Apply FOTSI penalty (softened from hard veto to score reduction)
-    // Compute before threshold/staging checks so penalty actually affects trade qualification.
-    let fotsiPenalty = 0;
-    if (_fotsiResult && pairConfig.useFOTSI !== false && analysis.direction) {
-      const _fotsiCurrencies = parsePairCurrencies(pair);
-      if (_fotsiCurrencies) {
-        const [_fBase, _fQuote] = _fotsiCurrencies;
-        const _fDir = analysis.direction === "long" ? "BUY" : "SELL";
-        const _fVeto = checkOverboughtOversoldVeto(
-          _fBase, _fQuote, _fDir as "BUY" | "SELL",
-          _fotsiResult.strengths, _fotsiResult.series,
-        );
-        if (_fVeto.vetoed) {
-          fotsiPenalty = -2.0; // Heavy penalty but not a hard block
-        }
-      }
-    }
     // ── DIRECTION VERDICT (single source of truth for direction) ──
     // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
     // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
@@ -7142,7 +6875,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         confidence: directionVerdict.confidence,
         agreement: directionVerdict.agreement,
         shouldBlock: directionVerdict.shouldBlock,
-        scoreAdjustment: directionVerdict.scoreAdjustment,
         summary: directionVerdict.summary,
       };
       console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict: ${directionVerdict.summary}`);
@@ -7180,11 +6912,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       (detail as any).signalSource = "standalone";
     }
 
-    // ── Impulse Zone Gate (configurable: hard / soft / off) ──
+    // ── Impulse Zone Gate (configurable: hard / off) ──
     // "hard" mode: no valid zone OR price not at zone → skip pair entirely (sniper approach)
-    // "soft" mode: penalty/bonus scoring adjustment (legacy behavior)
-    // "off" mode: impulse zone is purely informational
-    let impulseZonePenaltyVal = 0;
+    // "off" mode: impulse zone is purely informational. ("soft" adjusted the confluence
+    // score; the score is gone, so a stored "soft" now behaves exactly like "off".)
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
     if ((detail as any).unifiedDetected) {
@@ -7202,7 +6933,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     }
     if (unifiedGatePassed) {
       // Unified story is complete — use its entry/SL instead of impulse zone
-      impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: Unified gate passed \u2014 bypassing impulse zone gate.`);
     } else if (requireUnifiedSkips({ requireUnifiedZone: !!pairConfig.requireUnifiedZone, unifiedGatePassed, unifiedConfirmed: isUnifiedConfirmed(unifiedZoneData) })) {
       // requireUnifiedZone is ON — skip pair entirely if unified zone engine did not confirm.
@@ -7223,75 +6953,14 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         continue;
       }
       if (!izData.bestZone?.priceAtZone) {
-        // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
+        // Zone exists but price is NOT at the zone yet — skip this cycle
         detail.status = "watching_zone";
-        detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Watchlisted.`;
-        console.log(`[scan ${scanCycleId}] ⏳ ${pair}: IMPULSE ZONE HARD GATE — zone exists, price not there yet. Distance: ${izData.bestZone?.distanceToZone?.toFixed(5)}. Adding to watchlist.`);
-        // Stage this pair so it's ready when price arrives at the zone
-        if (stagingEnabled && analysis.direction && !isPaused) {
-          try {
-            const existingStagedForZone = existingStaged;
-            if (!existingStagedForZone) {
-              const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-              const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-              const ts = analysis.tieredScoring;
-              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-                : stagingTTLMinutes;
-              await supabase.from("staged_setups").insert({
-                user_id: userId,
-                bot_id: BOT_ID,
-                symbol: pair,
-                direction: analysis.direction,
-                initial_score: analysis.score,
-                current_score: analysis.score,
-                watch_threshold: watchThreshold,
-                initial_factors: presentFactors,
-                current_factors: presentFactors,
-                missing_factors: missingFactors,
-                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
-                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
-                tp_level: analysis.takeProfit,
-                scan_cycles: 1,
-                min_cycles: 1,
-                ttl_minutes: styleTTL,
-                setup_type: "impulse_zone_watch",
-                tier1_count: ts?.tier1Count ?? 0,
-                tier2_count: ts?.tier2Count ?? 0,
-                tier3_count: ts?.tier3Count ?? 0,
-                analysis_snapshot: {
-                  score: analysis.score,
-                  direction: analysis.direction,
-                  impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
-                },
-              });
-              stagedNew++;
-              console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.low?.toFixed(5)}-${izData.bestZone.high?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
-            } else {
-              // Update existing staged with latest zone data
-              await supabase.from("staged_setups").update({
-                current_score: analysis.score,
-                scan_cycles: existingStagedForZone.scan_cycles + 1,
-                last_eval_at: new Date().toISOString(),
-                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
-                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
-              }).eq("id", existingStagedForZone.id);
-              console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
-            }
-          } catch (e: any) {
-            if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
-              console.log(`[staging] ${pair} ${analysis.direction} already staged for zone watch`);
-            } else {
-              console.warn(`[staging] Failed to stage zone watch ${pair}: ${e?.message}`);
-            }
-          }
-          detail.staging = { action: "zone_watch", zoneDistance: izData.bestZone?.distanceToZone };
-        }
+        detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}).`;
+        console.log(`[scan ${scanCycleId}] ⏳ ${pair}: IMPULSE ZONE HARD GATE — zone exists, price not there yet. Distance: ${izData.bestZone?.distanceToZone?.toFixed(5)}.`);
         scanDetails.push(detail);
         continue;
       }
-      // Price IS at zone — apply bonus and proceed
-      impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
+      // Price IS at zone — proceed
       console.log(`[scan ${scanCycleId}] ✅ ${pair}: Impulse Zone CONFIRMED — price at zone. Proceeding with entry evaluation.`);
 
       // ── Zone Score Gate: reject weak zones below minimum quality threshold ──
@@ -7311,253 +6980,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         scanDetails.push(detail);
         continue;
       }
-
-      // ── Impulse Zone → Tier 1 Credit ──────────────────────────────────
-      // The impulse zone engine validates FVG/OB within the impulse leg at a Fib level,
-      // but confluenceScoring checks FVG/OB independently with stricter criteria
-      // (e.g., "is price literally inside the FVG right now?"). This causes 99% of
-      // Tier 1 failures: the zone engine found the FVG/OB but confluence scoring
-      // doesn't credit it. Since the impulse zone hard gate already passed (zone is
-      // valid AND price is at zone), we credit the zone's POI type as a Tier 1 factor.
-      if (analysis.tieredScoring && izData?.bestZone && !analysis.tieredScoring.tier1GatePassed) {
-        const ts = analysis.tieredScoring;
-        const zonePOIType = izData.bestZone.type; // "fvg" or "ob"
-        const htfLayers = izData.bestZone.htfLayers || [];
-        const izTier1Credits: string[] = [];
-
-        // Credit the primary POI type from the zone AND mutate the factor object
-        if (zonePOIType === "fvg") {
-          const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
-          if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
-            fvgFactor.present = true;
-            fvgFactor.weight = 1.0;
-            (fvgFactor as any).tier = 1;
-            fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is FVG — confirmed within impulse leg at Fib level`;
-            izTier1Credits.push("FVG (impulse-zone-confirmed)");
-          }
-        } else if (zonePOIType === "ob") {
-          const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
-          if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
-            obFactor.present = true;
-            obFactor.weight = 1.0;
-            (obFactor as any).tier = 1;
-            obFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is OB — confirmed within impulse leg at Fib level`;
-            izTier1Credits.push("OB (impulse-zone-confirmed)");
-          }
-        }
-
-        // Also check HTF layers for additional OB/FVG evidence
-        if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) {
-          const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
-          if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
-            obFactor.present = true;
-            obFactor.weight = 1.0;
-            (obFactor as any).tier = 1;
-            obFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains OB — zone overlaps HTF order block`;
-            if (!izTier1Credits.includes("OB (impulse-zone-confirmed)")) {
-              izTier1Credits.push("OB (HTF-zone-layer)");
-            }
-          }
-        }
-        if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) {
-          const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
-          if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
-            fvgFactor.present = true;
-            fvgFactor.weight = 1.0;
-            (fvgFactor as any).tier = 1;
-            fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains FVG — zone overlaps HTF fair value gap`;
-            if (!izTier1Credits.includes("FVG (impulse-zone-confirmed)")) {
-              izTier1Credits.push("FVG (HTF-zone-layer)");
-            }
-          }
-        }
-
-        if (izTier1Credits.length > 0) {
-          const _minT1 = pairConfig.minTier1Factors ?? 3;
-          const newTier1Count = ts.tier1Count + izTier1Credits.length;
-          // No tier1RequirePOI term here on purpose: this block only ever
-          // credits Order Block or Fair Value Gap, so reaching it means a POI
-          // is present by construction and the count is the only open question.
-          const newPassed = newTier1Count >= _minT1;
-          const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
-          const allPresent = [...existingFactors, ...izTier1Credits];
-          const newReason = newPassed
-            ? `Tier 1 gate passed (impulse-zone credit): ${newTier1Count} core factors (${allPresent.join(", ")})`
-            : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least ${_minT1}`;
-
-          // Each Tier 1 credit adds ~1.0 pts to tieredScore (conservative default)
-          const creditPts = izTier1Credits.length * 1.0;
-          const newTieredScore = ts.tieredScore + creditPts;
-          const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-
-          // Patch the tieredScoring in-place so Gate 19 sees the updated values
-          analysis.tieredScoring = {
-            ...ts,
-            tier1Count: newTier1Count,
-            tier1GatePassed: newPassed,
-            tier1GateReason: newReason,
-            tieredScore: newTieredScore,
-          };
-          analysis.score = newScore;
-          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Impulse Zone Tier 1 credit: +${izTier1Credits.length} (${izTier1Credits.join(", ")}) → T1 count ${ts.tier1Count}→${newTier1Count}, gate ${newPassed ? "PASSED" : "still failed"}, score ${ts.tieredScore.toFixed(1)}→${newTieredScore.toFixed(1)} (${analysis.score.toFixed(1)}%)`);
-        }
-      }
-      // ── Impulse Zone → P/D & Fib Credit (Tier 1) ────────────────────────
-      // The P/D factor uses the entry-TF zigzag to measure retracement depth.
-      // The impulse zone engine uses the 1H impulse leg's Fib overlay — a
-      // different (often better) swing anchor. When the impulse zone validates
-      // a POI at fibDepth >= 0.5 (i.e., in OTE or deeper), the P/D factor
-      // should reflect that the entry IS at a premium/discount Fib level.
-      // Only credit when: hard gate passed, P/D factor not already present at Tier 1.
-      if (analysis.tieredScoring && izData?.bestZone) {
-        const pdFactor = analysis.factors?.find((f: any) => f.name === "Premium/Discount & Fib");
-        const fibDepth = izData.bestZone.fibDepth ?? 0;
-        if (pdFactor && (!pdFactor.present || pdFactor.weight <= 0) && fibDepth >= 0.5) {
-          // Credit the P/D factor based on the impulse zone's validated Fib depth
-          const fibPct = (fibDepth * 100).toFixed(1);
-          const izFibLabel = fibDepth >= 0.618 ? "OTE zone" : "discount/premium zone";
-          pdFactor.present = true;
-          pdFactor.weight = fibDepth >= 0.71 ? 2.0 : fibDepth >= 0.618 ? 1.5 : 1.0;
-          (pdFactor as any).tier = 1;
-          pdFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI at ${fibPct}% Fib depth (${izFibLabel}) — 1H impulse leg confirms P/D alignment`;
-          // Update tieredScoring: increment tier1Count + add weight to tieredScore + recalc score
-          const ts = analysis.tieredScoring;
-          if (ts && (ts as any).tier1Count !== undefined) {
-            const _minT1PD = pairConfig.minTier1Factors ?? 3;
-            const newCount = ts.tier1Count + 1;
-            const newPassed = newCount >= _minT1PD;
-            const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
-            existingFactors.push(`P/D (impulse-zone-fib ${fibPct}%)`);
-            const newTieredScore = ts.tieredScore + pdFactor.weight;
-            const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-            analysis.tieredScoring = {
-              ...ts,
-              tier1Count: newCount,
-              tier1GatePassed: newPassed,
-              tier1GateReason: newPassed
-                ? `Tier 1 gate passed (impulse-zone credit): ${newCount} core factors (${existingFactors.join(", ")})`
-                : `Tier 1 gate FAILED: only ${newCount} core factors — need at least ${_minT1PD}`,
-              tieredScore: newTieredScore,
-            };
-            analysis.score = newScore;
-            console.log(`[scan ${scanCycleId}] 🔧 ${pair}: P/D Fib credit from impulse zone (${fibPct}% depth) → T1 count ${ts.tier1Count}→${newCount}, gate ${newPassed ? "PASSED" : "still failed"}, score +${pdFactor.weight.toFixed(1)} → ${analysis.score.toFixed(1)}%`);
-          }
-        }
-      }
-      // ── Impulse Zone → Confluence Stack Credit (Tier 2) ─────────────────
-      // The Confluence Stack factor checks if entry-TF FVGs/OBs overlap with
-      // S/R + Fib levels. The impulse zone engine independently validates:
-      // srConfirmed (S/R overlaps zone) + htfLayers (HTF zones overlap).
-      // When the zone has srConfirmed + at least 1 HTF layer, that IS a
-      // confluence stack — just measured from the impulse leg's perspective.
-      if (analysis.tieredScoring && izData?.bestZone) {
-        const stackFactor = analysis.factors?.find((f: any) => f.name === "Confluence Stack");
-        const srConfirmed = izData.bestZone.srConfirmed ?? false;
-        const htfLayers = izData.bestZone.htfLayers || [];
-        const stackLayers = (srConfirmed ? 1 : 0) + htfLayers.length;
-        if (stackFactor && (!stackFactor.present || stackFactor.weight <= 0) && stackLayers >= 2) {
-          // Credit confluence stacking from impulse zone data
-          const layerLabels = [];
-          if (srConfirmed) layerLabels.push("S/R");
-          layerLabels.push(...htfLayers);
-          stackFactor.present = true;
-          stackFactor.weight = stackLayers >= 3 ? 1.5 : 1.0;
-          stackFactor.detail += ` | IMPULSE-ZONE CREDIT: zone has ${stackLayers}-layer confluence (${layerLabels.join(" + ")}) — stacking confirmed from impulse leg`;
-          // Update tier2Count + tieredScore + recalc analysis.score
-          const ts = analysis.tieredScoring;
-          if (ts && (ts as any).tier2Count !== undefined) {
-            const newTieredScore = ts.tieredScore + stackFactor.weight;
-            const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-            analysis.tieredScoring = {
-              ...ts,
-              tier2Count: ts.tier2Count + 1,
-              tieredScore: newTieredScore,
-            };
-            analysis.score = newScore;
-          }
-          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Confluence Stack credit from impulse zone (${layerLabels.join("+")}) → T2 count +1, score +${stackFactor.weight.toFixed(1)} → ${analysis.score.toFixed(1)}%`);
-        }
-      }
-      // ── Impulse Zone → HTF POI Alignment Credit (Tier 2) ────────────────
-      // The HTF POI Alignment factor checks if current price is inside a
-      // 4H/1H FVG/OB/Breaker. The impulse zone engine checks if the zone
-      // overlaps with HTF POIs. When priceAtZone is true AND the zone has
-      // HTF layers, price IS effectively inside those HTF POIs (transitive).
-      if (analysis.tieredScoring && izData?.bestZone && izData.bestZone.priceAtZone) {
-        const htfPoiFactor = analysis.factors?.find((f: any) => f.name === "HTF POI Alignment");
-        const htfLayers = izData.bestZone.htfLayers || [];
-        const hasHTFOBorFVG = htfLayers.some((l: string) => l.toLowerCase().includes("ob") || l.toLowerCase().includes("fvg"));
-        if (htfPoiFactor && (!htfPoiFactor.present || htfPoiFactor.weight <= 0) && hasHTFOBorFVG) {
-          // Credit HTF POI alignment from impulse zone's validated overlap
-          const obLayers = htfLayers.filter((l: string) => l.toLowerCase().includes("ob"));
-          const fvgLayers = htfLayers.filter((l: string) => l.toLowerCase().includes("fvg"));
-          let boost = 0;
-          if (fvgLayers.length > 0) boost += 0.8; // 4H FVG equivalent
-          if (obLayers.length > 0) boost += 0.7;  // 4H OB equivalent
-          boost = Math.min(2.0, boost);
-          htfPoiFactor.present = true;
-          htfPoiFactor.weight = boost;
-          htfPoiFactor.detail += ` | IMPULSE-ZONE CREDIT: zone overlaps ${htfLayers.join(", ")} — price at zone confirms HTF POI alignment`;
-          // Update tier2Count + tieredScore + recalc analysis.score
-          const ts = analysis.tieredScoring;
-          if (ts && (ts as any).tier2Count !== undefined) {
-            const newTieredScore = ts.tieredScore + boost;
-            const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-            analysis.tieredScoring = {
-              ...ts,
-              tier2Count: ts.tier2Count + 1,
-              tieredScore: newTieredScore,
-            };
-            analysis.score = newScore;
-          }
-          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: HTF POI Alignment credit from impulse zone (${htfLayers.join(", ")}) → boost ${boost.toFixed(1)}, T2 count +1, score → ${analysis.score.toFixed(1)}%`);
-        }
-      }
-    } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "soft") {
-      // SOFT MODE: legacy penalty/bonus behavior
-      if (izData) {
-        if (!izData.hasZone) {
-          impulseZonePenaltyVal = -(pairConfig.impulseZonePenalty ?? 2.0);
-        } else if (izData.bestZone?.priceAtZone) {
-          impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
-        }
-      }
-    }
-    // "off" mode: no adjustment at all
-    // When directionVerdict is active, its scoreAdjustment replaces the ICT HTF score adjustment
-    // (the verdict already incorporates weekly bias, regime, and GP bias into one number).
-    const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
-    const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
-    // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
-    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.isValid)
-      ? -pairConfig.ictDisplacementMSSPenalty : 0;
-    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.found)
-      ? -pairConfig.ictJudasSwingPenalty : 0;
-    const fvgInvalidated = ictFVGResult ? ictFVGResult.results.filter((r: any) => r.status === "invalidated").length : 0;
-    const fvgExhausted = ictFVGResult ? ictFVGResult.results.filter((r: any) => r.status === "exhausted").length : 0;
-    const fvgTotal = ictFVGResult ? ictFVGResult.results.length : 0;
-    const ictFVGAdj = (pairConfig.ictFVGInvalidationGateMode === "soft" && ictFVGResult)
-      ? -(fvgInvalidated * pairConfig.ictFVGInvalidatedPenalty + fvgExhausted * pairConfig.ictFVGExhaustedPenalty) / Math.max(fvgTotal, 1)
-      : 0;
-    const ictKZAdj = (pairConfig.ictKillZoneGateMode === "soft" && ictKZResult)
-      ? (ictKZResult.isKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
-      : 0;
-    const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
-    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
-    if (impulseZonePenaltyVal !== 0) {
-      console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
-    }
-    if (ictHTFScoreAdj !== 0) {
-      console.log(`[scan ${scanCycleId}] ${pair} ICT HTF scoring: ${ictHTFScoreAdj > 0 ? "+" : ""}${ictHTFScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
-    }
-    if (ictMSSAdj !== 0 || ictJudasAdj !== 0 || ictFVGAdj !== 0 || ictKZAdj !== 0) {
-      console.log(`[scan ${scanCycleId}] ${pair} ICT modules scoring: MSS=${ictMSSAdj.toFixed(1)} Judas=${ictJudasAdj.toFixed(1)} FVG=${ictFVGAdj.toFixed(1)} KZ=${ictKZAdj.toFixed(1)} (total=${ictTotalAdj.toFixed(1)}%, effective=${effectiveScore.toFixed(1)}%)`);
-    }
-    if (verdictScoreAdj !== 0) {
-      console.log(`[scan ${scanCycleId}] ${pair} Direction Verdict scoring: ${verdictScoreAdj > 0 ? "+" : ""}${verdictScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
     }
     // ── Thesis Conviction Tracker (shadow mode: log only, no trade impact) ──
-    const opposingFactorCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
+    const opposingFactorCount = analysis.opposingFactorCount ?? 0;
     let convictionResult: ConvictionResult | null = null;
     if ((config as any).thesisConvictionEnabled && analysis.direction) {
       try {
@@ -7595,14 +7020,13 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         // Shadow mode: log the conviction score and what it WOULD have done
         const creditDecision = convictionResult.impulseCreditDecision;
         if (convictionResult.conviction < 80 || creditDecision !== "granted") {
-          console.log(`[conviction${(config as any).thesisConvictionMode === "shadow" ? ":shadow" : ""}] ${pair} ${analysis.direction}: conviction=${convictionResult.conviction.toFixed(0)}%, cycles=${convictionResult.cycleCount}, credit=${creditDecision}, scoreAdj=${convictionResult.scoreAdjustment.toFixed(1)}, summary=${convictionResult.summary}`);
+          console.log(`[conviction${(config as any).thesisConvictionMode === "shadow" ? ":shadow" : ""}] ${pair} ${analysis.direction}: conviction=${convictionResult.conviction.toFixed(0)}%, cycles=${convictionResult.cycleCount}, credit=${creditDecision}, summary=${convictionResult.summary}`);
         }
         // Attach to scan detail for logging/debugging
         (detail as any).thesisConviction = {
           conviction: convictionResult.conviction,
           cycleCount: convictionResult.cycleCount,
           creditDecision,
-          scoreAdjustment: convictionResult.scoreAdjustment,
           summary: convictionResult.summary,
           thesisDegrading: convictionResult.thesisDegrading,
           mode: (config as any).thesisConvictionMode,
@@ -7611,71 +7035,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         console.warn(`[conviction] ${pair} error (non-fatal): ${tcErr?.message}`);
       }
     }
-    // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
-    // When many factors actively oppose the trade, raise the bar or block entirely.
+    // ── Bidirectional Conflict Counter Gate ──
+    // When too many factors actively oppose the trade, block it entirely.
     const opposingCount = opposingFactorCount;
-    let conflictAdjustedMinConfluence = adjustedMinConfluence;
-    let conflictHardBlock = false;
-    if (opposingCount >= conflictBlockAt) {
-      conflictHardBlock = true;
-    } else if (opposingCount >= conflictThresholdRaise) {
-      conflictAdjustedMinConfluence = adjustedMinConfluence + 10;
-      console.log(`[conflict] ${pair}: ${opposingCount} opposing factors (>= ${conflictThresholdRaise}) — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
-    }
-
-    // Determine if this is a staged setup being promoted
-    let isPromotedFromStaging = false;
-    if (existingStaged && effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
-      const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
-      if (cyclesMet) {
-        isPromotedFromStaging = true;
-        // Update the staged setup to promoted
-        try {
-          const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-          const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-          await supabase.from("staged_setups").update({
-            status: "promoted",
-            current_score: analysis.score,
-            current_factors: presentFactors,
-            missing_factors: missingFactors,
-            promotion_reason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
-            resolved_at: new Date().toISOString(),
-            last_eval_at: new Date().toISOString(),
-            scan_cycles: existingStaged.scan_cycles + 1,
-          }).eq("id", existingStaged.id);
-          stagedPromoted++;
-          stagedMap.delete(stagedKey!);
-          console.log(`[staging] PROMOTED ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% after ${existingStaged.scan_cycles + 1} cycles`);
-        } catch (e: any) {
-          console.warn(`[staging] Failed to promote ${pair}: ${e?.message}`);
-        }
-        detail.staging = { action: "promoted", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
-      } else {
-        // Score is above gate but hasn't been staged long enough — update and wait
-        try {
-          const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-          const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-          await supabase.from("staged_setups").update({
-            current_score: analysis.score,
-            current_factors: presentFactors,
-            missing_factors: missingFactors,
-            scan_cycles: existingStaged.scan_cycles + 1,
-            last_eval_at: new Date().toISOString(),
-            entry_price: analysis.lastPrice,
-            sl_level: analysis.stopLoss,
-            tp_level: analysis.takeProfit,
-          }).eq("id", existingStaged.id);
-          console.log(`[staging] ${pair} ${analysis.direction} score ${analysis.score.toFixed(1)}% — above gate but needs ${(existingStaged.min_cycles || minStagingCycles) - existingStaged.scan_cycles} more cycle(s)`);
-        } catch (e: any) {
-          console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
-        }
-        detail.status = "staged_confirming";
-        detail.reason = `Score ${analysis.score.toFixed(1)}% above gate — confirming (cycle ${existingStaged.scan_cycles + 1}/${existingStaged.min_cycles || minStagingCycles})`;
-        detail.staging = { action: "confirming", cycles: existingStaged.scan_cycles + 1, minCycles: existingStaged.min_cycles || minStagingCycles };
-        scanDetails.push(detail);
-        continue;
-      }
-    }
+    const conflictHardBlock = opposingCount >= conflictBlockAt;
 
     // Apply the conflict hard-block decision computed above
     if (conflictHardBlock) {
@@ -7716,6 +7079,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       continue;
     }
     // ICT FVG Invalidation hard gate: block trade if ALL FVGs are invalidated
+    const fvgInvalidated = ictFVGResult ? ictFVGResult.results.filter((r: any) => r.status === "invalidated").length : 0;
+    const fvgExhausted = ictFVGResult ? ictFVGResult.results.filter((r: any) => r.status === "exhausted").length : 0;
+    const fvgTotal = ictFVGResult ? ictFVGResult.results.length : 0;
     const ictFvgWouldBlock = !!ictFVGResult && fvgTotal > 0 && fvgInvalidated + fvgExhausted === fvgTotal;
     (detail as any).ictFVGGate = { mode: pairConfig.ictFVGInvalidationGateMode, wouldBlock: ictFvgWouldBlock, total: fvgTotal, invalidated: fvgInvalidated, exhausted: fvgExhausted };
     if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFvgWouldBlock) {
@@ -7745,10 +7111,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       continue;
     }
 
-    // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
-    const scoreWouldBlock = !(effectiveScore >= conflictAdjustedMinConfluence);
-    (detail as any).scoreGate = { mode: simp.scoreGateMode, wouldBlock: scoreWouldBlock, score: effectiveScore, threshold: conflictAdjustedMinConfluence };
-    if ((simp.scoreGateMode === "log" || !scoreWouldBlock) && analysis.direction && !isPaused) {
+    // A direction and an unpaused account carry the setup into the safety gates.
+    // (There is no confluence-score gate: the score was removed.)
+    if (analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -7829,8 +7194,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       // the grounds that GP Bias Confidence scoring would carry the load. It has
       // been a no-op ever since, including through the 2026-09-01 revert.
       //
-      // Modes: "off" (no gate at all), "soft" (info-only + scoring penalty —
-      // the behaviour since the Phase 7 migration and still the default), or
+      // Modes: "off" (no gate at all), "soft" (info-only, recorded as an advisory
+      // pass — the default), or
       // "hard" (blocks a signal that opposes a sufficiently confident bias).
       //
       // Measured 2026-09-03. Of the 14 trades closed that day, the 7 where GP
@@ -7874,7 +7239,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             ? "instrument marked skip — advisory only"
             : biasConf < gpMinConf
             ? `bias confidence ${biasConf}% < ${gpMinConf}% — below gate threshold`
-            : "handled by GP Bias Confidence scoring";
+            : "advisory (soft mode)";
           gates.push({ gateKey: "game_plan", passed: true, reason: `GP filter (${gpGateMode}): ${gpFilter.reason} — ${why}` });
           console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction (${biasConf}% conf) — ${why}`);
         } else {
@@ -7917,11 +7282,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           allPassedAfterSwitches: gates.every((g: any) => g.passed) };
       }
       const allPassed = gates.every(g => g.passed);
-      // ── Sync detail with post-credit state so dashboard display matches gate decisions ──
-      // Impulse zone credits (lines ~3934-4120) reassign analysis.tieredScoring to a new object,
-      // but detail.tieredScoring still references the pre-credit snapshot. Sync it here.
-      detail.tieredScoring = analysis.tieredScoring;
-      detail.score = analysis.score;
       detail.gates = gates;
       detail.gamePlan = gpFilter; // attach game plan filter result to scan detail
 
@@ -8465,7 +7825,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         let limitEntrySource: Route2EntrySource = limitEntry ? "legacy" : "legacy";
         // ── Impulse Zone Entry Override ──
         // When hard gate is active and zone has a refined entry, use the zone's entry level
-        // instead of the nearest OB/FVG from Tier 1. This ensures the limit order targets
+        // instead of the nearest OB/FVG factor. This ensures the limit order targets
         // the impulse zone's optimal entry (OTE level with S/R + LTF confirmation).
         if (izGateMode === "hard" && izData?.bestZone?.refinedEntry) {
           const zoneEntry = izData.bestZone.refinedEntry;
@@ -8688,13 +8048,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                 status: "pending",
                 expiry_minutes: ROUTE2_TTL_MINUTES,
                 expires_at: cExpiresAt,
-                signal_reason: JSON.stringify({ bot: SHADOW_BOT_ID, shadow: { arm: "C", pairedWith: BOT_ID }, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: cGeo.stop, originalTP: cGeo.target, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: cGeo.plannedSizing ? { mode: "fill_time_planned", ...cGeo.plannedSizing } : sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
-                signal_score: analysis.score,
+                signal_reason: JSON.stringify({ bot: SHADOW_BOT_ID, shadow: { arm: "C", pairedWith: BOT_ID }, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: cGeo.stop, originalTP: cGeo.target, exitFlags, factorScores: analysis.factors, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: cGeo.plannedSizing ? { mode: "fill_time_planned", ...cGeo.plannedSizing } : sizingProvenance }),
                 setup_type: setupClassification.setupType,
                 setup_confidence: setupClassification.confidence,
-                from_watchlist: isPromotedFromStaging || false,
-                staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
-                staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
                 exit_flags: exitFlags,
                 placed_at: cPlacedAt,
                 dry_run: true,
@@ -8702,7 +8058,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                   switches: simp,
                   loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
                   tpTooSmall: (detail as any).tpTooSmall ?? null,
-                  scoreGate: (detail as any).scoreGate ?? null,
                   ictFVGGate: (detail as any).ictFVGGate ?? null,
                   orderRR: cGeo.orderRR,
                   route2Stop: cGeo.route2Stop,
@@ -8710,7 +8065,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                   unifiedDetected: (detail as any).unifiedDetected ?? null,
                   unifiedComparison: (detail as any).unifiedComparison ?? null,
                   legacyWouldAdmit: ((detail as any).loggedOnlyGates ?? []).length === 0
-                    && !((detail as any).scoreGate?.wouldBlock)
                     && !((detail as any).ictFVGGate?.wouldBlock),
                   legacyGeometryDiffers: !!(detail as any).unifiedDetected,
                   shadow: cShadowCtx,
@@ -8728,9 +8082,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                 caps: resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig),
                 impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
                 riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null,
-                promotedFromWatchlist: isPromotedFromStaging && existingStaged ? {
-                  stagedSetupId: existingStaged.id ?? null, initialScore: parseFloat(existingStaged.initial_score),
-                  cycles: (existingStaged.scan_cycles ?? 0) + 1 } : null,
                 entrySource: "zoneMid", izGateMode,
                 gamePlanEnabled: (config as any).gamePlanEnabled !== false,
                 gamePlanContext: (pairConfig as any)._gamePlanContext ?? null,
@@ -8739,9 +8090,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                 obFvgZone: null,
                 unifiedDetected: (detail as any).unifiedDetected ?? null,
                 unifiedComparison: (detail as any).unifiedComparison ?? null,
-                gateScore: Number.isFinite(analysis.score) ? analysis.score : null,
-                decisionScoreGate: (detail as any).scoreGate ?? null,
-                factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+                factors: analysis.factors ?? null,
                 gates: gates as any, ictFvgGate: (detail as any).ictFVGGate ?? null, orderRR: cGeo.orderRR as any,
                 loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
                 tpSmallGate: (detail as any).tpTooSmall ?? null,
@@ -8758,7 +8107,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
               });
               shadowIntents.push({
                 symbol: pair, direction: analysis.direction, limit: cLimit, pipSize: spec.pipSize,
-                score: analysis.score, lastPrice: analysis.lastPrice, stop: cGeo.stop, target: cGeo.target, size: cGeo.size,
+                lastPrice: analysis.lastPrice, stop: cGeo.stop, target: cGeo.target, size: cGeo.size,
                 order: cOrder, attribution: cAttribution, shadowCtx: cShadowCtx, cap, detail,
               });
             } else if (cGeo && !cGeo.ok) {
@@ -8919,9 +8268,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
 
           // ── Replace stale pending: expire any existing pending order for same symbol+direction ──
           // Market evolves — a new setup for the same symbol/direction is a different trade idea
-          // with different entry zone, SL/TP, score. Expire the old one and insert fresh.
+          // with different entry zone and SL/TP. Expire the old one and insert fresh.
           const { data: stalePending } = await supabase.from("pending_orders")
-            .select("order_id, entry_price, signal_score, signal_id")
+            .select("order_id, entry_price, signal_id")
             .eq("user_id", userId).eq("bot_id", BOT_ID)
             .eq("symbol", pair).eq("direction", analysis.direction)
             .eq("status", "pending");
@@ -8943,9 +8292,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           const { same: samePriceOrders, moved: movedOrders } =
             splitByLevel<any>(stalePending ?? [], limitEntry.price, spec.pipSize);
           if (samePriceOrders.length > 0) {
-            // Refresh the RISK LEVELS too, not just the score and TTL. The
-            // first version of this updated signal_score/expires_at/
-            // current_price only, so an order refreshed for hours kept the
+            // Refresh the RISK LEVELS too. The first version of this updated
+            // expires_at/current_price only, so an order refreshed for hours kept the
             // stop, target and size computed on the scan that first armed it —
             // and could then fill against volatility that had moved on. The
             // entry price is unchanged by definition here (that is what makes
@@ -8960,7 +8308,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             // fixed window is the only thing that matches what was validated.
             // Max practical lifetime is therefore exactly ROUTE2_TTL_MINUTES.
             await supabase.from("pending_orders").update({
-              signal_score: analysis.score,
               current_price: analysis.lastPrice,
               stop_loss: limitSL,
               take_profit: limitTP,
@@ -8977,7 +8324,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           // and new records link both ways. Fields written are unchanged.
           const supersede = movedOrders.map((s: any) => ({
             order_id: s.order_id as string,
-            cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${movedOrders[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${movedOrders[0].entry_price})`,
+            cancel_reason: `Superseded by new setup (entry ${limitEntry.price} vs old ${movedOrders[0].entry_price})`,
           }));
 
           // Refreshed in place — inserting as well would leave two live orders
@@ -9076,13 +8423,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: plannedSizing ? { mode: "fill_time_planned", ...plannedSizing } : sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
-            signal_score: analysis.score,
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: plannedSizing ? { mode: "fill_time_planned", ...plannedSizing } : sizingProvenance }),
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
-            from_watchlist: isPromotedFromStaging || false,
-            staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
-            staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
             exit_flags: exitFlags,
             placed_at: r2PlacedAt,
             dry_run: dryRunActive,
@@ -9091,7 +8434,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
               loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
               // Step 17-B: the logged-only TP gate's measurement (null unless it would have blocked)
               tpTooSmall: (detail as any).tpTooSmall ?? null,
-              scoreGate: (detail as any).scoreGate ?? null,
               ictFVGGate: (detail as any).ictFVGGate ?? null,
               orderRR: (detail as any).orderRR ?? null,
               // Step 10: old (market-anchored) vs corrected (limit-anchored) stop,
@@ -9101,9 +8443,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
               unifiedDetected: (detail as any).unifiedDetected ?? null,
               unifiedComparison: (detail as any).unifiedComparison ?? null,
               // Would the pre-step-8 (legacy) rules have placed this order too?
-              // (legacy config: score gate on, R:R/reaction/news gating, ICT FVG "hard").
+              // (legacy config: R:R/reaction/news gating, ICT FVG "hard").
               legacyWouldAdmit: ((detail as any).loggedOnlyGates ?? []).length === 0
-                && !((detail as any).scoreGate?.wouldBlock)
                 && !((detail as any).ictFVGGate?.wouldBlock),
               // Legacy would have used Unified's entry/SL/size for this setup.
               legacyGeometryDiffers: !!(detail as any).unifiedDetected,
@@ -9132,9 +8473,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                   partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
                 caps: attrCaps, impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
                 riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null,
-                promotedFromWatchlist: isPromotedFromStaging && existingStaged ? {
-                  stagedSetupId: existingStaged.id ?? null, initialScore: parseFloat(existingStaged.initial_score),
-                  cycles: (existingStaged.scan_cycles ?? 0) + 1 } : null,
                 entrySource: limitEntrySource, izGateMode,
                 gamePlanEnabled: (config as any).gamePlanEnabled !== false,
                 gamePlanContext: (pairConfig as any)._gamePlanContext ?? null,
@@ -9143,9 +8481,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                 obFvgZone: limitEntrySource === "legacy" ? { type: limitEntry.zoneType, low: limitEntry.zoneLow, high: limitEntry.zoneHigh } : null,
                 unifiedDetected: (detail as any).unifiedDetected ?? null,
                 unifiedComparison: (detail as any).unifiedComparison ?? null,
-                gateScore: Number.isFinite(analysis.score) ? analysis.score : null,
-                decisionScoreGate: (detail as any).scoreGate ?? null,
-                factors: analysis.factors ?? null, tieredScoring: analysis.tieredScoring ?? null,
+                factors: analysis.factors ?? null,
                 gates: gates as any, ictFvgGate: (detail as any).ictFVGGate ?? null, orderRR: (detail as any).orderRR ?? null,
                 loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
                 tpSmallGate: (detail as any).tpTooSmall ?? null,
@@ -9180,7 +8516,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           route2OrderRow.config_hash = configVersion;
           const placement = await placeRoute2Order(supabase, { attribution: route2Attribution, order: route2OrderRow, supersede });
           if (placement.superseded.length > 0) {
-            console.log(`[pending] Expired ${placement.superseded.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded, level moved (score ${analysis.score.toFixed(1)})`);
+            console.log(`[pending] Expired ${placement.superseded.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded, level moved`);
           }
           if (placement.outcome === "attribution_write_failed") {
             const msg = placement.error ?? "unknown";
@@ -9210,7 +8546,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           (detail as any).signalId = placement.signalId;
 
           pendingPlaced++;
-          detail.status = dryRunActive ? "dry_run_setup_active" : isPromotedFromStaging ? "zone_setup_from_watchlist" : "zone_setup_active";
+          detail.status = dryRunActive ? "dry_run_setup_active" : "zone_setup_active";
           detail.limitOrder = {
             orderId: pendingOrderId,
             entryPrice: limitEntry.price,
@@ -9221,9 +8557,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             currentPrice: analysis.lastPrice,
             distancePips: (Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1),
           };
-          if (isPromotedFromStaging && existingStaged) {
-            detail.staging = { action: "promoted_to_limit", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
-          }
           detail.size = limitSize;
           detail.entryPrice = limitEntry.price;
           detail.stopLoss = limitSL;
@@ -9250,14 +8583,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
 ` +
               `<b>TP:</b> ${limitTP}
 ` +
-              `<b>Score:</b> ${analysis.score.toFixed(1)}
-` +
               `<b>Confirmation:</b> ${unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for 5m CHoCH at zone"}
 ` +
-              `<b>Expires:</b> ${expiryMinutes}min` +
-              (isPromotedFromStaging && existingStaged ? `
-
-📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)` : "");
+              `<b>Expires:</b> ${expiryMinutes}min`;
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
               try {
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -9342,7 +8670,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
                 open_time: opp.open_time || nowStr, closed_at: nowStr,
                 close_reason: "reverse_signal",
                 pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
-                signal_score: opp.signal_score || "0",
               },
             });
             if (oppSettlement.outcome !== "settled") {
@@ -9456,7 +8783,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           configSnapshot: entryConfigSnapshot(pairConfig as Record<string, unknown>),
           decisionSnapshot: entryDecisionSnapshot({
             zoneScore: (detail as any).impulseZone?.bestZone?.totalScore ?? null,
-            confluenceScore: analysis.score ?? null,
             directionVerdict: (detail as any).directionVerdict?.verdict ?? null,
             directionConfidence: (detail as any).directionVerdict?.confidence ?? null,
             zoneTimeframe: (detail as any).unifiedZone?.selectedTF ?? null,
@@ -9483,8 +8809,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: sizingProvenance, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
-          signal_score: analysis.score.toString(),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, slFloor: slFloorTrace, legPd: (analysis as any).legPd ?? null, sizing: sizingProvenance }),
           order_id: orderId,
           position_status: "open",
           bot_id: BOT_ID,
@@ -9496,8 +8821,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           position_id: positionId,
           symbol: pair,
           direction: analysis.direction,
-          confluence_score: Math.round(analysis.score),
-          summary: `${isPromotedFromStaging ? "[WATCHLIST] " : ""}[${setupClassification.setupType.toUpperCase()}] ${analysis.summary}`,
+          confluence_score: 0, // placeholder: NOT NULL legacy column — the confluence score no longer exists
+          summary: `[${setupClassification.setupType.toUpperCase()}] ${analysis.summary}`,
           bias: analysis.bias,
           session: analysis.session.name,
           timeframe: pairConfig.entryTimeframe,
@@ -9510,14 +8835,11 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         });
 
         tradesPlaced++;
-        detail.status = isPromotedFromStaging ? "trade_placed_from_watchlist" : (useMarketFillAtZone ? "trade_placed_at_zone" : "trade_placed");
+        detail.status = useMarketFillAtZone ? "trade_placed_at_zone" : "trade_placed";
         if (useMarketFillAtZone) {
           detail.entryMethod = "market_fill_at_zone";
           detail.zoneConfirmation = "zone_touch_is_confirmation";
           detail.impulseZoneEntry = { zoneLow: izData?.bestZone?.low, zoneHigh: izData?.bestZone?.high, zoneType: izData?.bestZone?.type, refinedEntry: izData?.bestZone?.refinedEntry };
-        }
-        if (isPromotedFromStaging && existingStaged) {
-          detail.staging = { action: "promoted_and_traded", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
         }
         detail.size = size;
         detail.entryPrice = marketEntryPrice;
@@ -9536,11 +8858,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             `<b>Entry:</b> ${analysis.lastPrice}\n` +
             `<b>SL:</b> ${sl}\n` +
             `<b>TP:</b> ${tp}\n` +
-            `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
             `<b>Session:</b> ${analysis.session.name}\n` +
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
             `<b>Summary:</b> ${analysis.summary || "—"}` +
-            (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
             (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\n<b>Zone:</b> ${izData?.bestZone?.type || "IZ"} [${izData?.bestZone?.low?.toFixed(5)} \u2013 ${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? " (inside)" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}${izData?.bestZone?.refinedEntry ? `\n<b>Refined Entry:</b> ${izData.bestZone.refinedEntry.toFixed(5)}` : ""}` : "") +
             (unifiedZoneData?.confirmation ? `\n\n🎯 <b>Entry Confirmation</b>\n<b>Type:</b> ${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " ✓" : ""}\n<b>Detail:</b> ${unifiedZoneData.confirmation.detail}${unifiedZoneData.confirmation.score > 0 ? `\n<b>Score:</b> +${unifiedZoneData.confirmation.score.toFixed(1)}` : ""}` : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
@@ -9878,7 +9198,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         }
 
         // Add to virtual open positions for subsequent gates
-        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
+        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr });
       } else {
         rejectedCount++;
         detail.status = "rejected";
@@ -9895,9 +9215,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             direction: analysis.direction as "long" | "short",
             rejectionType: "gate_blocked",
             failedGates: failedGates.map(g => g.reason),
-            confluenceScore: effectiveScore,
-            tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
-            tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
             entryPrice: analysis.lastPrice,
             stopLoss: analysis.stopLoss,
             takeProfit: analysis.takeProfit,
@@ -9930,179 +9247,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         }
       }
     } else {
-      if (analysis.score < adjustedMinConfluence) {
-        // ── Rejected Setup Logging: below-threshold with strong T1 ──
-        if (analysis.direction && shouldLogBelowThreshold(analysis.tieredScoring?.tier1Count ?? 0)) {
-          try {
-            const _rsCurrencies2 = parsePairCurrencies(pair);
-            const _rsPairPlan2 = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
-            await logRejectedSetup({
-              supabase,
-              userId,
-              symbol: pair,
-              direction: analysis.direction as "long" | "short",
-              rejectionType: "below_threshold_strong_t1",
-              failedGates: [],
-              confluenceScore: effectiveScore,
-              tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
-              tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
-              entryPrice: analysis.lastPrice,
-              stopLoss: analysis.stopLoss,
-              takeProfit: analysis.takeProfit,
-              rrRatio: analysis.stopLoss && analysis.takeProfit
-                ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
-                : undefined,
-              sessionName: analysis.session?.name,
-              regime: (pairConfig as any)._gamePlanContext?.regime,
-              gpBias: _rsPairPlan2?.bias,
-              gpBiasConfidence: _rsPairPlan2?.biasConfidence,
-              fotsiBaseTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[0]] : undefined,
-              fotsiQuoteTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[1]] : undefined,
-              priceAtRejection: analysis.lastPrice,
-              // Same P/D snapshot as the gate-blocked path — these rows are the
-              // control group, rejected on score rather than on the P/D gate.
-              rawDetail: buildPdSnapshot(analysis, pairConfig, resolvedStyle),
-            });
-          } catch (rsErr: any) {
-            console.warn(`[rejected-setup] Below-threshold logging error for ${pair}: ${rsErr?.message}`);
-          }
-        }
-        // ── Setup Staging: Stage below-threshold setups that have potential ──
-        if (stagingEnabled && analysis.direction && !isPaused
-            && analysis.score >= watchThreshold
-            && analysis.tieredScoring?.tier1Count >= 1) {
-          // Has direction, score is in the watch zone, and at least 1 Tier 1 factor
-          if (existingStaged) {
-            // Update existing staged setup with new score and factors
-            try {
-              const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-              const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-              const ts = analysis.tieredScoring;
-              await supabase.from("staged_setups").update({
-                current_score: analysis.score,
-                current_factors: presentFactors,
-                missing_factors: missingFactors,
-                scan_cycles: existingStaged.scan_cycles + 1,
-                last_eval_at: new Date().toISOString(),
-                entry_price: analysis.lastPrice,
-                sl_level: analysis.stopLoss,
-                tp_level: analysis.takeProfit,
-                tier1_count: ts?.tier1Count ?? 0,
-                tier2_count: ts?.tier2Count ?? 0,
-                tier3_count: ts?.tier3Count ?? 0,
-              }).eq("id", existingStaged.id);
-              console.log(`[staging] Updated ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% (cycle ${existingStaged.scan_cycles + 1})`);
-            } catch (e: any) {
-              console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
-            }
-            detail.status = "staged_watching";
-            detail.reason = `Watching: ${analysis.score.toFixed(1)}% (need ${adjustedMinConfluence}%) — cycle ${existingStaged.scan_cycles + 1}`;
-            detail.staging = {
-              action: "watching",
-              cycles: existingStaged.scan_cycles + 1,
-              initialScore: parseFloat(existingStaged.initial_score),
-              stagedAt: existingStaged.staged_at,
-              ttlMinutes: existingStaged.ttl_minutes || stagingTTLMinutes,
-            };
-          } else {
-            // Create new staged setup
-            try {
-              const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-              const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-              const ts = analysis.tieredScoring;
-              // Style-aware TTL: scalpers get shorter TTL, swing traders get longer
-              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-                : stagingTTLMinutes;
-              await supabase.from("staged_setups").insert({
-                user_id: userId,
-                bot_id: BOT_ID,
-                symbol: pair,
-                direction: analysis.direction,
-                initial_score: analysis.score,
-                current_score: analysis.score,
-                watch_threshold: watchThreshold,
-                initial_factors: presentFactors,
-                current_factors: presentFactors,
-                missing_factors: missingFactors,
-                entry_price: analysis.lastPrice,
-                sl_level: analysis.stopLoss,
-                tp_level: analysis.takeProfit,
-                scan_cycles: 1,
-                min_cycles: minStagingCycles,
-                ttl_minutes: styleTTL,
-                setup_type: setupClassification.setupType,
-                tier1_count: ts?.tier1Count ?? 0,
-                tier2_count: ts?.tier2Count ?? 0,
-                tier3_count: ts?.tier3Count ?? 0,
-                analysis_snapshot: {
-                  score: analysis.score,
-                  direction: analysis.direction,
-                  trend: analysis.structure.trend,
-                  zone: analysis.pd.currentZone,
-                  zonePercent: analysis.pd.zonePercent,
-                  session: analysis.session.name,
-                  factors: presentFactors,
-                  missingFactors,
-                  tieredScoring: ts ? { tier1Count: ts.tier1Count, tier2Count: ts.tier2Count, tier3Count: ts.tier3Count } : null,
-                },
-              });
-              stagedNew++;
-              console.log(`[staging] NEW ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% (watch threshold: ${watchThreshold}%, gate: ${adjustedMinConfluence}%)`);
-            } catch (e: any) {
-              // Unique constraint violation = already watching this pair+direction
-              if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
-                console.log(`[staging] ${pair} ${analysis.direction} already staged — skipping duplicate`);
-              } else {
-                console.warn(`[staging] Failed to stage ${pair}: ${e?.message}`);
-              }
-            }
-            detail.status = "staged_new";
-            detail.reason = `New watch: ${analysis.score.toFixed(1)}% (need ${adjustedMinConfluence}%)`;
-            detail.staging = {
-              action: "new",
-              watchThreshold,
-              ttlMinutes: resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-                : stagingTTLMinutes,
-            };
-          }
-        } else {
-          detail.status = "below_threshold";
-          const ts = analysis.tieredScoring;
-          const tierInfo = ts ? ` (T1:${ts.tier1Count}/4, T2:${ts.tier2Count}/5)` : "";
-          detail.reason = `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold${tierInfo}`;
-          // A score dip does NOT invalidate a staged setup.
-          //
-          // This used to kill the setup whenever analysis.score fell below
-          // watchThreshold, and a staged setup sits in this very branch by
-          // definition — being below threshold is why it was staged. Score is
-          // computed at CURRENT price, so as price travels toward the zone the
-          // factors that reference "at level" (Order Block, FVG, Premium/
-          // Discount) fall away and the score drops. The setup was cancelled for
-          // approaching its own entry.
-          //
-          // Together with the direction-reversal kill removed above, these were
-          // the two reasons ten zone setups were watched and none fired.
-          //
-          // What still kills a staged setup: sl_level breached, TTL exceeded
-          // (120min for scalper), manual dismissal. All price- or time-based.
-          // The score is re-read on every cycle and gates promotion, so a setup
-          // that never recovers simply expires instead of being destroyed early.
-          if (existingStaged && analysis.score < watchThreshold && stagingEnabled) {
-            detail.staging = { action: "watching_below_threshold", score: analysis.score, watchThreshold };
-          }
-        }
-      } else {
-        detail.status = isPaused ? "paused" : "no_direction";
-      }
-    }
-    // ── Final sync: ensure detail.tieredScoring/score reflect post-credit state for ALL paths ──
-    // (The above-threshold path already syncs at line ~4271, but below-threshold/staged/no-direction
-    //  paths skip that block. This catch-all ensures the dashboard always shows accurate data.)
-    if (analysis.tieredScoring && detail.tieredScoring !== analysis.tieredScoring) {
-      detail.tieredScoring = analysis.tieredScoring;
-      detail.score = analysis.score;
+      detail.status = isPaused ? "paused" : "no_direction";
     }
 
     scanDetails.push(detail);
@@ -10134,7 +9279,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         skipReason: d.skipReason ?? null,
         reason: d.reason ?? null,
         signalSource: d.signalSource ?? null,
-        score: d.score ?? null,
         direction: d.direction ?? null,
         entry: d.entry ?? d.suggestedEntry ?? null,
         stopLoss: d.stopLoss ?? d.sl ?? null,
@@ -10142,7 +9286,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         riskPips: d.riskPips ?? null,
         tradePlaced: d.status === "signal" || d.status === "entered",
         correlationAdvisory: d.correlationAdvisory ?? null,
-        staging: d.staging ?? null,
         // Step 17-B: present only when the logged-only TP gate would have blocked
         ...(d.tpTooSmall ? { tpTooSmall: d.tpTooSmall } : {}),
       };
@@ -10316,7 +9459,6 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
       },
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
-      staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
       thesisObservations,
@@ -10357,7 +9499,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     });
   }
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, weekendCryptoMode, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, weekendCryptoMode, activeStyle: resolvedStyle, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }

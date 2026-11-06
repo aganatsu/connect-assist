@@ -13,7 +13,7 @@ import {
 
 const MINIMAL = {
   simplification: {
-    scoreGateMode: "log", reactionGateMode: "log", rrGateMode: "order_geometry", orderRRMin: 1.0,
+    reactionGateMode: "log", rrGateMode: "order_geometry", orderRRMin: 1.0,
     newsGateMode: "log", unifiedModifiersEnabled: false, dryRunWhenLocked: true,
   },
 };
@@ -26,7 +26,7 @@ Deno.test("absent or malformed switches resolve to LEGACY behaviour (deploying c
 
 Deno.test("the approved minimal switches resolve exactly", () => {
   const s = resolveSimplification(MINIMAL);
-  assertEquals(s, { scoreGateMode: "log", reactionGateMode: "log", rrGateMode: "order_geometry", orderRRMin: 1.0, newsGateMode: "log", unifiedModifiersEnabled: false, dryRunWhenLocked: true,
+  assertEquals(s, { reactionGateMode: "log", rrGateMode: "order_geometry", orderRRMin: 1.0, newsGateMode: "log", unifiedModifiersEnabled: false, dryRunWhenLocked: true,
     // step 9 sizing switches are not part of the step 8 config → legacy defaults
     sizingMode: "legacy", riskPercent: 0.5, maxLotsPerTrade: 20,
     // step 10 stop anchor is not part of the step 8 config → legacy default
@@ -39,7 +39,6 @@ Deno.test("the approved minimal switches resolve exactly", () => {
 
 const gates: GateResult[] = [
   { gateId: "reaction", passed: false, reason: "Reaction Confirmation BLOCKED: Ranging market" },
-  { gateId: "score", passed: false, reason: "Score 15 < 20 threshold" },
   { gateId: "rr_legacy", passed: false, reason: "R:R 0.9 raw, 0.8 effective" },
   { gateId: "news_event", passed: false, reason: "News filter: high-impact event within 60min" },
   { gateId: "news_alignment", passed: true, reason: "News confirms" },
@@ -52,23 +51,23 @@ Deno.test("legacy switches leave every gate result untouched", () => {
   assertEquals(t.wouldHaveBlocked, []);
 });
 
-Deno.test("minimal switches: score, reaction, legacy R:R and news become logged passes; stacking still blocks", () => {
+Deno.test("minimal switches: reaction, legacy R:R and news become logged passes; stacking still blocks", () => {
   const t = applyLoggedOnlyGates(gates, resolveSimplification(MINIMAL));
-  assertEquals(t.wouldHaveBlocked.map((w) => w.gateId), ["reaction", "score", "rr_legacy", "news_event"]);
-  for (const g of t.gates.slice(0, 4)) {
+  assertEquals(t.wouldHaveBlocked.map((w) => w.gateId), ["reaction", "rr_legacy", "news_event"]);
+  for (const g of t.gates.slice(0, 3)) {
     assertEquals(g.passed, true);
     assertEquals(g.wouldBlock, true);
     assert(g.reason.startsWith("[logged only — would block]"));
   }
-  assertEquals(t.gates[4].wouldBlock, false, "a passing logged gate records wouldBlock false");
-  assertEquals(t.gates[5].passed, false, "the stacking guard is kept");
+  assertEquals(t.gates[3].wouldBlock, false, "a passing logged gate records wouldBlock false");
+  assertEquals(t.gates[4].passed, false, "the stacking guard is kept");
   assertEquals(t.gates.every((g) => g.passed), false);
 });
 
 Deno.test("each switch is independent", () => {
   const onlyNews = applyLoggedOnlyGates(gates, resolveSimplification({ simplification: { newsGateMode: "log" } }));
   assertEquals(onlyNews.wouldHaveBlocked.map((w) => w.gateId), ["news_event"]);
-  assertEquals(onlyNews.gates[1].passed, false, "score still gates");
+  assertEquals(onlyNews.gates[1].passed, false, "legacy R:R still gates");
 });
 
 Deno.test("order R:R: tpRatio 1.1 minus spread — passes with a wide stop, fails when spread dominates", () => {
@@ -112,9 +111,9 @@ Deno.test("dry run: only when locked AND switched on; otherwise locked stays pau
   assert(/const isPaused = dryRunActive \? false : \(account\.is_paused \|\| account\.entries_locked === true\);/.test(scanner));
 });
 
-Deno.test("score gate: decision gate honours the switch and always records would-block", () => {
-  assert(/\(detail as any\)\.scoreGate = \{ mode: simp\.scoreGateMode, wouldBlock: scoreWouldBlock/.test(scanner));
-  assert(/if \(\(simp\.scoreGateMode === "log" \|\| !scoreWouldBlock\) && analysis\.direction && !isPaused\)/.test(scanner));
+Deno.test("no score gate: a direction and an unpaused account carry the setup into the safety gates", () => {
+  assert(!/scoreGate/.test(scanner), "the confluence-score gate was removed");
+  assert(/if \(analysis\.direction && !isPaused\) \{\n\s*signalsFound\+\+;/.test(scanner));
 });
 
 Deno.test("log-only transform runs on the full gate list right before allPassed", () => {
@@ -123,7 +122,7 @@ Deno.test("log-only transform runs on the full gate list right before allPassed"
   assert(t > 0 && a > t && a - t < 800);
   const newsAlign = scanner.indexOf("// ── News Impact Alignment Gate ──");
   assert(newsAlign > 0 && newsAlign < t, "news-alignment gate is pushed before the transform");
-  for (const id of ["reaction", "score", "rr_legacy", "news_event", "news_alignment"]) {
+  for (const id of ["reaction", "rr_legacy", "news_event", "news_alignment"]) {
     assert(scanner.includes(`gateId: "${id}"`), `gate ${id} is tagged`);
   }
 });

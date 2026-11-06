@@ -17,9 +17,6 @@ interface RejectedSetup {
   direction: string;
   rejection_type: string;
   failed_gates: string[] | null;
-  confluence_score: number;
-  tier1_count: number;
-  tier1_factors: string[] | null;
   entry_price: number;
   stop_loss: number | null;
   take_profit: number | null;
@@ -53,21 +50,10 @@ interface SymbolStats {
   wouldWon: number;
   wouldLost: number;
   winRate: number;
-  avgScore: number;
 }
 
 interface SessionStats {
   session: string;
-  total: number;
-  wouldWon: number;
-  wouldLost: number;
-  winRate: number;
-}
-
-interface ThresholdBucket {
-  range: string;
-  min: number;
-  max: number;
   total: number;
   wouldWon: number;
   wouldLost: number;
@@ -81,7 +67,6 @@ interface AnalysisSummary {
   gateStats: GateStats[];
   symbolStats: SymbolStats[];
   sessionStats: SessionStats[];
-  thresholdBuckets: ThresholdBucket[];
   avgRR: number;
   avgMfe: number;
   avgMae: number;
@@ -121,11 +106,10 @@ function analyzeSetups(setups: RejectedSetup[]): AnalysisSummary {
     .sort((a, b) => b.total - a.total);
 
   // Symbol breakdown
-  const symbolMap = new Map<string, { total: number; wouldWon: number; wouldLost: number; scoreSum: number }>();
+  const symbolMap = new Map<string, { total: number; wouldWon: number; wouldLost: number }>();
   for (const s of resolved) {
-    const entry = symbolMap.get(s.symbol) || { total: 0, wouldWon: 0, wouldLost: 0, scoreSum: 0 };
+    const entry = symbolMap.get(s.symbol) || { total: 0, wouldWon: 0, wouldLost: 0 };
     entry.total++;
-    entry.scoreSum += s.confluence_score;
     if (s.outcome_status === "would_have_won") entry.wouldWon++;
     else entry.wouldLost++;
     symbolMap.set(s.symbol, entry);
@@ -137,7 +121,6 @@ function analyzeSetups(setups: RejectedSetup[]): AnalysisSummary {
       wouldWon: stats.wouldWon,
       wouldLost: stats.wouldLost,
       winRate: stats.total > 0 ? (stats.wouldWon / stats.total) * 100 : 0,
-      avgScore: stats.total > 0 ? stats.scoreSum / stats.total : 0,
     }))
     .sort((a, b) => b.total - a.total);
 
@@ -161,22 +144,6 @@ function analyzeSetups(setups: RejectedSetup[]): AnalysisSummary {
     }))
     .sort((a, b) => b.total - a.total);
 
-  // Threshold buckets
-  const buckets = [
-    { range: "30-40", min: 30, max: 40 },
-    { range: "40-50", min: 40, max: 50 },
-    { range: "50-55", min: 50, max: 55 },
-    { range: "55-60", min: 55, max: 60 },
-    { range: "60-70", min: 60, max: 70 },
-    { range: "70-80", min: 70, max: 80 },
-    { range: "80+", min: 80, max: 200 },
-  ];
-  const thresholdBuckets: ThresholdBucket[] = buckets.map(b => {
-    const inBucket = resolved.filter(s => s.confluence_score >= b.min && s.confluence_score < b.max);
-    const won = inBucket.filter(s => s.outcome_status === "would_have_won").length;
-    return { ...b, total: inBucket.length, wouldWon: won, wouldLost: inBucket.length - won, winRate: inBucket.length > 0 ? (won / inBucket.length) * 100 : 0 };
-  });
-
   // Direction breakdown
   const longResolved = resolved.filter(s => s.direction === "long");
   const shortResolved = resolved.filter(s => s.direction === "short");
@@ -197,7 +164,6 @@ function analyzeSetups(setups: RejectedSetup[]): AnalysisSummary {
     gateStats,
     symbolStats,
     sessionStats,
-    thresholdBuckets,
     avgRR,
     avgMfe,
     avgMae,
@@ -276,11 +242,11 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<any | 
 const SYSTEM_PROMPT = `You are a senior ICT/SMC trading strategist analyzing a bot's rejected trade setups.
 Your job is to produce SPECIFIC, ACTIONABLE recommendations that will improve profitability.
 
-You are given statistical analysis of trades that were BLOCKED by the bot's safety gates or threshold filters.
+You are given statistical analysis of trades that were BLOCKED by the bot's safety gates.
 For each blocked trade, we know whether it WOULD HAVE WON or WOULD HAVE LOST if taken.
 
 Your recommendations must be:
-1. SPECIFIC — name the exact gate, threshold, symbol, or session to change
+1. SPECIFIC — name the exact gate, symbol, or session to change
 2. QUANTIFIED — estimate the $ or pip impact based on the data
 3. PRIORITIZED — highest impact first
 4. RISK-AWARE — flag if a recommendation could increase drawdown
@@ -293,7 +259,7 @@ Output JSON with this exact structure:
     {
       "id": 1,
       "priority": "critical" | "high" | "medium" | "low",
-      "action": "The specific action to take (e.g., 'Disable P/D Zone gate for ETH/USD', 'Lower threshold from 55 to 48')",
+      "action": "The specific action to take (e.g., 'Disable P/D Zone gate for ETH/USD', 'Raise min R:R to 1.5 for GBP/JPY')",
       "reasoning": "Why this will help, based on the data",
       "expected_impact": "Quantified impact (e.g., '+12 winning trades/week', '+$450/week estimated')",
       "risk_warning": "What could go wrong if this change is made",
@@ -304,11 +270,6 @@ Output JSON with this exact structure:
     "working_well": ["Gate names that are correctly blocking losers"],
     "over_filtering": ["Gate names that are blocking too many winners"],
     "under_filtering": ["Gate names that should be stricter"]
-  },
-  "threshold_recommendation": {
-    "current_effective": <the threshold most setups are being blocked at>,
-    "suggested": <your recommended threshold>,
-    "reasoning": "Why this threshold is better"
   },
   "symbol_specific": [
     {
@@ -339,13 +300,11 @@ function buildUserPrompt(analysis: AnalysisSummary, days: number): string {
 ${analysis.gateStats.map(g => `- "${g.gate}": blocked ${g.total} trades, ${g.wouldWon} would have won (${g.winRate.toFixed(0)}% winner block rate), avg MFE: ${g.avgMfe.toFixed(1)}, avg MAE: ${g.avgMae.toFixed(1)}`).join("\n")}
 
 ## Symbol Breakdown
-${analysis.symbolStats.map(s => `- ${s.symbol}: ${s.total} blocked, ${s.wouldWon} would have won (${s.winRate.toFixed(0)}%), avg score: ${s.avgScore.toFixed(1)}`).join("\n")}
+${analysis.symbolStats.map(s => `- ${s.symbol}: ${s.total} blocked, ${s.wouldWon} would have won (${s.winRate.toFixed(0)}%)`).join("\n")}
 
 ## Session Breakdown
 ${analysis.sessionStats.map(s => `- ${s.session}: ${s.total} blocked, ${s.wouldWon} would have won (${s.winRate.toFixed(0)}%)`).join("\n")}
 
-## Confluence Score Buckets (would the trade have won at different thresholds?)
-${analysis.thresholdBuckets.filter(b => b.total > 0).map(b => `- Score ${b.range}: ${b.total} trades, ${b.wouldWon} won (${b.winRate.toFixed(0)}%)`).join("\n")}
 
 Based on this data, provide your specific recommendations to improve profitability.
 Remember: a high winner-block-rate means the gates are HURTING profitability by blocking good trades.
@@ -457,21 +416,6 @@ function generateFallbackRecommendations(analysis: AnalysisSummary) {
         confidence: gate.total >= 10 ? "high" : "medium",
       });
     }
-  }
-
-  // Check threshold
-  const highScoreBuckets = analysis.thresholdBuckets.filter(b => b.min >= 50 && b.total >= 3 && b.winRate > 55);
-  if (highScoreBuckets.length > 0) {
-    const lowestGood = highScoreBuckets.reduce((min, b) => b.min < min.min ? b : min, highScoreBuckets[0]);
-    recs.push({
-      id: recs.length + 1,
-      priority: "high",
-      action: `Consider lowering confluence threshold to ${lowestGood.min}`,
-      reasoning: `Trades with scores ${lowestGood.range} have a ${lowestGood.winRate.toFixed(0)}% win rate — they're being blocked unnecessarily.`,
-      expected_impact: `+${lowestGood.wouldWon} winning trades at this score range`,
-      risk_warning: `${lowestGood.wouldLost} additional losers would also be taken.`,
-      confidence: lowestGood.total >= 10 ? "high" : "medium",
-    });
   }
 
   // Symbol-specific issues

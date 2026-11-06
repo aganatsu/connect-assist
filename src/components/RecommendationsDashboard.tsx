@@ -109,7 +109,6 @@ const assessmentConfig: Record<string, { color: string; icon: React.ReactNode; l
 const categoryIcons: Record<string, React.ReactNode> = {
   stop_loss: <Shield className="w-3.5 h-3.5" />,
   take_profit: <Target className="w-3.5 h-3.5" />,
-  factor_weights: <BarChart3 className="w-3.5 h-3.5" />,
   session_filter: <Clock className="w-3.5 h-3.5" />,
   instrument_filter: <Zap className="w-3.5 h-3.5" />,
   risk_management: <Shield className="w-3.5 h-3.5" />,
@@ -157,8 +156,6 @@ const CONFIG_KEY_LABELS: Record<string, { label: string; tab: string; search?: s
   "portfolioHeat": { label: "Portfolio Heat (%)", tab: "risk", search: "portfolio heat" },
   "maxPerSymbol": { label: "Max Per Symbol", tab: "risk", search: "per symbol" },
   "fixedLotSize": { label: "Fixed Lot Size", tab: "risk", search: "lot size" },
-  "confluenceThreshold": { label: "Confluence Threshold", tab: "strategy", search: "confluence threshold" },
-  "tier1Minimum": { label: "Tier 1 Minimum", tab: "strategy", search: "tier" },
   "fixedSLPips": { label: "Stop Loss (pips)", tab: "entry_exit", search: "stop loss" },
   "SL": { label: "Stop Loss (pips)", tab: "entry_exit", search: "stop loss" },
   "fixedTPPips": { label: "Take Profit (pips)", tab: "entry_exit", search: "take profit" },
@@ -209,18 +206,15 @@ const CONFIG_KEY_LABELS: Record<string, { label: string; tab: string; search?: s
   "positionSizingMethod": { label: "Position Sizing Method", tab: "risk", search: "position sizing" },
   "allowSameDirectionStacking": { label: "Allow Same-Direction Stacking", tab: "risk", search: "stacking" },
   "conflictBlockAt": { label: "Conflict Block Threshold", tab: "risk", search: "conflict" },
-  "conflictThresholdRaise": { label: "Conflict Threshold Raise", tab: "risk", search: "conflict" },
   "atrVolatilityMultiplier": { label: "ATR Volatility Multiplier", tab: "risk", search: "ATR volatility" },
   // Instruments (advanced)
   "correlationFilterEnabled": { label: "Correlation Filter", tab: "instruments", search: "correlation" },
   "maxCorrelatedPositions": { label: "Max Correlated Positions", tab: "instruments", search: "correlation" },
   // Strategy toggles
   "structureLookback": { label: "Structure Lookback (bars)", tab: "strategy", search: "lookback" },
-  "regimeScoringEnabled": { label: "Regime Scoring", tab: "strategy", search: "regime" },
-  "regimeScoringStrength": { label: "Regime Scoring Strength", tab: "strategy", search: "regime" },
+  "regimeScoringEnabled": { label: "Regime Gate", tab: "strategy", search: "regime" },
   "htfBiasHardVeto": { label: "HTF Bias Hard Veto", tab: "strategy", search: "HTF bias" },
   "requireHTFBias": { label: "Require HTF Bias", tab: "strategy", search: "HTF bias" },
-  "normalizedScoring": { label: "Normalized Scoring", tab: "strategy", search: "normalized" },
   "onlyBuyInDiscount": { label: "Only Buy in Discount Zone", tab: "strategy", search: "discount" },
   "onlySellInPremium": { label: "Only Sell in Premium Zone", tab: "strategy", search: "premium" },
   "useOrderBlocks": { label: "Use Order Blocks", tab: "strategy", search: "order block" },
@@ -237,30 +231,6 @@ const CONFIG_KEY_LABELS: Record<string, { label: string; tab: string; search?: s
   "useUnicornModel": { label: "Use Unicorn Model", tab: "strategy", search: "unicorn" },
   "useStructureBreak": { label: "Use Structure Break", tab: "strategy", search: "structure break" },
   "structuralConvictionEnabled": { label: "Structural Conviction", tab: "strategy", search: "conviction" },
-  // Factor weight camelCase keys (when LLM emits them directly)
-  "marketStructure": { label: "Market Structure", tab: "factorWeights", search: "market structure" },
-  "orderBlock": { label: "Order Block", tab: "factorWeights", search: "order block" },
-  "fairValueGap": { label: "Fair Value Gap", tab: "factorWeights", search: "fair value" },
-  "premiumDiscountFib": { label: "Premium/Discount & Fib", tab: "factorWeights", search: "premium" },
-  "sessionQuality": { label: "Session Quality", tab: "factorWeights", search: "session" },
-  "judasSwing": { label: "Judas Swing", tab: "factorWeights", search: "judas" },
-  "pdPwLevels": { label: "PD/PW Levels", tab: "factorWeights", search: "PD/PW" },
-  "reversalCandle": { label: "Reversal Candle", tab: "factorWeights", search: "reversal" },
-  "liquiditySweep": { label: "Liquidity Sweep", tab: "factorWeights", search: "liquidity" },
-  "displacement": { label: "Displacement", tab: "factorWeights", search: "displacement" },
-  "breakerBlock": { label: "Breaker Block", tab: "factorWeights", search: "breaker" },
-  "unicornModel": { label: "Unicorn Model", tab: "factorWeights", search: "unicorn" },
-  "smtDivergence": { label: "SMT Divergence", tab: "factorWeights", search: "SMT" },
-  "volumeProfile": { label: "Volume Profile", tab: "factorWeights", search: "volume" },
-  "amdPhase": { label: "AMD Phase", tab: "factorWeights", search: "AMD" },
-  "currencyStrength": { label: "Currency Strength", tab: "factorWeights", search: "currency" },
-  "dailyBias": { label: "Daily Bias", tab: "factorWeights", search: "daily bias" },
-  "htfPoiAlignment": { label: "HTF POI Alignment", tab: "factorWeights", search: "HTF POI" },
-  "htfFibPdLiquidity": { label: "HTF Fib + PD + Liquidity", tab: "factorWeights", search: "HTF Fib" },
-  "confluenceStack": { label: "Confluence Stack", tab: "factorWeights", search: "confluence stack" },
-  "pullbackHealth": { label: "Pullback Health", tab: "factorWeights", search: "pullback" },
-  "gamePlanKeyLevel": { label: "Game Plan Key Level", tab: "factorWeights", search: "game plan" },
-  "sessionAffinity": { label: "Session Affinity", tab: "factorWeights", search: "session affinity" },
 };
 
 /** Normalize a key to camelCase for lookup in CONFIG_KEY_LABELS */
@@ -300,7 +270,6 @@ function getConfigTarget(rec: Recommendation): { tab: string; search: string } |
     "stop_loss": "entry_exit",
     "take_profit": "entry_exit",
     "risk_management": "risk",
-    "factor_weights": "factorWeights",
     "session_filter": "sessions",
     "instrument_filter": "instruments",
     "timing": "sessions",
@@ -806,33 +775,6 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     if (error) throw error;
   }
 
-  // Display-name → camelCase config key mapping (shared by approve flows)
-  const DISPLAY_TO_CONFIG_KEY: Record<string, string> = {
-    "Market Structure": "marketStructure",
-    "Order Block": "orderBlock",
-    "Fair Value Gap": "fairValueGap",
-    "Premium/Discount & Fib": "premiumDiscountFib",
-    "Premium/Discount": "premiumDiscountFib",
-    "Session Quality": "sessionQuality",
-    "Session/Kill Zone": "sessionQuality",  // legacy alias
-    "Judas Swing": "judasSwing",
-    "PD/PW Levels": "pdPwLevels",
-    "Reversal Candle": "reversalCandle",
-    "Liquidity Sweep": "liquiditySweep",
-    "Displacement": "displacement",
-    "Breaker Block": "breakerBlock",
-    "Unicorn Model": "unicornModel",
-    "Silver Bullet": "sessionQuality",  // legacy alias — absorbed into Session Quality
-    "Macro Window": "sessionQuality",  // legacy alias — absorbed into Session Quality
-    "Spread Quality": "spreadQuality",
-    "SMT Divergence": "smtDivergence",
-    "Volume Profile": "volumeProfile",
-    "AMD Phase": "amdPhase",
-    "Currency Strength": "currencyStrength",
-    "Trend Direction": "trendDirection",
-    "Daily Bias": "dailyBias",
-  };
-
   // Approve mutation — patches bot_configs.config_json for ONE recommendation at a time
   const approveMutation = useMutation({
     mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
@@ -860,42 +802,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
 
       const currentConfig = (cfgRow.config_json as any) || {};
 
-      // Factor weights recommendations: merge directly into factorWeights
-      if (rec.category === "factor_weights") {
-        const existingWeights = currentConfig.factorWeights || {};
-        const rawSuggested = suggested as Record<string, number>;
-
-        const suggestedWeights: Record<string, number> = {};
-        for (const [key, val] of Object.entries(rawSuggested)) {
-          const configKey = DISPLAY_TO_CONFIG_KEY[key] || key;
-          if (typeof val === "number") {
-            suggestedWeights[configKey] = val;
-          }
-        }
-
-        const mergedWeights = { ...existingWeights, ...suggestedWeights };
-        const patched = { ...currentConfig, factorWeights: mergedWeights };
-
-        const { error: updateCfgErr } = await supabase
-          .from("bot_configs")
-          .update({ config_json: patched, updated_at: new Date().toISOString() })
-          .eq("id", cfgRow.id);
-        if (updateCfgErr) throw updateCfgErr;
-        queryClient.invalidateQueries({ queryKey: ["bot-config"] });
-
-        const applied = Object.entries(suggestedWeights).map(([key, val]) => ({
-          key, path: `factorWeights.${key}`, from: existingWeights[key] ?? "default", to: val,
-        }));
-
-        // Mark only THIS recommendation as approved (per-rec status)
-        await updateRecStatus(id, recIndex, "approved", {
-          impact_snapshot: { applied, recIndex },
-        });
-
-        return { applied, skipped: [] };
-      }
-
-      // Regime adaptation recommendations: handle both factorWeights and config path overrides
+      // Regime adaptation recommendations: dotted config path overrides
       if (rec.category === "regime_adaptation") {
         const rawSuggested = suggested as Record<string, any>;
         let patched = { ...currentConfig };
@@ -914,13 +821,6 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
             const oldVal = target[lastKey];
             target[lastKey] = val;
             applied.push({ key, path: key, from: oldVal ?? "default", to: val });
-          } else {
-            // It's a factorWeight key
-            const configKey = DISPLAY_TO_CONFIG_KEY[key] || key;
-            if (!patched.factorWeights) patched.factorWeights = {};
-            const oldVal = patched.factorWeights[configKey];
-            patched.factorWeights[configKey] = val;
-            applied.push({ key: configKey, path: `factorWeights.${configKey}`, from: oldVal ?? "default", to: val });
           }
         }
 
@@ -1016,11 +916,11 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
   });
 
   // Decide whether a recommendation can be auto-applied via the existing approve flows.
-  // factor_weights and regime_adaptation always have dedicated handlers in approveMutation;
+  // regime_adaptation always has a dedicated handler in approveMutation;
   // for everything else, dry-run applyRecommendationToConfig and check applied.length > 0.
   function isRecAutoApplicable(rec: Recommendation): boolean {
     if (!rec.suggested_value || typeof rec.suggested_value !== "object") return false;
-    if (rec.category === "factor_weights" || rec.category === "regime_adaptation") return true;
+    if (rec.category === "regime_adaptation") return true;
     try {
       const { applied } = applyRecommendationToConfig(
         currentBotConfig || {},

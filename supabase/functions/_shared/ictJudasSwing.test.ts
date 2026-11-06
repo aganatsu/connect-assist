@@ -181,34 +181,35 @@ Deno.test("detectJudasSwing: hard mode blocks when no sweep found", () => {
   assertEquals(result.reason.includes("BLOCKED"), true);
 });
 
-Deno.test("detectJudasSwing: soft mode penalizes when no sweep found", () => {
+Deno.test("detectJudasSwing: a stored legacy \"soft\" mode is informational, like off", () => {
   const candles = makeNoSweepCandles();
-  const config: JudasSwingConfig = { ...DEFAULT_JUDAS_SWING_CONFIG, gateMode: "soft" };
+  const config = { ...DEFAULT_JUDAS_SWING_CONFIG, gateMode: "soft" } as unknown as JudasSwingConfig;
   const result = detectJudasSwing(candles, 20, "bullish", config);
 
   assertEquals(result.found, false);
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, config.noSweepPenalty);
+  assertEquals(result.reason.includes("[OFF]"), true);
 });
 
-Deno.test("detectJudasSwing: off mode always passes with no score adjustment", () => {
+Deno.test("detectJudasSwing: off mode always passes", () => {
   const candles = makeNoSweepCandles();
   const config: JudasSwingConfig = { ...DEFAULT_JUDAS_SWING_CONFIG, gateMode: "off" };
   const result = detectJudasSwing(candles, 20, "bullish", config);
 
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, 0);
   assertEquals(result.reason.includes("[OFF]"), true);
 });
 
-Deno.test("detectJudasSwing: sweep confirmed gives bonus", () => {
+Deno.test("detectJudasSwing: a confirmed sweep passes hard mode and carries no score field", () => {
   const candles = makeBullishJudasSwingCandles();
-  const config: JudasSwingConfig = { ...DEFAULT_JUDAS_SWING_CONFIG, gateMode: "soft" };
+  const config: JudasSwingConfig = { ...DEFAULT_JUDAS_SWING_CONFIG, gateMode: "hard" };
   const result = detectJudasSwing(candles, 18, "bullish", config);
 
   if (result.found) {
-    assertEquals(result.scoreAdjustment, config.sweepConfirmedBonus);
+    assertEquals(result.passed, true);
+    assertEquals(result.reason.includes("Judas Swing confirmed"), true);
   }
+  assertEquals("scoreAdjustment" in result, false);
 });
 
 Deno.test("detectJudasSwing: disabled config always passes", () => {

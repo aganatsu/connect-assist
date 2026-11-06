@@ -14,7 +14,7 @@ const tel = buildEntryTelemetry({
   entryTime: "2026-09-28T13:37:00.000Z", strategyBarTime: "2026-09-28T13:35:00.000Z",
   pipSize: 0.0001, tradingStyle: "scalper", zoneTimeframe: "1H",
   configSnapshot: entryConfigSnapshot({ tpRatio: 2.0, minConfluence: 40, marketFillAtZone: true, maxHoldHours: 4 }),
-  decisionSnapshot: entryDecisionSnapshot({ zoneScore: 5.5, confluenceScore: 41.7, displacementCandles: 3, priceAtZoneStrict: true }),
+  decisionSnapshot: entryDecisionSnapshot({ zoneScore: 5.5, displacementCandles: 3, priceAtZoneStrict: true }),
 });
 
 // 1. ENTRY -> open position, exactly the shape bot-scanner now inserts

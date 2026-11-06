@@ -23,16 +23,15 @@
  * simpleDirection as its bias step, so as a separate spine it re-voted against
  * a conclusion it had helped produce. It is context now.
  *
- * Output: { verdict, confidence, sources, scoreAdjustment }
+ * Output: { verdict, confidence, sources, shouldBlock }
  *   - verdict: "long" | "short" | "neutral"
  *   - confidence: 0-100 (used for size scaling + gate threshold)
  *   - sources: which inputs agreed/disagreed
- *   - scoreAdjustment: net score modifier to apply to confluence
  *
  * NO LONGER ADDITIVE. This header described a shadow-mode rollout that has
  * since completed: the verdict is Gate 1 (bot-scanner, "Direction OK" /
- * "Direction CONFLICT"), it supplies scoreAdjustment to the effective score,
- * and it subsumes the regime gate. A stale claim that it "does NOT modify
+ * "Direction CONFLICT") and it subsumes the regime gate. (It used to supply a
+ * score adjustment; the confluence score has been removed.) A stale claim that it "does NOT modify
  * existing gates" was left here through that transition.
  */
 
@@ -53,8 +52,6 @@ export interface DirectionVerdictResult {
   verdict: VerdictDirection;
   /** Confidence 0-100 — below 40 = neutral, 40-60 = low, 60-80 = medium, 80+ = high */
   confidence: number;
-  /** Net score adjustment to apply (replaces regime + GP + Factor 22 adjustments) */
-  scoreAdjustment: number;
   /** Whether this verdict would BLOCK the trade (replaces Gate 1 + Gate 20 + falling knife) */
   shouldBlock: boolean;
   /** Block reason (if shouldBlock = true) */
@@ -116,10 +113,6 @@ export interface DirectionVerdictConfig {
   minConfidence: number;
   /** Confidence below which the trade is blocked (default: 25) */
   blockThreshold: number;
-  /** Maximum score penalty for opposing context (default: -2.0) */
-  maxPenalty: number;
-  /** Maximum score bonus for aligned context (default: 1.5) */
-  maxBonus: number;
   /** Whether regime can veto (block) a trade when strongly opposing (default: true) */
   regimeCanVeto: boolean;
   /** Regime confidence threshold for veto (default: 0.75) */
@@ -129,8 +122,6 @@ export interface DirectionVerdictConfig {
 export const DEFAULT_VERDICT_CONFIG: DirectionVerdictConfig = {
   minConfidence: 40,
   blockThreshold: 25,
-  maxPenalty: -2.0,
-  maxBonus: 1.5,
   regimeCanVeto: true,
   regimeVetoThreshold: 0.75,
 };
@@ -264,7 +255,6 @@ export function computeDirectionVerdict(
     return {
       verdict: "neutral",
       confidence: 0,
-      scoreAdjustment: 0,
       shouldBlock: true,
       blockReason: "No directional signal from either confirmedTrend or simpleDirection",
       sources,
@@ -433,21 +423,6 @@ export function computeDirectionVerdict(
     }
   }
 
-  // ── 7. SCORE ADJUSTMENT ──
-  // Convert confidence into a score modifier (replaces regime + GP + Factor 22 adjustments)
-
-  let scoreAdjustment = 0;
-  if (verdict !== "neutral") {
-    // Scale from -maxPenalty to +maxBonus based on confidence
-    const normalizedConf = (finalConfidence - 50) / 50; // -1 to +1
-    if (normalizedConf >= 0) {
-      scoreAdjustment = normalizedConf * cfg.maxBonus;
-    } else {
-      scoreAdjustment = normalizedConf * Math.abs(cfg.maxPenalty);
-    }
-    scoreAdjustment = Math.max(cfg.maxPenalty, Math.min(cfg.maxBonus, scoreAdjustment));
-  }
-
   // ── 8. AGREEMENT CALCULATION ──
 
   const directionalSources = sources.filter(s => s.direction && s.direction !== "neutral");
@@ -460,12 +435,10 @@ export function computeDirectionVerdict(
   summaryParts.push(`${verdict.toUpperCase()} (${finalConfidence.toFixed(0)}% conf)`);
   if (shouldBlock) summaryParts.push(`BLOCKED: ${blockReason}`);
   summaryParts.push(`Agreement: ${(agreement * 100).toFixed(0)}% (${agreeing}/${directionalSources.length} sources)`);
-  summaryParts.push(`Score adj: ${scoreAdjustment >= 0 ? "+" : ""}${scoreAdjustment.toFixed(2)}`);
 
   return {
     verdict,
     confidence: Math.round(finalConfidence),
-    scoreAdjustment: +scoreAdjustment.toFixed(2),
     shouldBlock,
     blockReason,
     sources,
