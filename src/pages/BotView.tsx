@@ -12,7 +12,7 @@ import { SignalStatusPanel } from "@/components/SignalStatusPanel";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatBrokerTime, formatTimeOnly, formatFullDateTime } from "@/lib/formatTime";
 import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
-import { STYLE_META, STYLE_PARAMS, getActiveStyle } from "@/lib/botStyleClassifier";
+import { STYLE_META } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
@@ -34,9 +34,8 @@ import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import BrokerTradesTab from "@/components/BrokerTradesTab";
-import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
+import { FactorBreakdown } from "@/components/FactorBreakdown";
 import { generateDetailNarrative, generateTradeEntryNarrative } from "@/lib/narrative";
-import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
@@ -112,7 +111,6 @@ export default function BotView() {
   const [orderSL, setOrderSL] = useState("");
   const [orderTP, setOrderTP] = useState("");
   const [orderReason, setOrderReason] = useState("");
-  const [orderScore, setOrderScore] = useState("5");
 
   const { data: status } = useQuery({
     queryKey: ["paper-status"],
@@ -295,7 +293,7 @@ export default function BotView() {
       entryPrice: parseFloat(orderTrigger) || 0,
       stopLoss: orderSL ? parseFloat(orderSL) : undefined,
       takeProfit: orderTP ? parseFloat(orderTP) : undefined,
-      signalReason: orderReason, signalScore: parseInt(orderScore) || 5,
+      signalReason: orderReason,
     }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Order placed"); setOrderFormOpen(false); },
     onError: (err: any) => toast.error(err.message),
@@ -335,34 +333,22 @@ export default function BotView() {
   // Group/sort by status so the most actionable rows surface first.
   const STATUS_PRIORITY: Record<string, number> = {
     trade_placed: 0,
-    trade_placed_from_watchlist: 1,
     limit_order_placed: 2,
     zone_setup_active: 2,
     scalper15_order_placed: 2,
-    limit_order_from_watchlist: 3,
-    zone_setup_from_watchlist: 3,
-    staged_confirming: 4,
-    staged_watching: 5,
-    staged_new: 6,
-    staged_invalidated: 7,
     rejected: 8,
-    below_threshold: 9,
     skipped: 10,
   };
   const statusRank = (s: string | undefined) => {
     if (!s) return 99;
     if (s in STATUS_PRIORITY) return STATUS_PRIORITY[s];
-    if (s.startsWith("staged_")) return 6;
     return 50;
   };
   const latestDetailsClean: any[] = [...latestDetailsCleanRaw].sort((a, b) => {
     const ra = statusRank(a?.status);
     const rb = statusRank(b?.status);
     if (ra !== rb) return ra - rb;
-    // Tie-break by score desc, then pair name for stability
-    const sa = typeof a?.score === "number" ? a.score : -1;
-    const sb = typeof b?.score === "number" ? b.score : -1;
-    if (sa !== sb) return sb - sa;
+    // Tie-break by pair name for stability
     return String(a?.pair || "").localeCompare(String(b?.pair || ""));
   });
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
@@ -603,7 +589,6 @@ export default function BotView() {
               {orderType !== "market" && <div className="w-20"><Label className="text-[10px]">Trigger</Label><Input value={orderTrigger} onChange={e => setOrderTrigger(e.target.value)} className="h-7 text-[11px]" /></div>}
               <div className="w-20"><Label className="text-[10px]">SL</Label><Input value={orderSL} onChange={e => setOrderSL(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
               <div className="w-20"><Label className="text-[10px]">TP</Label><Input value={orderTP} onChange={e => setOrderTP(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
-              <div className="w-14"><Label className="text-[10px]">Score</Label><Input type="number" min={0} max={10} value={orderScore} onChange={e => setOrderScore(e.target.value)} className="h-7 text-[11px]" /></div>
               <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()}>
                 {orderDirection === "long" ? "BUY" : "SELL"} {orderSymbol}
               </Button>
@@ -658,7 +643,6 @@ export default function BotView() {
                   ["broker-log", "Broker Log"],
                   ["ai-advisor", "AI Advisor"],
                   ["broker-live", "MT4/MT5 Live"],
-                  ["watchlist", "Watchlist"],
                   ["pending-orders", "Zone Setups"],
                   ["game-plan", "Game Plan"],
                   ["signals", "What's Active"],
@@ -840,17 +824,6 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="broker-live" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <BrokerTradesTab />
-              </TabsContent>
-              <TabsContent value="watchlist" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
-                <WatchlistPanel confluenceGate={(() => {
-                  if (!botConfig?.strategy) return 55;
-                  const DEFAULT_CONFLUENCE = 55;
-                  const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                  const activeStyle = getActiveStyle(botConfig);
-                  const styleParams = STYLE_PARAMS[activeStyle];
-                  const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                  return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
-                })()} />
               </TabsContent>
               <TabsContent value="pending-orders" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <PendingOrdersPanel />
@@ -1154,31 +1127,6 @@ export default function BotView() {
             </div>
             <div className="flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden md:flex-wrap md:shrink-0">
               <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} className="min-w-0 max-w-full truncate" />
-              {botConfig?.strategy && (() => {
-                const activeStyle = getActiveStyle(botConfig);
-                const styleParams = STYLE_PARAMS[activeStyle];
-                const styleMeta = STYLE_META[activeStyle];
-                // Replicate bot-scanner resolution: style override applies when
-                // the user's value matches the global default (55), because the
-                // scanner can't distinguish "user set 55" from "never touched".
-                const DEFAULT_CONFLUENCE = 55;
-                const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                const resolvedGate = rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
-                const styleLabel = styleMeta?.label || activeStyle;
-                const isStyleOverride = resolvedGate !== rawThreshold;
-                return (
-                    <Badge
-                    variant="outline"
-                      className={`hidden md:inline-flex text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
-                      isStyleOverride ? 'border-warning/40 text-warning' : ''
-                    }`}
-                    title={`Active confluence gate${isStyleOverride ? ` (overridden by ${styleLabel} style from ${rawThreshold}% → ${resolvedGate}%)` : ` (${styleLabel} style)`}. Setups must score ≥${resolvedGate}% to trigger.`}
-                  >
-                    Gate: ≥{resolvedGate}%{isStyleOverride ? ` (${styleLabel})` : ''}
-                  </Badge>
-                );
-              })()}
               {currentScan && (
                 <span className="flex items-center gap-1 text-[9px] text-muted-foreground min-w-0 shrink-0 overflow-hidden">
                   <DataSourceBadge source={latestSource} />
@@ -1206,8 +1154,8 @@ export default function BotView() {
                       <div className="divide-y divide-border/40">
                         {latestDetailsClean.map((sig: any, i: number) => {
                           const s = sig.status as string | undefined;
-                          const statusLabel = s === "limit_order_from_watchlist" || s === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : s === "limit_order_placed" || s === "zone_setup_active" ? "🔍 ZONE SETUP" : s === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : s === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : s === "trade_placed" ? "✅ PLACED" : s === "rejected" ? "REJECTED" : s === "below_threshold" ? "SKIP" : s === "watching_zone" ? "⏳ WATCHING" : s === "staged_new" ? "\u2B50 NEW WATCH" : s === "staged_watching" ? "\uD83D\uDC41 WATCHING" : s === "staged_confirming" ? "\u23F3 CONFIRMING" : s === "staged_invalidated" ? "\u274C INVALIDATED" : s?.startsWith("skipped_") ? "SKIPPED" : s?.toUpperCase() || "\u2014";
-                          const statusColor = s === "limit_order_from_watchlist" || s === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : s === "limit_order_placed" || s === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : s === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : s?.startsWith("trade_placed") ? "text-success bg-success/10 border-success/30" : s === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : s === "watching_zone" ? "text-warn bg-badge-warn border-amber-500/30" : s?.startsWith("staged_") ? "text-warn bg-badge-warn border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const statusLabel = s === "limit_order_placed" || s === "zone_setup_active" ? "🔍 ZONE SETUP" : s === "trade_placed_at_zone" ? "✅ PLACED@ZONE" : s === "trade_placed" ? "✅ PLACED" : s === "rejected" ? "REJECTED" : s === "watching_zone" ? "⏳ WATCHING" : s?.startsWith("skipped_") ? "SKIPPED" : s?.toUpperCase() || "\u2014";
+                          const statusColor = s === "limit_order_placed" || s === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : s?.startsWith("trade_placed") ? "text-success bg-success/10 border-success/30" : s === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : s === "watching_zone" ? "text-warn bg-badge-warn border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
                           const isSelected = selectedPairIdx === i;
                           return (
                             <button
@@ -1222,7 +1170,6 @@ export default function BotView() {
                                 {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0 font-sans">— {sig.reason}</span>}
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                <span className={`tabular-nums font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
                                 <span className={`max-w-[5.5rem] truncate text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
                               </div>
                             </button>
@@ -1369,7 +1316,6 @@ export default function BotView() {
                     <>
                       {sel.pair}
                       {sel.direction === "long" ? <span className="text-success text-xs">▲ Long</span> : sel.direction === "short" ? <span className="text-destructive text-xs">▼ Short</span> : null}
-                      <span className="text-xs font-mono text-muted-foreground ml-auto">{typeof sel.score === "number" ? `${sel.score.toFixed(1)}%` : ""}</span>
                     </>
                   );
                 })()}
@@ -1522,10 +1468,6 @@ function TradeHistoryTable({ trades, minZoneScore = 4 }: { trades: any[]; minZon
                           {t.closeReason === "trail_hit" && " (trailing stop locked profit)"}
                           {t.closeReason === "be_hit" && " (break-even SL)"}
                         </span>
-                        <span className={`text-[10px] font-mono font-bold ${
-                          t.signalScore > 10 ? (t.signalScore >= 60 ? "text-success" : t.signalScore >= 40 ? "text-warning" : "text-muted-foreground") : "text-primary"
-                        }`}>{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span>
-                        {sr?.tieredScoring && <TierScoreSummary tieredScoring={sr.tieredScoring} />}
                       </div>
 
                       {hasRichData ? (
@@ -1549,11 +1491,6 @@ function TradeHistoryTable({ trades, minZoneScore = 4 }: { trades: any[]; minZon
                               <span className="text-[8px] text-muted-foreground">{Math.round(sr.directionVerdict.agreement * 100)}% agree</span>
                               {sr.directionVerdict.shouldBlock && (
                                 <span className="text-[8px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
-                              )}
-                              {sr.directionVerdict.scoreAdjustment !== 0 && (
-                                <span className={`text-[8px] font-mono ${sr.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
-                                  adj: {sr.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{sr.directionVerdict.scoreAdjustment.toFixed(2)}
-                                </span>
                               )}
                             </div>
                           )}
@@ -1623,8 +1560,6 @@ function TradeHistoryTable({ trades, minZoneScore = 4 }: { trades: any[]; minZon
                             </div>
                           )}
 
-                          {/* Phase-1 cleanup: TierFactorBreakdown removed here — it now renders
-                              only inside the position detail drawer to avoid duplication. */}
                           {/* ── Risk Gates ── */}
                           {sr.gates && sr.gates.length > 0 && (
                             <div className="space-y-0.5">
@@ -1747,7 +1682,6 @@ function TradeHistoryTable({ trades, minZoneScore = 4 }: { trades: any[]; minZon
 
                       {/* ── Trade Metadata Grid ── */}
                       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px] border-t border-border/30 pt-1.5">
-                        <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{t.orderId}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(t.openTime)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Closed</span><span className="font-mono">{formatFullDateTime(t.closedAt)}</span></div>
@@ -1815,8 +1749,8 @@ function ScanLogLine({ log }: { log: any }) {
 
 function ScanSignalDetail({ signal: d, minZoneScore = 4 }: { signal: any; minZoneScore?: number }) {
   const [expanded, setExpanded] = useState(false);
-  const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+  const statusLabel = d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
 
   return (
     <div className="border-b border-border/30 last:border-b-0">
@@ -1824,10 +1758,8 @@ function ScanSignalDetail({ signal: d, minZoneScore = 4 }: { signal: any; minZon
         <div className="flex items-center gap-1.5">
           {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
           <span className="font-medium">{d.pair}</span>
-          {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
         </div>
         <div className="flex items-center gap-1.5">
-          <span className={`font-mono font-bold ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : d.score?.toFixed(1)}</span>
           <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
           <ChevronDown className={`h-2.5 w-2.5 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
         </div>
@@ -1856,19 +1788,14 @@ function ScanSignalDetail({ signal: d, minZoneScore = 4 }: { signal: any; minZon
               {d.directionVerdict.shouldBlock && (
                 <span className="text-[8px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
               )}
-              {d.directionVerdict.scoreAdjustment !== 0 && (
-                <span className={`text-[8px] font-mono ${d.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
-                  adj: {d.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{d.directionVerdict.scoreAdjustment.toFixed(2)}
-                </span>
-              )}
             </div>
           )}
 
-          {/* Tier-Grouped Factors */}
+          {/* Factors */}
           {d.factors && (
-            <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
+            <FactorBreakdown factors={d.factors} compact />
           )}
-          {/* Risk Gates (legacy gates from runSafetyGates — tier gates are shown inside TierFactorBreakdown) */}
+          {/* Risk Gates */}
           {d.gates && (
             <div className="space-y-0.5">
               <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Risk Gates</p>
@@ -1907,15 +1834,8 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
     watching_zone: { label: "Watching zone", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⏳" },
     no_direction: { label: "No direction", color: "text-muted-foreground border-border bg-muted/20", icon: "🚫" },
     trade_placed: { label: "Trade placed", color: "text-success border-success/30 bg-success/5", icon: "✅" },
-    trade_placed_from_watchlist: { label: "Traded from watchlist", color: "text-cyan-400 border-cyan-500/30 bg-cyan-500/5", icon: "📋" },
     zone_setup_active: { label: "Zone setup active", color: "text-info-c border-blue-500/30 bg-badge-info", icon: "🔍" },
-    zone_setup_from_watchlist: { label: "Zone + watchlist", color: "text-tier3 border-purple-500/30 bg-purple-500/5", icon: "🔍📋" },
     rejected: { label: "Rejected (post-gate)", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "✗" },
-    below_threshold: { label: "Below confluence", color: "text-muted-foreground border-border bg-muted/20", icon: "↓" },
-    staged_new: { label: "Newly staged", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⭐" },
-    staged_watching: { label: "Staged watching", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "👁" },
-    staged_confirming: { label: "Staged confirming", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⏳" },
-    staged_invalidated: { label: "Staged invalidated", color: "text-muted-foreground border-border bg-muted/20", icon: "❌" },
     skipped: { label: "Skipped (session/data)", color: "text-muted-foreground border-border bg-muted/20", icon: "–" },
     paused: { label: "Paused", color: "text-muted-foreground border-border bg-muted/20", icon: "⏸" },
   };
@@ -1926,7 +1846,7 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
     no_fib_alignment: "POIs not at key Fib (50–78.6%)",
     not_deep_enough: "Zone exists but not deep enough on Fib",
     no_zone_either_tf: "No zone on 1H or 4H",
-    price_not_at_zone: "Price not at zone (watchlisted)",
+    price_not_at_zone: "Price not at zone",
     engine_error: "Engine error",
     daily_and_4h_ranging: "Daily AND 4H ranging",
     daily_ranging_4h_weak: "Daily ranging, 4H structure weak",
@@ -1990,27 +1910,23 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
 }
 
 function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZoneScore?: number }) {
-  const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+  const statusLabel = d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
 
   // Only show failed gates
   const failedGates = d.gates?.filter((g: any) => !g.passed) || [];
 
   return (
     <div className="space-y-2">
-      {/* 1. Header — Pair + Status + Score */}
+      {/* 1. Header — Pair + Status */}
       <div className="flex items-center gap-2">
         {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
         <span className="text-[12px] font-bold">{d.pair}</span>
         <span className={`text-[12px] font-bold ${statusColor}`}>{statusLabel}</span>
-        <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
-      {/* 1b. Scalper15 — when it owns the pair, its decision comes first; the tier score below is recorded only */}
+      {/* 1b. Scalper15 — when it owns the pair, its decision comes first */}
       {d.scalper15 && <Scalper15Panel status={d.status} s={d.scalper15} skipReason={d.skipReason} reason={d.reason} />}
-
-      {/* 2. Tier Score Summary */}
-      {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
 
       {/* 3. Narrative — plain-English thesis */}
       {d.direction && d.direction !== "none" && (
@@ -2018,14 +1934,11 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
           {generateDetailNarrative({
             pair: d.pair,
             direction: d.direction,
-            score: d.score,
             status: d.status,
             factors: d.factors,
-            tieredScoring: d.tieredScoring,
             regimeData: d.regimeData,
             rejectionReasons: d.rejectionReasons,
             gates: d.gates,
-            staging: d.staging,
             limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
           })}
         </p>
@@ -2115,17 +2028,12 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
           {d.directionVerdict.shouldBlock && (
             <span className="text-[9px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
           )}
-          {d.directionVerdict.scoreAdjustment !== 0 && (
-            <span className={`text-[9px] font-mono ${d.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
-              adj: {d.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{d.directionVerdict.scoreAdjustment.toFixed(2)}
-            </span>
-          )}
         </div>
       )}
 
-      {/* 5. Tier Factor Breakdown — T1, T2, T3 with pass/fail */}
+      {/* 5. Factor Breakdown — present / absent */}
       {d.factors && (
-        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
+        <FactorBreakdown factors={d.factors} compact />
       )}
 
       {/* 6. Regime Detection */}
@@ -2307,29 +2215,16 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
       )}
 
       {/* Trade Entry Thesis — shown for placed trades */}
-      {(d.status === "trade_placed" || d.status === "trade_placed_from_watchlist") && d.factors && (
+      {d.status === "trade_placed" && d.factors && (
         <div className="rounded border border-success/30 bg-success/5 px-2 py-1">
           <p className="text-[11px] text-success/90 leading-tight">
             {generateTradeEntryNarrative({
               pair: d.pair,
               direction: d.direction,
-              score: d.score,
               factors: d.factors,
-              tieredScoring: d.tieredScoring,
               regimeData: d.regimeData,
-              staging: d.staging,
               limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
             })}
-          </p>
-        </div>
-      )}
-
-      {/* Watchlist Origin Banner */}
-      {d.staging?.action === "promoted_and_traded" && (
-        <div className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5">
-          <p className="text-[11px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
-          <p className="mt-1 text-[12px] text-cyan-300">
-            Watched for {d.staging.cycles} cycle{d.staging.cycles !== 1 ? "s" : ""} · Started at {d.staging.initialScore?.toFixed(1)}% → {d.score?.toFixed(1)}%
           </p>
         </div>
       )}

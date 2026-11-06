@@ -39,7 +39,6 @@ Deno.test("every gate reason recorded at 13:00 UTC 2026-10-07 (CHF/JPY) classifi
     ["Daily net P&L $+0.00 (gross loss: $0.00)", "daily_dollar_loss"],
     ["FOTSI Gate: data unavailable — skipped", "fotsi"],
     ["No correlated conflicts (threshold 0.8)", "correlation"],
-    ["Tier 1 gate DISABLED by config (2 core factors present)", "tier1"],
     ["Regime gate: subsumed by Direction Verdict", "regime"],
     ["[Info] Spread wide (indicative): 23.6% of ATR — info only", "spread"],
     // the Game Plan filter gate (soft mode), as recorded on the 16 dry-run orders since step 8
@@ -77,8 +76,7 @@ const INPUT: AttributionInput = {
   directionVerdict: { verdict: "long", confidence: 75, agreement: 0.5 },
   impulse: { hasZone: true, selectedTF: "1H", impulse: { high: 190.49909, low: 189.9432 }, bestZone: { type: "ob", low: 189.99417, high: 190.14972, fibLevel: 0.786, refinedEntry: 190.142885, totalScore: 3.5 } },
   unifiedDetected: { state: "detected", score: 9 }, unifiedComparison: { entryDiffPips: 3 },
-  gateScore: 61.6, decisionScoreGate: { mode: "log", score: 63.35, threshold: 20, wouldBlock: false },
-  factors: [{ name: "Order Block", present: true, weight: 1, tier: 1 }, { name: "FVG", present: false, weight: 0 }],
+  factors: [{ name: "Order Block", present: true }, { name: "FVG", present: false }],
   gates: [{ gateId: "reaction", passed: true, loggedOnly: true, wouldBlock: true, reason: "x" }, { passed: true, reason: "0/3 positions" }],
   ictFvgGate: { mode: "off", wouldBlock: false }, orderRR: { rawRR: 1.1, effectiveRR: 1.0, costInPrice: 0.025, wouldBlock: false, min: 1, mode: "order_geometry" },
   loggedOnlyWouldBlock: [{ gateId: "reaction", reason: "x" }],
@@ -89,15 +87,14 @@ const INPUT: AttributionInput = {
   plannedSizing: { lots: 3.16, uncappedLots: 3.1644, riskPercentTarget: 0.5, riskUsdTarget: 500 }, balance: 100000, expiresAt: "2026-10-07T08:10:06Z",
 };
 
-Deno.test("the row: Impulse primary; Unified contributor detected_only (not applied); score is evidence; GP / step 13 / old-rule state captured", () => {
+Deno.test("the row: Impulse primary; Unified contributor detected_only (not applied); detected factors are the evidence; GP / step 13 / old-rule state captured", () => {
   const r = buildAttribution(INPUT) as any;
   assertEquals([r.primary_engine, r.primary_engine_rule, r.route], ["impulse_zone", "primary-engine.v1", "route2_pending_confirmation"]);
   const u = r.contributors.find((c: any) => c.engine === "unified");
   assertEquals([u.role, r.unified.modifiers_applied], ["detected_only", false]);
   assert(!r.contributors.some((c: any) => c.engine === "unified" && c.role !== "detected_only"));
-  assertEquals(r.contributors.find((c: any) => c.engine === "smc_score").role, "scoring");
-  assertEquals([r.score.gate_score, r.score.decision_gate.score], [61.6, 63.35]);
-  assertEquals(r.score.components.map((c: any) => c.name), ["Order Block"]);
+  assert(!r.contributors.some((c: any) => c.engine === "smc_score"), "there is no confluence score contributor");
+  assertEquals(r.score, { factors: [{ name: "Order Block", group: null }] }, "the evidence column holds the detected factors only");
   assertEquals([r.game_plan.alignment, r.game_plan.bias, r.game_plan.confidence, r.game_plan.focus_pair], ["below_threshold", "bearish", 36, true]);
   assertEquals(r.risk_gate, { enabled: false, allowed: true, reason: "no active risk profile" });
   assert(r.gates.some((g: any) => g.gate_id === "risk_profile"));
@@ -111,10 +108,10 @@ Deno.test("the row: Impulse primary; Unified contributor detected_only (not appl
   for (const k of ["order_id", "terminal_status", "fill_kind", "closed_at"]) assert(!(k in r), `${k} is written by the lifecycle, not at placement`);
 });
 
-Deno.test("watchlist promotion keeps its origin; route says so", () => {
-  const r = buildAttribution({ ...INPUT, promotedFromWatchlist: { stagedSetupId: "st-1", initialScore: 48, cycles: 3 } }) as any;
-  assertEquals(r.route, "watchlist_promotion");
-  assertEquals(r.contributors.find((c: any) => c.engine === "watchlist"), { engine: "watchlist", role: "origin", value: { stagedSetupId: "st-1", initialScore: 48, cycles: 3 } });
+Deno.test("there is no watchlist origin: every order is a Route 2 pending-confirmation order", () => {
+  const r = buildAttribution(INPUT) as any;
+  assertEquals(r.route, "route2_pending_confirmation");
+  assert(!r.contributors.some((c: any) => c.engine === "watchlist"));
 });
 
 Deno.test("the decision row carries its client id and signal_id", () => {
@@ -188,7 +185,7 @@ Deno.test("wiring: Route 2 orders are placed only through placeRoute2Order; no d
   const i = scanner.indexOf("const movedOrders = (stalePending ?? [])");
   const j = scanner.indexOf("const placement = await placeRoute2Order(");
   assert(!/terminal_reason: "CANCELLED_SUPERSEDED"/.test(scanner.slice(i, j)), "supersede cancel happens inside the RPC");
-  assert(scanner.includes('.select("order_id, entry_price, signal_score, signal_id")'));
+  assert(scanner.includes('.select("order_id, entry_price, signal_id")'));
 });
 
 Deno.test("wiring: new orders fail closed on attribution, with an explicit decision-log outcome", () => {

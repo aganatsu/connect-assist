@@ -86,8 +86,6 @@ interface OpenPosition {
   size: number;
   entryTime: string;
   entryBarIndex: number;
-  confluenceScore: number;
-  effectiveScore: number;
   currentSL: number;
   breakEvenFired: boolean;
   signalSource: "unified" | "standalone";
@@ -104,8 +102,6 @@ interface ClosedTrade {
   pnl: number;
   pnlPips: number;
   closeReason: string;
-  confluenceScore: number;
-  effectiveScore: number;
   size: number;
   signalSource: string;
   unifiedScore: number;
@@ -169,7 +165,6 @@ async function runBacktest() {
   // ── Style-specific parameter tuning ──
   if (tradingStyle === "scalper") {
     config.riskPerTrade = 0.5;           // Lower risk per trade (more frequent)
-    config.minConfluence = 40;           // Higher threshold — only high-quality signals
     config.tpRatio = 2.0;               // 2:1 R:R (let winners run)
     config.breakEvenEnabled = false;    // No BE for scalper — let trades run to TP or SL
     config.fixedSlPips = 10;            // Fixed 10-pip SL (ATR floor may override to ~20)
@@ -177,20 +172,18 @@ async function runBacktest() {
     config.impulseSlCapMultiplier = 1.5; // Backup SL cap if fixedSl not used
   } else if (tradingStyle === "swing_trader") {
     config.riskPerTrade = 1.5;           // Higher risk (fewer trades, higher conviction)
-    config.minConfluence = 40;           // Lower threshold — weekly bias is restrictive enough
     config.tpRatio = 3.0;               // Wider R:R (hold for bigger moves)
     config.breakEvenEnabled = false;    // No BE for swing — let trades run to TP or SL
     config.impulseSlCapMultiplier = 6;  // Wider SL cap (larger impulses on 1H/4H)
   } else {
     // Day trader (default) — VALIDATED OPTIMAL
     config.riskPerTrade = 1;             // 1% risk per trade
-    config.minConfluence = 50;
     config.tpRatio = 2.0;               // 2:1 R:R (validated)
     config.breakEvenEnabled = true;     // BE ON (validated — saves 60% of trades)
     config.breakEvenPips = 20;
     config.impulseSlCapMultiplier = 4;
   }
-  console.log(`  Config: minConf=${config.minConfluence}, TP=${config.tpRatio}:1, BE=${config.breakEvenPips}pips, SLcap=${config.impulseSlCapMultiplier}x, risk=${config.riskPerTrade}%`);
+  console.log(`  Config: TP=${config.tpRatio}:1, BE=${config.breakEvenPips}pips, SLcap=${config.impulseSlCapMultiplier}x, risk=${config.riskPerTrade}%`);
 
   // Load all candle data
   console.log("📊 Loading cached candle data...\n");
@@ -253,7 +246,6 @@ async function runBacktest() {
     skippedNoDirection: 0,
     skippedNoZone: 0,
     skippedNotAtZone: 0,
-    skippedBelowThreshold: 0,
     skippedGateBlocked: 0,
     skippedMaxPositions: 0,
     skippedSlSanity: 0,
@@ -261,8 +253,6 @@ async function runBacktest() {
     unifiedGatePasses: 0,
     standaloneGatePasses: 0,
     unifiedStates: {} as Record<string, number>,
-    scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
-    highestScoreSeen: 0,
     highestUnifiedScore: 0,
     gateBlockReasons: {} as Record<string, number>,
     smtDetected: 0,
@@ -437,8 +427,6 @@ async function runBacktest() {
             entryPrice: pos.entryPrice, exitPrice,
             entryTime: pos.entryTime, exitTime: candle.datetime,
             pnl, pnlPips, closeReason,
-            confluenceScore: pos.confluenceScore,
-            effectiveScore: pos.effectiveScore,
             size: pos.size,
             signalSource: pos.signalSource,
             unifiedScore: pos.unifiedScore,
@@ -750,31 +738,8 @@ async function runBacktest() {
       }
 
       // ── ZONE GATE: Skip if neither unified nor cascade gate passed ──
-      let impulseZonePenaltyVal = 0;
-      if (unifiedGatePassed) {
-        // Zone story is complete — take the trade
-        impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
-      } else {
-        // Zone gate did NOT pass — skip entirely
+      if (!unifiedGatePassed) {
         diag.skippedNoZone++;
-        continue;
-      }
-
-      // ── Effective Score ──
-      const effectiveScore = analysis.score + impulseZonePenaltyVal;
-
-      // Score distribution
-      if (effectiveScore < 20) diag.scoreDistribution.below20++;
-      else if (effectiveScore < 40) diag.scoreDistribution.below40++;
-      else if (effectiveScore < 60) diag.scoreDistribution.below60++;
-      else if (effectiveScore < 80) diag.scoreDistribution.below80++;
-      else diag.scoreDistribution.above80++;
-      if (effectiveScore > diag.highestScoreSeen) diag.highestScoreSeen = effectiveScore;
-
-      // ── Threshold check ──
-      // For swing_trader, the cascade engine IS the primary gate — skip confluence threshold
-      if (tradingStyle !== "swing_trader" && effectiveScore < config.minConfluence) {
-        diag.skippedBelowThreshold++;
         continue;
       }
 
@@ -790,15 +755,8 @@ async function runBacktest() {
         }
       }
 
-      // ── Tier 1 Gate ── (only for day_trader — calibrated for 15m entry factors)
-      if (tradingStyle === "day_trader" && analysis.tieredScoring && !analysis.tieredScoring.tier1GatePassed) {
-        diag.skippedGateBlocked++;
-        diag.gateBlockReasons["Tier1Gate"] = (diag.gateBlockReasons["Tier1Gate"] || 0) + 1;
-        continue;
-      }
-
       // ── Regime Gate ──
-      if (config.regimeScoringEnabled && analysis.tieredScoring && !analysis.tieredScoring.regimeGatePassed) {
+      if (config.regimeScoringEnabled && !analysis.regimeGate.passed) {
         diag.skippedGateBlocked++;
         diag.gateBlockReasons["RegimeGate"] = (diag.gateBlockReasons["RegimeGate"] || 0) + 1;
         continue;
@@ -1043,8 +1001,6 @@ async function runBacktest() {
         size: Math.round(posSize * 100) / 100,
         entryTime: candle.datetime,
         entryBarIndex: i,
-        confluenceScore: analysis.score,
-        effectiveScore,
         currentSL: sl,
         breakEvenFired: false,
         signalSource: unifiedGatePassed ? "unified" : "standalone",
@@ -1072,8 +1028,6 @@ async function runBacktest() {
       entryPrice: pos.entryPrice, exitPrice: lastCandle.close,
       entryTime: pos.entryTime, exitTime: lastCandle.datetime,
       pnl, pnlPips, closeReason: "end_of_test",
-      confluenceScore: pos.confluenceScore,
-      effectiveScore: pos.effectiveScore,
       size: pos.size,
       signalSource: pos.signalSource,
       unifiedScore: pos.unifiedScore,
@@ -1126,7 +1080,6 @@ async function runBacktest() {
   console.log(`  Max Drawdown:     $${maxDrawdown.toFixed(2)} (${maxDrawdownPct.toFixed(1)}%)`);
   console.log(`  Avg Win:          $${avgWin.toFixed(2)} (${avgWinPips.toFixed(1)} pips)`);
   console.log(`  Avg Loss:         $${avgLoss.toFixed(2)} (${avgLossPips.toFixed(1)} pips)`);
-  console.log(`  Highest Score:    ${diag.highestScoreSeen.toFixed(1)}`);
   console.log(`  Highest Unified:  ${diag.highestUnifiedScore.toFixed(1)}/14`);
 
   // Per-symbol breakdown
@@ -1197,7 +1150,6 @@ async function runBacktest() {
   console.log(`  Skipped (no dir):     ${diag.skippedNoDirection}`);
   console.log(`  Skipped (no zone):    ${diag.skippedNoZone}`);
   console.log(`  Skipped (not at zone):${diag.skippedNotAtZone}`);
-  console.log(`  Skipped (threshold):  ${diag.skippedBelowThreshold}`);
   console.log(`  Skipped (gates):      ${diag.skippedGateBlocked}`);
   console.log(`  Skipped (max pos):    ${diag.skippedMaxPositions}`);
   console.log(`  Skipped (SL sanity):  ${diag.skippedSlSanity}`);
@@ -1219,14 +1171,6 @@ async function runBacktest() {
     }
   }
 
-  // Score distribution
-  console.log("\n  ── Score Distribution ──");
-  console.log(`  0-20:  ${diag.scoreDistribution.below20}`);
-  console.log(`  20-40: ${diag.scoreDistribution.below40}`);
-  console.log(`  40-60: ${diag.scoreDistribution.below60}`);
-  console.log(`  60-80: ${diag.scoreDistribution.below80}`);
-  console.log(`  80+:   ${diag.scoreDistribution.above80}`);
-
   // Save results
   const results = {
     config: {
@@ -1235,7 +1179,6 @@ async function runBacktest() {
       endDate,
       startingBalance,
       entryTimeframe: "15min",
-      minConfluence: config.minConfluence,
       impulseZoneGateMode: config.impulseZoneGateMode,
       tpRatio: config.tpRatio,
       breakEvenPips: config.breakEvenPips,
@@ -1256,7 +1199,6 @@ async function runBacktest() {
       avgLoss,
       avgWinPips,
       avgLossPips,
-      highestScore: diag.highestScoreSeen,
       highestUnifiedScore: diag.highestUnifiedScore,
       unifiedTrades: unifiedTrades.length,
       standaloneTrades: standaloneTrades.length,

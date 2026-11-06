@@ -235,13 +235,6 @@ function validateConfig(config: any): string[] {
   // Strategy validations
   const s = config.strategy;
   if (s) {
-    if (typeof s.confluenceThreshold === "number" && (s.confluenceThreshold < 0 || s.confluenceThreshold > 100)) {
-      errors.push("strategy.confluenceThreshold must be between 0 and 100");
-    }
-    // Legacy validation (backward compat)
-    if (typeof s.minConfluenceScore === "number" && (s.minConfluenceScore < 0 || s.minConfluenceScore > 100)) {
-      errors.push("strategy.minConfluenceScore must be between 0 and 100");
-    }
     if (typeof s.structureLookback === "number" && (s.structureLookback < 5 || s.structureLookback > 200)) {
       errors.push("strategy.structureLookback must be between 5 and 200");
     }
@@ -307,14 +300,8 @@ function validateConfig(config: any): string[] {
         if (typeof v.minRiskReward === "number" && (v.minRiskReward < 0 || v.minRiskReward > 20)) {
           errors.push(`pairGateOverrides.${sym}.minRiskReward must be between 0 and 20`);
         }
-        if (typeof v.minTier1Factors === "number" && (v.minTier1Factors < 0 || v.minTier1Factors > 5)) {
-          errors.push(`pairGateOverrides.${sym}.minTier1Factors must be between 0 and 5`);
-        }
         if (typeof v.maxPerSymbol === "number" && (v.maxPerSymbol < 1 || v.maxPerSymbol > 10)) {
           errors.push(`pairGateOverrides.${sym}.maxPerSymbol must be between 1 and 10`);
-        }
-        if (typeof v.minConfluence === "number" && (v.minConfluence < 0 || v.minConfluence > 100)) {
-          errors.push(`pairGateOverrides.${sym}.minConfluence must be between 0 and 100`);
         }
         if (typeof v.protectionMaxDailyLossDollar === "number" && (v.protectionMaxDailyLossDollar < 0 || v.protectionMaxDailyLossDollar > 100000)) {
           errors.push(`pairGateOverrides.${sym}.protectionMaxDailyLossDollar must be between 0 and 100000`);
@@ -376,22 +363,19 @@ function validateConfig(config: any): string[] {
 function getDefaultConfig() {
   return {
     strategy: {
-      // Confluence threshold is percentage-based (0-100%). 55% = balanced, 65% = conservative.
       enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-      confluenceThreshold: 55, htfBiasRequired: true, obLookbackCandles: 20, obMinBodyWickRatio: 0.5,
+      htfBiasRequired: true, obLookbackCandles: 20, obMinBodyWickRatio: 0.5,
       obMustBeAtSwing: true, obInvalidationClose: true, obMitigationType: "touch",
       fvgMinSizePips: 5, fvgPremiumDiscountOnly: false, fvgFillPercentInvalidate: 75, fvgOnlyUnfilled: true,
       structureBreakConfirmation: "close", chochAsReversal: true, structureLookback: 50,
       liquiditySweepRequired: false, equalHighsLowsSensitivity: 3, liquidityPoolMinTouches: 2,
       premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
       htfBiasTimeframe: "1D", entryTimeframe: "15m", requireAllTFAligned: false, minTFsAligned: 2,
-      regimeScoringEnabled: true, regimeScoringStrength: 1.0,
-      // Normalized scoring: percentage-based (auto-adjusts when factors are toggled)
-      normalizedScoring: true,
+      regimeScoringEnabled: true,
 
       // ── ICT 2022 Mentorship modules ───────────────────────────────────
       // All gates default to "off" (log-only, no trade impact). Flip to
-      // "soft" for score impact or "hard" to block trades.
+      // "hard" to block trades.
       ictHTFEnabled: true,
       ictHTFGateMode: "off",
       ictDisplacementMSSEnabled: true,
@@ -456,14 +440,6 @@ function getDefaultConfig() {
     tradingStyle: {
       mode: "day_trader",
     },
-    // Factor Weights — config-driven, AI-tunable.
-    // Empty object = use hardcoded defaults. Override individual keys to tune.
-    // Keys: marketStructure, orderBlock, fairValueGap, premiumDiscountFib,
-    //       sessionKillZone, judasSwing, pdPwLevels, reversalCandle,
-    //       liquiditySweep, displacement, breakerBlock, unicornModel,
-    //       silverBullet, macroWindow, smtDivergence, volumeProfile,
-    //       amdPhase, currencyStrength, trendDirection, dailyBias
-    factorWeights: {},
     // Per-instrument SL buffer overrides (pips).
     // When set, the override is final — no asset-class multiplier applied.
     // Empty = use global slBufferPips × asset-class multiplier.

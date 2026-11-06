@@ -250,18 +250,3 @@ Deno.test("HTF POI: htfPOIs field is returned in analysis result", () => {
   assertEquals(result.htfPOIs[0].timeframe, "4H");
 });
 
-Deno.test("HTF POI: factor is classified as Tier 2", () => {
-  const candles = makeBullishCandles(50);
-  const daily = makeDailyCandles(30);
-  const lastPrice = candles[candles.length - 1].close;
-  const config = {
-    ...baseConfig,
-    _htfPOIs: [
-      { timeframe: "4H", type: "fvg", high: lastPrice + 0.001, low: lastPrice - 0.001, direction: "bullish" },
-    ],
-  };
-  const result = runConfluenceAnalysis(candles, daily, config);
-  const htfFactor = result.factors.find((f: any) => f.name === "HTF POI Alignment");
-  assert(htfFactor, "HTF POI Alignment factor should exist");
-  assertEquals((htfFactor as any).tier, 2);
-});

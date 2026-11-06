@@ -1,8 +1,10 @@
 /**
  * _shared/confluenceScoring.ts — Shared Confluence Scoring Engine
  * ──────────────────────────────────────────────────────────────────────
- * Single source of truth for the 22-factor, tiered confluence scoring
- * engine used by both bot-scanner (live) and backtest-engine (historical).
+ * Single source of truth for the confluence FACTOR analysis (which SMC factors
+ * are present for a direction, plus the regime / spread gates) used by both
+ * bot-scanner (live) and backtest-engine (historical). Factors are reported as
+ * detected / not detected — there is no tiered score and no confluence %.
  *
  * The `atMs` parameter controls time-dependent detectors:
  *   - undefined → wall-clock (live scanner)
@@ -56,36 +58,6 @@ import {
   affinityToScoringPoints,
   type SessionAffinityResult,
 } from "./sessionAffinity.ts";
-
-// ─── Default Factor Weights ─────────────────────────────────────────────────
-export const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
-  marketStructure: 2.5,
-  orderBlock: 2.0,
-  fairValueGap: 2.0,
-  premiumDiscountFib: 2.0,
-  sessionQuality: 1.5,
-  judasSwing: 0.75,
-  pdPwLevels: 1.0,
-  reversalCandle: 1.5,
-  liquiditySweep: 1.5,
-  displacement: 1.0,
-  breakerBlock: 1.0,
-  unicornModel: 1.5,
-  smtDivergence: 1.0,
-  volumeProfile: 0.75,
-  amdPhase: 1.0,
-  currencyStrength: 1.5,
-  dailyBias: 1.0,
-  // ── Added factors (config-sync-fixes) ──
-  htfPoiAlignment: 2.0,
-  htfFibPdLiquidity: 2.5,
-  confluenceStack: 1.5,
-  pullbackHealth: 0.5,
-  // ── Game Plan Integration factors ──
-  gamePlanKeyLevel: 1.0,
-  // ── Session-Pair Affinity ──
-  sessionAffinity: 1.5,
-};
 
 // ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
 interface VolumeProfileResult {
@@ -143,24 +115,6 @@ function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileRes
   return { poc, vah, val, nodes, totalBins: numBins };
 }
 
-// ─── Helper: Weight Scaling ──────────────────────────────────────────
-export function resolveWeightScale(factorKey: string, config: any): number {
-  const fw = config.factorWeights;
-  if (!fw || fw[factorKey] === undefined || fw[factorKey] === null) return 1.0;
-  const defaultW = DEFAULT_FACTOR_WEIGHTS[factorKey];
-  if (!defaultW || defaultW === 0) return 1.0;
-  return Math.max(0, fw[factorKey]) / defaultW;
-}
-
-export function applyWeightScale(pts: number, factorKey: string, displayWeight: number, config: any): { pts: number; displayWeight: number } {
-  const scale = resolveWeightScale(factorKey, config);
-  if (scale === 1.0) return { pts, displayWeight };
-  return {
-    pts: Math.round(pts * scale * 1000) / 1000,
-    displayWeight: Math.round(displayWeight * scale * 1000) / 1000,
-  };
-}
-
 // ─── Helper: Regime Classification (thin wrapper) ────────────────────
 function classifyInstrumentRegimeLocal(dailyCandles: Candle[]): {
   regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
@@ -205,13 +159,13 @@ function regimeAlignmentAdjustment(
       const bonus = regime === "strong_trend" ? 0.5 : 0.25;
       return {
         adjustment: +(bonus * scaleFactor).toFixed(2),
-        detail: `${direction} entry aligns with ${regime.replace("_", " ")} (${regimeBias}) → +${(bonus * scaleFactor).toFixed(1)} bonus (conf: ${(confidence * 100).toFixed(0)}%)`,
+        detail: `${direction} entry aligns with ${regime.replace("_", " ")} (${regimeBias}) → alignment +${(bonus * scaleFactor).toFixed(1)} (conf: ${(confidence * 100).toFixed(0)}%)`,
       };
     } else if (directionAligned === false) {
       const penalty = regime === "strong_trend" ? -1.5 : -0.75;
       return {
         adjustment: +(penalty * scaleFactor).toFixed(2),
-        detail: `${direction} entry opposes ${regime.replace("_", " ")} (${regimeBias}) → ${(penalty * scaleFactor).toFixed(1)} penalty (conf: ${(confidence * 100).toFixed(0)}%)`,
+        detail: `${direction} entry opposes ${regime.replace("_", " ")} (${regimeBias}) → alignment ${(penalty * scaleFactor).toFixed(1)} (conf: ${(confidence * 100).toFixed(0)}%)`,
       };
     }
     return { adjustment: 0, detail: `Trending regime but no bias info — no adjustment` };
@@ -220,55 +174,10 @@ function regimeAlignmentAdjustment(
     const penalty = regime === "choppy_range" ? -0.75 : -0.25;
     return {
       adjustment: +(penalty * scaleFactor).toFixed(2),
-      detail: `Entry in ${regime.replace("_", " ")} market → ${(penalty * scaleFactor).toFixed(1)} penalty (no clear directional edge, conf: ${(confidence * 100).toFixed(0)}%)`,
+      detail: `Entry in ${regime.replace("_", " ")} market → alignment ${(penalty * scaleFactor).toFixed(1)} (no clear directional edge, conf: ${(confidence * 100).toFixed(0)}%)`,
     };
   }
   return { adjustment: 0, detail: `Transitional regime — no adjustment` };
-}
-
-// ─── Helper: Game Plan Bias Confidence Adjustment ─────────────────────────
-// Applies a soft score modifier based on the game plan's premarket bias analysis.
-// Unlike the legacy game plan filter gate (binary veto), this is a continuous
-// adjustment that rewards alignment and penalizes opposition, scaled by confidence.
-// This is additive to the existing Regime Alignment — they measure different things:
-//   - Regime Alignment: daily candle structure + ATR trend (mechanical)
-//   - GP Bias Confidence: premarket analysis combining structure + DOL + news + zone (analytical)
-function gamePlanBiasAdjustment(
-  gpBias: string | null | undefined,
-  gpConfidence: number | null | undefined,
-  direction: string | null,
-): { adjustment: number; detail: string } {
-  if (!direction || !gpBias || gpBias === "neutral") {
-    return { adjustment: 0, detail: "No GP bias or neutral — no adjustment" };
-  }
-  const conf = gpConfidence ?? 0; // 0-100 scale
-  if (conf < 50) {
-    return { adjustment: 0, detail: `GP bias ${gpBias} but low confidence (${conf}%) — no adjustment` };
-  }
-
-  const aligned = (direction === "long" && gpBias === "bullish")
-    || (direction === "short" && gpBias === "bearish");
-  const confScale = Math.min(1.0, conf / 100); // 0.5 to 1.0
-
-  if (conf >= 70) {
-    // High confidence: stronger adjustment
-    if (aligned) {
-      const bonus = +(0.5 * confScale).toFixed(2);
-      return { adjustment: bonus, detail: `GP bias ${gpBias} ALIGNS with ${direction} (${conf}% conf) → +${bonus} bonus` };
-    } else {
-      const penalty = +(-0.75 * confScale).toFixed(2);
-      return { adjustment: penalty, detail: `GP bias ${gpBias} OPPOSES ${direction} (${conf}% conf) → ${penalty} penalty` };
-    }
-  } else {
-    // Medium confidence (50-69%): mild adjustment
-    if (aligned) {
-      const bonus = +(0.25 * confScale).toFixed(2);
-      return { adjustment: bonus, detail: `GP bias ${gpBias} aligns with ${direction} (${conf}% conf, mild) → +${bonus} bonus` };
-    } else {
-      const penalty = +(-0.35 * confScale).toFixed(2);
-      return { adjustment: penalty, detail: `GP bias ${gpBias} opposes ${direction} (${conf}% conf, mild) → ${penalty} penalty` };
-    }
-  }
 }
 
 export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[], atMs?: number) {
@@ -380,7 +289,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   }
 
   const lastPrice = candles[candles.length - 1].close;
-  let score = 0;
   const factors: ReasoningFactor[] = [];
 
   // ── Factor 1: Market Structure (merged BOS/CHoCH + Trend Direction) (max 2.5) ──
@@ -458,9 +366,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         pts += 1.0;
         detail += ` | Entry TF trend ${structure.trend} — aligned`;
       } else if (structure.trend === "ranging" && structurePts > 0) {
-        // Fix 3: Ranging market should NOT pass Tier 1 gate on structure alone.
-        // Remove the +0.25 bonus and cap the raw weight so qualityRatio stays ≤0.4.
-        // Max weight for Market Structure is 2.5, so 0.4 * 2.5 = 1.0 cap.
+        // Fix 3: a ranging market gets no trend-alignment bonus; the factor's
+        // strength is capped at 1.0.
         pts = Math.min(pts, 1.0);
         detail += " | Ranging market — capped (no trend alignment bonus)";
       }
@@ -471,8 +378,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     }
     // Fix 3 (cont.): Use actual pts as displayWeight when ranging-capped, so qualityRatio reflects the cap
     const msDisplayWeight = (structure.trend === "ranging") ? Math.min(pts, 2.5) : 2.5;
-    { const s = applyWeightScale(pts, "marketStructure", msDisplayWeight, config); pts = s.pts; score += pts;
-    factors.push({ name: "Market Structure", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
+    { const s = { pts, displayWeight: msDisplayWeight };    factors.push({ name: "Market Structure", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
   }
 
   // Displacement detection (used by OB/FVG bonus + new factor below)
@@ -551,8 +457,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "Order Blocks disabled";
     }
-    { const s = applyWeightScale(pts, "orderBlock", 2.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Order Block", present: pts > 0, weight: s.displayWeight, detail: detail || "No active order blocks", group: "Order Flow Zones" }); }
+    { const s = { pts, displayWeight: 2.0 };    factors.push({ name: "Order Block", present: pts > 0, weight: s.displayWeight, detail: detail || "No active order blocks", group: "Order Flow Zones" }); }
   }
 
   // ── Direction Determination (moved before Factors 3-4 so they can use actual direction) ──
@@ -646,7 +551,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   {
     let pts = 0;
     let detail = "";
-    let _matchedFvgHasDisplacement = false; // Fix C: track across scope boundary
     if (config.enableFVG !== false) {
       // P1: pip-size lookup for FVG min-size filter (default 0.0001 if symbol unknown)
       const _sym = (config as any)._currentSymbol as string | undefined;
@@ -734,7 +638,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         }
         if ((insideFVG as any).hasDisplacement) {
           detail += " [displacement-created, scored via Factor 10]";
-          _matchedFvgHasDisplacement = true; // Fix C: propagate to tier logic
         }
       } else if (activeFVGs.length > 0) {
         // FVGs exist but price not inside any — no score (ICT: entry requires price AT the level)
@@ -748,11 +651,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "FVGs disabled";
     }
-    { const s = applyWeightScale(pts, "fairValueGap", 2.0, config); pts = s.pts; score += pts;
-    const fvgFactor: any = { name: "Fair Value Gap", present: pts > 0, weight: s.displayWeight, detail: detail || "No active FVGs", group: "Order Flow Zones" };
-    // Fix C: stash displacement status for tier demotion logic downstream
-    fvgFactor._hasDisplacement = _matchedFvgHasDisplacement;
-    factors.push(fvgFactor); }
+    { const s = { pts, displayWeight: 2.0 };
+    factors.push({ name: "Fair Value Gap", present: pts > 0, weight: s.displayWeight, detail: detail || "No active FVGs", group: "Order Flow Zones" }); }
   }
 
   // ── Factor 4: Premium/Discount & Fibonacci (max 2.5, group-capped) ──
@@ -890,13 +790,12 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail += ` | Nearest Fib: ${nearestRetrace.label} @ ${nearestRetrace.price.toFixed(5)}`;
     }
 
-    { const s = applyWeightScale(pts, "premiumDiscountFib", 2.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Premium/Discount & Fib", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
+    { const s = { pts, displayWeight: 2.0 };    factors.push({ name: "Premium/Discount & Fib", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
   }
 
   // ── Factor 5: Session Quality (max 1.5) ──
-  // Collapsed from Kill Zone + Silver Bullet + Macro into a single tiered factor.
-  // Tier 1 (1.5): SB + KZ + Macro | Tier 2 (1.25): SB + KZ | Tier 3 (1.0): KZ + Macro
+  // Collapsed from Kill Zone + Silver Bullet + Macro into one factor graded
+  // Perfect (SB + KZ + Macro) / Excellent (SB + KZ) / Good (KZ + Macro).
   // Tier 4 (0.75): KZ only | Tier 5 (0.5): Macro only | Tier 6 (0.25): active session | Tier 7 (0): nothing
   const silverBullet = detectSilverBullet(atMs);
   const macroWindow = detectMacroWindow(atMs);
@@ -908,29 +807,28 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     let tier = "";
     let detail = "";
     if (inKZ && inSB && inMacro) {
-      pts = 1.5; tier = "Tier 1 — Perfect";
+      pts = 1.5; tier = "Perfect";
       detail = `${session.name} Kill Zone + ${silverBullet.window} + ${macroWindow.window} — all timing windows aligned`;
     } else if (inKZ && inSB) {
-      pts = 1.25; tier = "Tier 2 — Excellent";
+      pts = 1.25; tier = "Excellent";
       detail = `${session.name} Kill Zone + ${silverBullet.window} — strong timing confluence`;
     } else if (inKZ && inMacro) {
-      pts = 1.0; tier = "Tier 3 — Good";
+      pts = 1.0; tier = "Good";
       detail = `${session.name} Kill Zone + ${macroWindow.window} — good timing overlap`;
     } else if (inKZ) {
-      pts = 0.75; tier = "Tier 4 — Acceptable";
+      pts = 0.75; tier = "Acceptable";
       detail = `${session.name} Kill Zone — standard high-probability window`;
     } else if (inMacro) {
-      pts = 0.5; tier = "Tier 5 — Marginal";
+      pts = 0.5; tier = "Marginal";
       detail = `${macroWindow.window} active (${macroWindow.minutesRemaining}min left) — macro reprice window only`;
     } else if (session.name && session.name !== "Off-Hours") {
-      pts = 0.25; tier = "Tier 6 — Low";
+      pts = 0.25; tier = "Low";
       detail = `${session.name} session active — no special timing window`;
     } else {
-      pts = 0; tier = "Tier 7 — None";
+      pts = 0; tier = "None";
       detail = "Outside active trading sessions — no timing edge";
     }
-    { const s = applyWeightScale(pts, "sessionQuality", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Session Quality", present: pts > 0, weight: s.displayWeight, detail: `[${tier}] ${detail}`, group: "Timing" }); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Session Quality", present: pts > 0, weight: s.displayWeight, detail: `[${tier}] ${detail}`, group: "Timing" }); }
   }
 
   // ── Factor 6: Judas Swing (max 0.75) ──
@@ -975,8 +873,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       pts = 0.1;
       detail += " (unconfirmed)";
     }
-    { const s = applyWeightScale(pts, "judasSwing", 0.75, config); pts = s.pts; score += pts;
-    factors.push({ name: "Judas Swing", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+    { const s = { pts, displayWeight: 0.75 };    factors.push({ name: "Judas Swing", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
   // ── Factor 7: PD/PW Levels + Opens (max 1.5) ──
@@ -1052,8 +949,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       }
       detail += biasAlignmentDetail;
     }
-    { const s = applyWeightScale(pts, "pdPwLevels", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
   }
 
   // ── Factor 8: Reversal Candle (max 1.5) ──
@@ -1126,8 +1022,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         detail += ` + CHoCH (${lastChoch.type}, ${recency} bar${recency !== 1 ? "s" : ""} ago${lastChoch.closeBased ? ", close-based" : ""})`;
       }
     }
-    { const s = applyWeightScale(pts, "reversalCandle", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Reversal Candle", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Price Action", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Reversal Candle", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Price Action", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 9: Liquidity Sweep (max 1.5) ──
@@ -1198,8 +1093,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "Liquidity Sweeps disabled";
     }
-    { const s = applyWeightScale(pts, "liquiditySweep", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
   // ── Opening Range Enhancements ──
@@ -1210,8 +1104,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   if (or && config.openingRange?.enabled) {
     // (a) OR Bias boost — modifies Factor 1
     if (config.openingRange.useBias && or.completed) {
-      if (lastPrice > or.high) { score += 0.5; factors[0].detail += " | OR bias: bullish (above OR high)"; }
-      else if (lastPrice < or.low) { score += 0.5; factors[0].detail += " | OR bias: bearish (below OR low)"; }
+      if (lastPrice > or.high) { factors[0].detail += " | OR bias: bullish (above OR high)"; }
+      else if (lastPrice < or.low) { factors[0].detail += " | OR bias: bearish (below OR low)"; }
     }
 
     // (b) OR Judas Swing — enhances Factor 6
@@ -1220,12 +1114,10 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       const sweptHigh = recentCandles.some(c => c.high > or.high);
       const sweptLow = recentCandles.some(c => c.low < or.low);
       if (sweptHigh && lastPrice < or.high) {
-        score += 0.5;
         const f6 = factors.find(f => f.name === "Judas Swing");
         if (f6) { f6.present = true; f6.detail += " | OR high swept then reversed"; }
       }
       if (sweptLow && lastPrice > or.low) {
-        score += 0.5;
         const f6 = factors.find(f => f.name === "Judas Swing");
         if (f6) { f6.present = true; f6.detail += " | OR low swept then reversed"; }
       }
@@ -1241,7 +1133,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       ];
       const nearOR = orLevels.find(l => Math.abs(lastPrice - l.price) <= threshold);
       if (nearOR) {
-        score += 0.5;
         const f7 = factors.find(f => f.name === "PD/PW Levels");
         if (f7) { f7.present = true; f7.detail += ` | Near ${nearOR.name} (${nearOR.price.toFixed(5)})`; }
       }
@@ -1279,7 +1170,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         const trendStrength = Math.max(0, bosCount - chochCount); // 0 = weak, 3+ = strong
         // Base penalty 0.3, +0.15 per net BOS, capped at 1.0
         const penalty = Math.min(1.0, 0.3 + trendStrength * 0.15);
-        score -= penalty;
         msFactor.weight = Math.max(0, msFactor.weight - penalty);
         msFactor.detail += ` | Counter-trend penalty: ${direction} against ${structure.trend} (-${penalty.toFixed(2)}, strength=${trendStrength})`;
       } else if (trendAligned && msFactor.present) {
@@ -1308,7 +1198,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         const oldWeight = obFactor.weight;
         obFactor.weight = 0;
         obFactor.present = false;
-        score -= oldWeight;
         const obType = obTypeBullish ? "bullish" : "bearish";
         obFactor.detail += ` | OB direction mismatch: ${obType} OB vs ${direction} entry (0pts — counter-directional, not scored)`;
       } else if (obAligned) {
@@ -1348,8 +1237,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "Displacement scoring disabled";
     }
-    { const s = applyWeightScale(pts, "displacement", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Displacement", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Price Action", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
+    { const s = { pts, displayWeight: 1.0 };    factors.push({ name: "Displacement", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Price Action", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 11: Breaker Block (max 1.0) ──
@@ -1398,8 +1286,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else if (config.useBreakerBlocks === false) {
       detail = "Breaker Blocks disabled";
     }
-    { const s = applyWeightScale(pts, "breakerBlock", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Breaker Block", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
+    { const s = { pts, displayWeight: 1.0 };    factors.push({ name: "Breaker Block", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
   }
 
   // ── Factor 12: Unicorn Model (max 1.5) ──
@@ -1427,8 +1314,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else if (config.useUnicornModel === false) {
       detail = "Unicorn Model disabled";
     }
-    { const s = applyWeightScale(pts, "unicornModel", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Unicorn Model", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Unicorn Model", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
   }
 
   // ── Factors 13 & 14 (Silver Bullet + Macro) absorbed into Factor 5 Session Quality ──
@@ -1455,8 +1341,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else if (smtResult && smtResult.detected) {
       detail = `SMT (${smtResult.type}) detected but no signal direction yet`;
     }
-    { const s = applyWeightScale(pts, "smtDivergence", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "SMT Divergence", present: pts > 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
+    { const s = { pts, displayWeight: 1.0 };    factors.push({ name: "SMT Divergence", present: pts > 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
   }
 
   // ── Factor 16: Volume Profile (max 1.5) ──
@@ -1514,8 +1399,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       }
       pts = Math.min(0.75, pts);
     }
-    { const s = applyWeightScale(pts, "volumeProfile", 0.75, config); pts = s.pts; score += pts;
-    factors.push({ name: "Volume Profile", present: pts > 0, weight: s.displayWeight, detail, group: "Volume Profile" }); }
+    { const s = { pts, displayWeight: 0.75 };    factors.push({ name: "Volume Profile", present: pts > 0, weight: s.displayWeight, detail, group: "Volume Profile" }); }
   } else {
     factors.push({ name: "Volume Profile", present: false, weight: 0, detail: "Volume Profile disabled", group: "Volume Profile" });
   }
@@ -1571,8 +1455,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         }
       }
     }
-    { const s = applyWeightScale(pts, "amdPhase", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "AMD Phase", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "AMD / Power of 3", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "AMD Phase", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "AMD / Power of 3", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 18: Currency Strength / FOTSI (max 1.5, min -0.5) ──
@@ -1602,8 +1485,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "No direction — currency strength check skipped";
     }
-    { const s = applyWeightScale(pts, "currencyStrength", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Currency Strength", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Macro Confirmation", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Currency Strength", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Macro Confirmation", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Cached Daily Structure (computed once, reused by Factor 22 + gates) ──
@@ -1703,8 +1585,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "No direction determined — HTF bias skipped";
     }
-    { const s = applyWeightScale(pts, "dailyBias", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Daily Bias", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Daily Bias", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Daily Bias", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Daily Bias", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   } else {
     factors.push({ name: "Daily Bias", present: false, weight: 0, detail: "Daily Bias disabled", group: "Daily Bias" });
   }
@@ -1762,8 +1643,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "No confluence stacking detected (FVG/OB zones don't overlap with S/R + Fib)";
     }
-    { const s = applyWeightScale(pts, "confluenceStack", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Confluence Stack", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Order Flow Zones", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Confluence Stack", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Order Flow Zones", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 20: Sweep Reclaim Enhancement ──
@@ -1797,7 +1677,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
           const boost = bestReclaim.createdFVG ? 0.5 : bestReclaim.createdDisplacement ? 0.35 : 0.25;
           const newWeight = Math.min(1.5, sweepFactor.weight + boost);
           const diff = newWeight - sweepFactor.weight;
-          score += diff;
           sweepFactor.weight = newWeight;
           sweepFactor.detail += ` [reclaim boost: +${diff.toFixed(2)}]`;
         }
@@ -1831,8 +1710,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = pullbackDecay.detail;
     }
-    { const s = applyWeightScale(pts, "pullbackHealth", 0.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Pullback Health", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+    { const s = { pts, displayWeight: 0.5 };    factors.push({ name: "Pullback Health", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
   // ── Factor 23: HTF POI Alignment (max 2.0) ──
@@ -1927,8 +1805,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     }
 
     // Apply weight scale and add to factors
-    { const s = applyWeightScale(pts, "htfPoiAlignment", 2.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "HTF POI Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
+    { const s = { pts, displayWeight: 2.0 };    factors.push({ name: "HTF POI Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
   // ── Factor 24: HTF Fib + Premium/Discount + Liquidity (max 2.5) ──────────────
@@ -2098,8 +1975,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "No HTF Fib/PD/Liquidity alignment detected";
     }
 
-    { const s = applyWeightScale(pts, "htfFibPdLiquidity", 2.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "HTF Fib + PD + Liquidity", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
+    { const s = { pts, displayWeight: 2.5 };    factors.push({ name: "HTF Fib + PD + Liquidity", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
   // ── Factor 25: Game Plan Key Level Alignment (max 1.0) ──────────────────────
@@ -2169,8 +2045,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "No game plan context available";
     }
 
-    { const s = applyWeightScale(pts, "gamePlanKeyLevel", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "GP Key Level Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
+    { const s = { pts, displayWeight: 1.0 };    factors.push({ name: "GP Key Level Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
   // ── Factor 26: Session-Pair Affinity (max 1.5) ───────────────────────────────
@@ -2201,8 +2076,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     } else {
       detail = "No symbol or session available for affinity scoring";
     }
-    { const s = applyWeightScale(pts, "sessionAffinity", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Session Affinity", present: pts !== 0, weight: pts, detail, group: "Timing" }); }
+    { const s = { pts, displayWeight: 1.5 };    factors.push({ name: "Session Affinity", present: pts !== 0, weight: pts, detail, group: "Timing" }); }
   }
 
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
@@ -2215,7 +2089,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       if (f && f.present) {
         const diff = f.weight - newWeight;
         if (diff > 0) {
-          score -= diff;
           f.weight = newWeight;
           f.detail += ` [adjusted: ${reason}]`;
         }
@@ -2225,30 +2098,19 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     // Rule 1: Unicorn fires → Breaker = 0, FVG stays.
     // Unicorn = Breaker Block + FVG overlap. The Breaker Block is already
     // represented inside the Unicorn, so zero it to avoid double-counting.
-    // FVG is kept because the Unicorn is a *better* FVG (FVG + Breaker confluence);
-    // zeroing FVG would penalize the highest-conviction setups.
-    // If FVG is NOT separately present (price inside Unicorn overlap but not
-    // independently inside an FVG), Unicorn is promoted to Tier 1 so it can
-    // fill the FVG's role as a core setup factor.
+    // FVG is kept because the Unicorn is a *better* FVG (FVG + Breaker confluence).
     const unicorn = findFactor("Unicorn Model");
     if (unicorn && unicorn.present) {
       const breaker = findFactor("Breaker Block");
       const fvg = findFactor("Fair Value Gap");
       // Always zero the Breaker Block — it's subsumed by the Unicorn
       if (breaker && breaker.present) {
-        score -= breaker.weight;
         breaker.weight = 0;
         breaker.detail += " [zeroed: absorbed by Unicorn Model]";
       }
-      // FVG stays scored. Tag it for clarity but do NOT zero it.
+      // FVG stays. Tag it for clarity but do NOT zero it.
       if (fvg && fvg.present) {
         fvg.detail += " [confirmed: part of Unicorn confluence]";
-      }
-      // If FVG is absent or not present, promote Unicorn to fill the Tier 1 slot.
-      // This ensures a Unicorn entry (which IS an FVG + Breaker overlap) always
-      // counts as at least a Tier 1 core factor.
-      if (!fvg || !fvg.present || fvg.weight <= 0) {
-        (unicorn as any)._promotedToTier1 = true;
       }
     }
 
@@ -2270,7 +2132,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         const combinedZone = ob.weight + fvg2.weight;
         if (combinedZone > 3.0) {
           const excess = combinedZone - 3.0;
-          score -= excess;
           fvg2.weight = Math.max(0, fvg2.weight - excess);
           fvg2.detail += ` [capped: OB+FVG combined limited to 3.0]`;
         }
@@ -2284,7 +2145,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const judas = findFactor("Judas Swing");
     const sweep = findFactor("Liquidity Sweep");
     if (amdFactor && amdFactor.present && sweep && sweep.present && judas && judas.present) {
-      score -= judas.weight;
       judas.weight = 0;
       judas.detail += " [zeroed: absorbed by AMD + Sweep sequence]";
     }
@@ -2308,7 +2168,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
 
     if (amdPresent && sweepOrJudas && trendAligned) {
       const po3Bonus = 1.0;
-      score += po3Bonus;
       factors.push({
         name: "Power of 3 Combo",
         present: true,
@@ -2324,56 +2183,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         detail: `Incomplete: AMD=${amdPresent ? "✓" : "✗"} Sweep/Judas=${sweepOrJudas ? "✓" : "✗"} Structure=${trendAligned ? "✓" : "✗"}`,
         group: "AMD / Power of 3",
       });
-    }
-  }
-
-  // ─── Tiered Factor Classification ─────────────────────────────────────────────
-  // No group caps. Factors are classified into tiers for scoring:
-  // Tier 1 (Core Setup ×2): Must have at least 2 to consider a trade
-  // Tier 2 (Confirmation ×1): Adds confidence to the setup
-  // Tier 3 (Bonus ×0.5): Nice to have, never required
-  const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib"]);
-  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment", "HTF Fib + PD + Liquidity", "GP Key Level Alignment"]);
-  // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
-  // Unicorn Model*, Volume Profile, AMD Phase, Judas Swing
-  // *Unicorn is promoted to Tier 1 when FVG is absent (see anti-double-count Rule 1)
-  // (Regime Alignment and Spread Quality are separate gates, not scored)
-
-  // Tag each factor with its tier for display
-  for (const f of factors) {
-    if (TIER_1_FACTORS.has(f.name)) {
-      (f as any).tier = 1;
-    } else if (TIER_2_FACTORS.has(f.name)) {
-      (f as any).tier = 2;
-    } else {
-      (f as any).tier = 3;
-    }
-  }
-
-  // Unicorn Tier 1 promotion: when FVG is absent but Unicorn fires,
-  // promote Unicorn from Tier 3 → Tier 1 so it fills the FVG's core slot.
-  // A Unicorn IS an FVG + Breaker overlap, so it qualifies as a core setup factor.
-  {
-    const uniF = factors.find(f => f.name === "Unicorn Model");
-    if (uniF && (uniF as any)._promotedToTier1) {
-      (uniF as any).tier = 1;
-      uniF.detail += " [promoted to Tier 1: filling FVG core slot]";
-    }
-  }
-
-  // Fix C: Demote FVG from Tier 1 → Tier 2 when the matched FVG was NOT created by displacement.
-  // The FVG's `hasDisplacement` property is tagged at detection time by tagDisplacementQuality(),
-  // so it correctly reflects whether displacement existed when the FVG was created (regardless of
-  // how many candles ago that was). Without displacement, an FVG is just a random gap — it still
-  // scores points but should not satisfy the "3 core factors" Tier 1 gate.
-  {
-    const fvgF = factors.find(f => f.name === "Fair Value Gap");
-    if (fvgF && fvgF.present && (fvgF as any).tier === 1) {
-      // Check if the FVG that was scored had displacement. We stash this during Factor 3 scoring.
-      if (!(fvgF as any)._hasDisplacement) {
-        (fvgF as any).tier = 2;
-        fvgF.detail += " [demoted to Tier 2: no displacement confirmation]";
-      }
     }
   }
 
@@ -2500,465 +2309,22 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     });
   }
 
-  // ─── GP Bias Confidence Adjustment (Game Plan Layer 2 → Layer 3) ─────────────
-  // Applies a soft score modifier based on the game plan's premarket bias analysis.
-  // This is separate from the Regime Alignment gate — it captures the game plan's
-  // analytical bias (structure + DOL + news + zone) as a continuous adjustment.
-  {
-    const gpCtx = (config as any)._gamePlanContext;
-    if (gpCtx && gpCtx.bias && direction) {
-      const { adjustment, detail } = gamePlanBiasAdjustment(
-        gpCtx.bias, gpCtx.biasConfidence, direction
-      );
-      // Apply adjustment directly to the tiered score (after factors, before normalization)
-      // We track it as a factor for transparency but it doesn't count toward tiered max
-      factors.push({
-        name: "GP Bias Confidence",
-        present: adjustment !== 0,
-        weight: adjustment, // positive = bonus, negative = penalty
-        detail: `${detail} [Layer 2 → Layer 3 integration]`,
-        group: "Macro Confirmation",
-      });
-    } else {
-      factors.push({
-        name: "GP Bias Confidence",
-        present: false,
-        weight: 0,
-        detail: "No game plan context available — no adjustment",
-        group: "Macro Confirmation",
-      });
-    }
-  }
-
-  // ─── Tiered Scoring Model ─────────────────────────────────────────────────
-  // Replaces the old percentage-of-weighted-max system with a clear tiered model:
-  //   Tier 1 (Core Setup): Market Structure, Order Block, FVG, Premium/Discount
-  //     → Each present Tier 1 factor scores 2 points
-  //     → Must have at least 2 Tier 1 factors to consider a trade
-  //   Tier 2 (Confirmation): PD/PW Levels, Liquidity Sweep, Displacement, Reversal Candle, Session Quality
-  //     → Each present Tier 2 factor scores 1 point
-  //   Tier 3 (Bonus): Everything else (Currency Strength, SMT, Daily Bias, Breaker, Unicorn*, Volume, AMD, Judas)
-  //     → Each present Tier 3 factor scores 0.5 points
-  //   *Unicorn is promoted to Tier 1 when FVG is absent (it IS an FVG + Breaker overlap)
-  //   Regime and Spread are separate pass/fail gates — they do NOT affect the score.
-  //
-  // Max possible = (4 × 2) + (5 × 1) + (8 × 0.5) + Po3 bonus (1.0) + OR bonus (2.0) = 20
-  // Score percentage = tiered points / max possible × 100
-
-  const TIER_POINTS = { 1: 2, 2: 1, 3: 0.5 } as const;
-
-  // Max possible raw weight per factor (used for quality scaling)
-  // Each factor's weight is divided by its max to get a 0–1 quality ratio
-  const FACTOR_MAX_WEIGHT: Record<string, number> = {
-    "Market Structure": 2.5,
-    "Order Block": 2.0,
-    "Fair Value Gap": 2.0,
-    "Premium/Discount & Fib": 2.0,
-    "Session Quality": 1.5,
-    "Judas Swing": 0.75,
-    "PD/PW Levels": 1.5,
-    "Reversal Candle": 1.5,
-    "Liquidity Sweep": 1.5,
-    "Displacement": 1.0,
-    "Breaker Block": 1.0,
-    "Unicorn Model": 1.5,
-    "SMT Divergence": 1.0,
-    "Volume Profile": 0.75,
-    "AMD Phase": 1.5,
-    "Currency Strength": 1.5,
-    "Daily Bias": 1.5,
-    "Confluence Stack": 1.5,
-    "Pullback Health": 0.5,
-    "HTF POI Alignment": 2.0,
-    "HTF Fib + PD + Liquidity": 2.5,
-    "Session Affinity": 1.5,
+  // ─── Opposing factors ───────────────────────────────────────────────────────
+  // Factors that actively argue against the direction (negative strength, tagged
+  // _opposing). A factor switched off by its toggle is not counted. Read by the
+  // thesis-conviction tracker. There is no confluence score: factors are reported
+  // as detected / not detected, never summed.
+  const FACTOR_TOGGLE: Record<string, string> = {
+    "Market Structure": "enableStructureBreak", "Order Block": "enableOB", "Fair Value Gap": "enableFVG",
+    "Liquidity Sweep": "enableLiquiditySweep", "Displacement": "useDisplacement", "Breaker Block": "useBreakerBlocks",
+    "Unicorn Model": "useUnicornModel", "SMT Divergence": "useSMT", "Volume Profile": "useVolumeProfile",
+    "AMD Phase": "useAMD", "Currency Strength": "useFOTSI", "Daily Bias": "useDailyBias",
   };
-
-  // Count tier 1 factors present (for the minimum gate)
-  let tier1Count = 0;
-  let tier1Max = 0;
-  let tier2Count = 0;
-  let tier2Max = 0;
-  let tier3Count = 0;
-  let tier3Max = 0;
-  let tieredScore = 0;
-
-  // Factor toggle map to check if factors are disabled
-  const FACTOR_TOGGLE_MAP: Record<string, string> = {
-    marketStructure: "enableStructureBreak",
-    orderBlock: "enableOB",
-    fairValueGap: "enableFVG",
-    liquiditySweep: "enableLiquiditySweep",
-    displacement: "useDisplacement",
-    breakerBlock: "useBreakerBlocks",
-    unicornModel: "useUnicornModel",
-    smtDivergence: "useSMT",
-    volumeProfile: "useVolumeProfile",
-    amdPhase: "useAMD",
-    currencyStrength: "useFOTSI",
-    dailyBias: "useDailyBias",
-  };
-
-  const NAME_TO_KEY: Record<string, string> = {
-    "Market Structure": "marketStructure",
-    "Order Block": "orderBlock",
-    "Fair Value Gap": "fairValueGap",
-    "Premium/Discount & Fib": "premiumDiscountFib",
-    "Session Quality": "sessionQuality",
-    "Judas Swing": "judasSwing",
-    "PD/PW Levels": "pdPwLevels",
-    "Reversal Candle": "reversalCandle",
-    "Liquidity Sweep": "liquiditySweep",
-    "Displacement": "displacement",
-    "Breaker Block": "breakerBlock",
-    "Unicorn Model": "unicornModel",
-    "SMT Divergence": "smtDivergence",
-    "Volume Profile": "volumeProfile",
-    "AMD Phase": "amdPhase",
-    "Currency Strength": "currencyStrength",
-    "Daily Bias": "dailyBias",
-    // ── Added factors (config-sync-fixes) ──
-    "HTF POI Alignment": "htfPoiAlignment",
-    "HTF Fib + PD + Liquidity": "htfFibPdLiquidity",
-    "Confluence Stack": "confluenceStack",
-    "Pullback Health": "pullbackHealth",
-  };
-
-  // ── Bidirectional Conflict Counter ──
-  // Track how many factors actively oppose the trade direction.
-  // Used downstream to raise threshold or block when too many signals disagree.
-  let opposingFactorCount = 0;
-
-  for (const f of factors) {
-    const tier = (f as any).tier as number | undefined;
-    if (!tier) continue; // Skip Regime, Spread, Po3, OR — they're not tiered
-
-    // Check if factor is disabled via toggle
-    const key = NAME_TO_KEY[f.name];
-    if (key) {
-      const toggleKey = FACTOR_TOGGLE_MAP[key];
-      if (toggleKey && (config as any)[toggleKey] === false) continue;
-    }
-
-    const pts = TIER_POINTS[tier as keyof typeof TIER_POINTS] || 0.5;
-    const isOpposing = (f as any)._opposing === true;
-
-    // ── Bidirectional: handle negative weights (opposing factors) ──
-    if (isOpposing && f.weight < 0) {
-      opposingFactorCount++;
-      // Penalty: subtract 50% of the tier points for this opposing factor
-      const penaltyRatio = Math.min(1.0, Math.abs(f.weight) / (FACTOR_MAX_WEIGHT[f.name] || 1.0));
-      const penalty = Math.round(pts * 0.5 * penaltyRatio * 100) / 100;
-      tieredScore -= penalty;
-      f.detail += ` [Tier ${tier}: -${penalty}pts (opposing)]`;
-      // Opposing factors count toward their tier's max but NOT toward present count
-      if (tier === 1) tier1Max++;
-      else if (tier === 2) tier2Max++;
-      else tier3Max++;
-      continue;
-    }
-
-    // Quality scaling: scale tier points by how good this factor's weight is
-    // relative to its maximum possible weight. A pristine OB (2.0/2.0 = 1.0)
-    // gets full tier points; a nearly-broken OB (0.3/2.0 = 0.15) gets 15%.
-    // Floor at 0.2 so a present-but-weak factor still contributes something.
-    const maxW = FACTOR_MAX_WEIGHT[f.name] || 1.0;
-    const qualityRatio = Math.min(1.0, Math.max(0.2, f.weight / maxW));
-
-    if (tier === 1) {
-      tier1Max++;
-      if (f.present && f.weight > 0) {
-        tier1Count++;
-        const scaled = Math.round(pts * qualityRatio * 100) / 100;
-        tieredScore += scaled;
-        f.detail += ` [Tier 1: +${scaled}/${pts}pts, Q:${(qualityRatio * 100).toFixed(0)}%]`;
-      }
-    } else if (tier === 2) {
-      tier2Max++;
-      if (f.present && f.weight > 0) {
-        tier2Count++;
-        const scaled = Math.round(pts * qualityRatio * 100) / 100;
-        tieredScore += scaled;
-        f.detail += ` [Tier 2: +${scaled}/${pts}pt, Q:${(qualityRatio * 100).toFixed(0)}%]`;
-      }
-    } else {
-      tier3Max++;
-      if (f.present && f.weight > 0) {
-        tier3Count++;
-        const scaled = Math.round(pts * qualityRatio * 100) / 100;
-        tieredScore += scaled;
-        f.detail += ` [Tier 3: +${scaled}/${pts}pts, Q:${(qualityRatio * 100).toFixed(0)}%]`;
-      }
-    }
-  }
-
-  // Add Po3 combo bonus if present
-  const po3Factor = factors.find(f => f.name === "Power of 3 Combo" && f.present);
-  if (po3Factor) tieredScore += 1.0;
-
-  // Add Opening Range bonus if present
-  const orFactor = factors.find(f => f.name && f.name.includes("Opening Range") && f.present);
-  if (orFactor) tieredScore += Math.min(2.0, orFactor.weight);
-
-  // Apply GP Bias Confidence adjustment (Layer 2 → Layer 3)
-  // This is a soft modifier — it adjusts tieredScore but NOT tieredMax,
-  // so it shifts the percentage up/down without changing the denominator.
-  const gpBiasFactor = factors.find(f => f.name === "GP Bias Confidence" && f.present);
-  if (gpBiasFactor && gpBiasFactor.weight !== 0) {
-    tieredScore += gpBiasFactor.weight;
-    // Floor at 0 — the penalty can reduce score but never make it negative
-    if (tieredScore < 0) tieredScore = 0;
-  }
-
-  // Calculate max possible from enabled tiers + bonuses
-  let tieredMax = (tier1Max * 2) + (tier2Max * 1) + (tier3Max * 0.5);
-  // Add Po3 potential if prerequisites are enabled
-  const po3Possible = (config as any).enableStructureBreak !== false
-    && (config as any).useAMD !== false
-    && (config as any).enableLiquiditySweep !== false;
-  if (po3Possible) tieredMax += 1.0;
-  if (config.openingRange?.enabled) tieredMax += 2.0;
-
-  // ─── HTF Tier 1 Gate Enhancement (Nested Containment) ─────────────────────────────────
-  // ICT/SMC methodology: the A+ entry is a lower-timeframe OB/FVG that forms INSIDE
-  // a higher-timeframe institutional zone. The HTF zone is the "why" (smart money footprint),
-  // the LTF zone is the "when" (precise entry trigger).
-  //
-  // Logic: When an entry-TF factor IS present AND its zone is nested inside (overlaps with)
-  // a corresponding HTF zone, boost its quality to 95% and tag it as HTF-confirmed.
-  // HTF zones alone (without LTF confirmation) do NOT satisfy Tier 1.
-  //
-  // Fix 5: Skip HTF promotion entirely when entry-TF structure is ranging AND
-  // regime confidence is below 70%. In a low-conviction ranging environment,
-  // promoting HTF zones inflates the score and leads to bad entries.
-  const _skipHTFPromotion = structure.trend === "ranging" && (regimeInfo?.confidence ?? 0) < 0.70;
-  if (!_skipHTFPromotion) {
-    const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] | null = (config as any)._htfPOIs || null;
-    const htfFibDataForGate: { h4: FibLevels | null; h1: FibLevels | null } | null = (config as any)._htfFibLevels || null;
-    const atrForGate = calculateATR(sc, 14);
-    const fibToleranceGate = atrForGate * 0.3;
-
-    // Helper: check if two zones overlap (LTF zone is inside or partially inside HTF zone)
-    const zonesOverlap = (ltfLow: number, ltfHigh: number, htfLow: number, htfHigh: number): boolean => {
-      return ltfLow <= htfHigh && ltfHigh >= htfLow;
-    };
-
-    // Check FVG: if entry-TF FVG IS present AND nested inside an HTF FVG → boost quality
-    const fvgFactor = factors.find(f => f.name === "Fair Value Gap");
-    const fvgPresent = fvgFactor && fvgFactor.present && fvgFactor.weight > 0;
-    if (fvgPresent && htfPOIs) {
-      // Find the LTF FVG that price is inside (the one that scored)
-      const trendHintForHTF = direction === "long" ? "bullish" : direction === "short" ? "bearish" : null;
-      const scoringFVG = fvgs.find(f => {
-        if (f.state === "filled") return false;
-        if (trendHintForHTF && f.type !== trendHintForHTF) return false;
-        return lastPrice >= f.low && lastPrice <= f.high;
-      });
-      if (scoringFVG) {
-        const htfFVGContainer = htfPOIs.find(poi =>
-          poi.type === "fvg" && zonesOverlap(scoringFVG.low, scoringFVG.high, poi.low, poi.high)
-        );
-        if (htfFVGContainer) {
-          // Nested entry confirmed: LTF FVG inside HTF FVG
-          // Boost the existing Tier 1 score to 95% quality (from whatever it was)
-          const currentTierPts = TIER_POINTS[1] || 2.0;
-          const currentQuality = fvgFactor.weight / (FACTOR_MAX_WEIGHT["Fair Value Gap"] || 2.0);
-          const boostedQuality = Math.max(currentQuality, 0.95);
-          const qualityDelta = boostedQuality - currentQuality;
-          if (qualityDelta > 0) {
-            tieredScore += currentTierPts * qualityDelta;
-          }
-          const htfFvgDetail = `LTF FVG [${scoringFVG.low.toFixed(5)}-${scoringFVG.high.toFixed(5)}] nested inside HTF ${htfFVGContainer.timeframe} FVG [${htfFVGContainer.low.toFixed(5)}-${htfFVGContainer.high.toFixed(5)}]`;
-          const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
-          if (htfPoiFactor) {
-            htfPoiFactor.detail += ` [HTF-confirmed FVG: ${htfFvgDetail}]`;
-            (htfPoiFactor as any)._htfTier1FVG = true;
-          }
-          fvgFactor.detail += " | HTF-nested (A+ entry)";
-        }
-      }
-    }
-
-    // Check OB: if entry-TF OB IS present AND nested inside an HTF OB → boost quality
-    const obFactor = factors.find(f => f.name === "Order Block");
-    const obPresent = obFactor && obFactor.present && obFactor.weight > 0;
-    if (obPresent && htfPOIs) {
-      // Find the LTF OB that price is inside (the one that scored)
-      const scoringOB = orderBlocks.find(ob =>
-        ob.state !== "broken" && !ob.mitigated && lastPrice >= ob.low && lastPrice <= ob.high
-      );
-      if (scoringOB) {
-        const htfOBContainer = htfPOIs.find(poi =>
-          poi.type === "ob" && zonesOverlap(scoringOB.low, scoringOB.high, poi.low, poi.high)
-        );
-        if (htfOBContainer) {
-          // Nested entry confirmed: LTF OB inside HTF OB
-          const currentTierPts = TIER_POINTS[1] || 2.0;
-          const currentQuality = obFactor.weight / (FACTOR_MAX_WEIGHT["Order Block"] || 2.0);
-          const boostedQuality = Math.max(currentQuality, 0.95);
-          const qualityDelta = boostedQuality - currentQuality;
-          if (qualityDelta > 0) {
-            tieredScore += currentTierPts * qualityDelta;
-          }
-          const htfObDetail = `LTF OB [${scoringOB.low.toFixed(5)}-${scoringOB.high.toFixed(5)}] nested inside HTF ${htfOBContainer.timeframe} OB [${htfOBContainer.low.toFixed(5)}-${htfOBContainer.high.toFixed(5)}]`;
-          const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
-          if (htfPoiFactor) {
-            htfPoiFactor.detail += ` [HTF-confirmed OB: ${htfObDetail}]`;
-            (htfPoiFactor as any)._htfTier1OB = true;
-          }
-          obFactor.detail += " | HTF-nested (A+ entry)";
-        }
-      }
-    }
-
-    // Check Fib: if entry-TF Fib IS present AND near an HTF Fib → boost quality
-    const fibFactor = factors.find(f => f.name === "Premium/Discount & Fib");
-    const fibPresent = fibFactor && fibFactor.present && fibFactor.weight > 0;
-    if (fibPresent && htfFibDataForGate) {
-      // Check if the entry-TF Fib level aligns with an HTF Fib level
-      let htfFibConfirmed = false;
-      let htfFibDetail = "";
-      const checkFibNested = (fibs: FibLevels | null, tfLabel: string) => {
-        if (!fibs || !fibs.retracements || htfFibConfirmed) return;
-        for (const level of fibs.retracements) {
-          if (Math.abs(lastPrice - level.price) <= fibToleranceGate) {
-            if (level.ratio >= 0.382) {
-              htfFibConfirmed = true;
-              htfFibDetail = `Entry-TF Fib confirmed by HTF ${tfLabel} Fib ${level.label} at ${level.price.toFixed(5)}`;
-              break;
-            }
-          }
-        }
-      };
-      checkFibNested(htfFibDataForGate.h4, "4H");
-      if (!htfFibConfirmed) checkFibNested(htfFibDataForGate.h1, "1H");
-      if (htfFibConfirmed) {
-        // Boost Fib quality to 90% (slightly less than OB/FVG since Fib is a level not a zone)
-        const currentTierPts = TIER_POINTS[1] || 2.0;
-        const currentQuality = fibFactor.weight / (FACTOR_MAX_WEIGHT["Premium/Discount & Fib"] || 2.0);
-        const boostedQuality = Math.max(currentQuality, 0.90);
-        const qualityDelta = boostedQuality - currentQuality;
-        if (qualityDelta > 0) {
-          tieredScore += currentTierPts * qualityDelta;
-        }
-        const htfFibFactor = factors.find(f => f.name === "HTF Fib + PD + Liquidity");
-        if (htfFibFactor) {
-          htfFibFactor.detail += ` [HTF Fib confirmed: ${htfFibDetail}]`;
-          (htfFibFactor as any)._htfTier1Fib = true;
-        }
-        fibFactor.detail += " | HTF-nested (A+ entry)";
-      }
-    }
-  } // end of !_skipHTFPromotion
-
-  // Recalculate tieredMax after potential HTF Tier 1 additions
-  tieredMax = (tier1Max * 2) + (tier2Max * 1) + (tier3Max * 0.5);
-  const po3Possible2 = (config as any).enableStructureBreak !== false
-    && (config as any).useAMD !== false
-    && (config as any).enableLiquiditySweep !== false;
-  if (po3Possible2) tieredMax += 1.0;
-  if (config.openingRange?.enabled) tieredMax += 2.0;
-
-  // Recalculate score percentage after HTF Tier 1 adjustments
-  const rawScore = Math.round(tieredScore * 100) / 100;
-  const enabledMax = Math.round(tieredMax * 100) / 100;
-  if (tieredMax > 0) {
-    score = Math.round((tieredScore / tieredMax) * 1000) / 10;
-  } else {
-    score = 0;
-  }
-
-  // Tier 1 minimum gate: configurable minimum core factors (default 3)
-  // Raised from 2→3 to prevent low-quality entries that only have
-  // Market Structure + Premium/Discount (directional bias without
-  // an institutional entry trigger like OB or FVG).
-  const _minTier1 = typeof config.minTier1Factors === "number" ? Math.max(1, Math.min(config.minTier1Factors, 5)) : 3;
-  const tier1CountPassed = tier1Count >= _minTier1;
-  // Build display list: include Unicorn when it was promoted to Tier 1, and HTF-promoted slots
-  const tier1DisplayNames = ["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib", "Unicorn Model"];
-  const tier1PresentNames = tier1DisplayNames.filter(n => {
-    const f = factors.find(ff => ff.name === n);
-    return f && f.present && f.weight > 0 && (f as any).tier === 1;
-  });
-  // HTF-nested confirmations are listed SEPARATELY, not as Tier 1 members.
-  // They raise tieredScore via the quality delta, but they never reach
-  // tier1Count: that only increments for names in TIER_1_FACTORS, and both
-  // carriers ("HTF POI Alignment", "HTF Fib + PD + Liquidity") are Tier 2.
-  // The counting loop also runs before the promotion block sets these flags.
-  // Listing them alongside the counted factors made the passed message print
-  // more names than the count, and the failed message used to end with
-  // ", HTF FVG/OB/Fib" — advertising a route through the gate that does not
-  // exist. Anyone reading that reason to understand a rejection was misled.
-  const htfNestedNames: string[] = [];
-  const htfPoiF = factors.find(f => f.name === "HTF POI Alignment");
-  if (htfPoiF && (htfPoiF as any)._htfTier1FVG) htfNestedNames.push("FVG (HTF-nested)");
-  if (htfPoiF && (htfPoiF as any)._htfTier1OB) htfNestedNames.push("OB (HTF-nested)");
-  const htfFibF = factors.find(f => f.name === "HTF Fib + PD + Liquidity");
-  if (htfFibF && (htfFibF as any)._htfTier1Fib) htfNestedNames.push("Fib (HTF-nested)");
-  const htfNestedNote = htfNestedNames.length > 0
-    ? ` [HTF-nested quality boost, not counted: ${htfNestedNames.join(", ")}]`
-    : "";
-  const tier1Qualifiers = `Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${
-    factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""
-  }`;
-  // ── Positional requirement: tier1RequireAtPOI (default OFF) ──
-  //
-  // AT the point of interest, not merely NEAR the zone containing it.
-  //
-  // This reads as "require an OB or FVG to exist", and the impulse-zone hard
-  // gate ALREADY guarantees that — every zone it returns is typed "fvg" or
-  // "ob", and no zone means the pair is skipped outright. The Tier 1 OB/FVG
-  // factors ask a stricter question: the Order Block factor scores only when
-  // price is INSIDE the block, otherwise reporting "N OBs nearby ... — not at
-  // level".
-  //
-  // So the split below is positional. Measured over the 30 days to 2026-09-09,
-  // across 71 closed trades:
-  //
-  //   price inside the POI   20 trades   60.0% win   +12.40R   +$3,403.53
-  //   near the zone only     40 trades   35.0% win    -7.04R   -$2,832.13
-  //
-  // Break-even at 2:1 is 33.3%, so being at the level clears it and being near
-  // it does not. Of 40 losers, 31 cleared a threshold of 2 on the identical
-  // pair — Market Structure + Premium/Discount & Fib — i.e. a trend exists and
-  // price is somewhere in a discount, true most of the time on most
-  // instruments. This is the same 4:1 loose-versus-strict gap as the
-  // 2026-09-06 shadow data, where priceAtZone read true 124 times while price
-  // was genuinely inside a zone 30 times — now visible in P&L.
-  //
-  // The figures above are Era C only (from 2026-09-02 16:00). An earlier
-  // 30-day window pooled across that boundary, mixing 1:1 and 2:1 R:R, and
-  // reported a much weaker 45.5% against 32.7% at p ~ 0.31. Removing the
-  // contamination SHARPENED the split on a smaller sample: 12/20 against 14/40
-  // is z ~ 1.84, p ~ 0.066 on win rate and roughly 0.04 on average R. Still
-  // short of conventional significance at n=60, but a different quality of
-  // evidence than the pooled figure suggested. What is solid is that the MS+P/D-only
-  // bucket is 69% of all trading and is down $3,008. Enabling this would have
-  // blocked those 49 trades, so it changes the size of the book, not just its
-  // quality. Off until rejected_setups has graded refusals at this threshold.
-  //
-  // Unicorn Model is deliberately NOT counted here even when promoted to
-  // Tier 1: it was not part of the split above, so including it would widen
-  // the rule past what was measured.
-  //
-  // Impulse-zone credits need no special case. That block only ever credits
-  // Order Block or Fair Value Gap, and does so on zone membership rather than
-  // position — consistent, since the credited route was the best-performing of
-  // the three (7 trades, 57.1%, +$1,100.70).
-  const _requirePOI = (config as any).tier1RequireAtPOI === true;
-  const _hasPOI = ["Order Block", "Fair Value Gap"].some(n => {
-    const f = factors.find(ff => ff.name === n);
-    return !!f && f.present && f.weight > 0 && (f as any).tier === 1;
-  });
-  const tier1GatePassed = tier1CountPassed && (!_requirePOI || _hasPOI);
-  const tier1GateReason = tier1GatePassed
-    ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})${htfNestedNote}`
-    : !tier1CountPassed
-    ? `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least ${_minTier1} of: ${tier1Qualifiers}${htfNestedNote}`
-    : `Tier 1 gate FAILED: ${tier1Count} core factors (${tier1PresentNames.join(", ")}) but price is not inside an Order Block or Fair Value Gap — tier1RequireAtPOI requires price AT the POI, not merely near the zone${htfNestedNote}`;
-
-  // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
-  const strongFactorCount = tier1Count + tier2Count;
+  const opposingFactorCount = factors.filter((f) => {
+    const toggle = FACTOR_TOGGLE[f.name];
+    if (toggle && (config as any)[toggle] === false) return false;
+    return (f as any)._opposing === true && f.weight < 0;
+  }).length;
 
   // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
@@ -2998,7 +2364,6 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   const fotsiSummary = _fotsiAlignment ? ` | FOTSI: ${_fotsiAlignment.label}` : "";
   // Build gate summary for the scan output
   const gatesSummary = [
-    tier1GatePassed ? null : "TIER1_GATE_FAIL",
     regimeGatePassed ? null : "REGIME_GATE_FAIL",
     // Spread gate is info-only — never blocks
   ].filter(Boolean);
@@ -3008,12 +2373,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   const conflictStr = opposingFactorCount > 0 ? ` | ⚠ ${opposingFactorCount} opposing` : "";
 
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus, ${strongFactorCount} strong). ${groupSummaryParts.join(" | ")}${fotsiSummary}${conflictStr}${gatesStr}`
-    : `No signal: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus)${fotsiSummary}${conflictStr}${gatesStr}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${groupSummaryParts.join(" | ") || "no factors detected"}${fotsiSummary}${conflictStr}${gatesStr}`
+    : `No signal${groupSummaryParts.length ? `: ${groupSummaryParts.join(" | ")}` : ""}${fotsiSummary}${conflictStr}${gatesStr}`;
 
   return {
-    score, rawScore, normalizedScoring: true, enabledMax,
-    strongFactorCount, direction, bias, summary, factors,
+    direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     // Additive shadow diff. null unless the shadow secret is enabled; no
     // consumer reads it. `structure` remains the authoritative value.
@@ -3037,15 +2401,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     fibLevels,
     // Cached daily structure (computed once, reusable by gates)
     cachedDailyStructure,
-    // New tiered scoring metadata
-    tieredScoring: {
-      tier1Count, tier1Max, tier2Count, tier2Max, tier3Count, tier3Max,
-      tieredScore, tieredMax,
-      tier1GatePassed, tier1GateReason,
-      regimeGatePassed, regimeGateReason,
-      spreadGatePassed, spreadGateReason,
-      opposingFactorCount,
-    },
+    // Pass/fail gates computed here (regime blocks when it strongly opposes the
+    // direction; spread is info-only), and the opposing-factor count.
+    regimeGate: { passed: regimeGatePassed, reason: regimeGateReason },
+    spreadGate: { passed: spreadGatePassed, reason: spreadGateReason },
+    opposingFactorCount,
     // Game plan context (Layer 2 → Layer 3 passthrough)
     gamePlanContext: (config as any)._gamePlanContext || null,
   };

@@ -18,7 +18,7 @@
  *
  * This module checks whether a liquidity sweep occurred before the structure shift.
  *
- * Gate modes: "hard" | "soft" | "off"
+ * Gate modes: "hard" (blocks) | "off" (informational). There is no score to adjust.
  */
 
 import type { Candle } from "./smcAnalysis.ts";
@@ -26,17 +26,13 @@ import type { Candle } from "./smcAnalysis.ts";
 // ─── Configuration ────────────────────────────────────────────────────
 export interface JudasSwingConfig {
   enabled: boolean;
-  gateMode: "hard" | "soft" | "off";
+  gateMode: "hard" | "off";
   /** Max candles before the MSS to look for a sweep */
   sweepLookback: number;
   /** Minimum wick depth past the swing level to qualify as a sweep (ATR multiple) */
   minSweepDepthATR: number;
   /** The sweep candle must close back inside (wick through + close back = sweep, not BOS) */
   requireCloseBack: boolean;
-  /** Score penalty when no Judas swing found (soft mode) */
-  noSweepPenalty: number;
-  /** Score bonus when a clean Judas swing is confirmed */
-  sweepConfirmedBonus: number;
 }
 
 export const DEFAULT_JUDAS_SWING_CONFIG: JudasSwingConfig = {
@@ -45,8 +41,6 @@ export const DEFAULT_JUDAS_SWING_CONFIG: JudasSwingConfig = {
   sweepLookback: 10,
   minSweepDepthATR: 0.1,
   requireCloseBack: true,
-  noSweepPenalty: -1.5,
-  sweepConfirmedBonus: 1.0,
 };
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -62,7 +56,6 @@ export interface SweepCandidate {
 export interface JudasSwingResult {
   found: boolean;
   sweep: SweepCandidate | null;
-  scoreAdjustment: number;
   passed: boolean;
   reason: string;
 }
@@ -145,7 +138,6 @@ export function detectJudasSwing(
   const noSweep: JudasSwingResult = {
     found: false,
     sweep: null,
-    scoreAdjustment: 0,
     passed: true,
     reason: "",
   };
@@ -236,32 +228,20 @@ export function detectJudasSwing(
     }
   }
 
-  // Gate decision
+  // Gate decision. Only "hard" blocks; any other mode is informational.
   const found = bestSweep !== null;
   let passed = true;
-  let scoreAdjustment = 0;
-  let reason = "";
-
-  if (config.gateMode === "off") {
-    passed = true;
-    scoreAdjustment = 0;
+  let reason: string;
+  if (config.gateMode !== "hard") {
     reason = found
       ? `[OFF] Judas Swing confirmed: swept ${bestSweep!.sweptLevel.toFixed(5)} by ${bestSweep!.wickDepthATR.toFixed(2)}x ATR`
-      : `[OFF] No Judas Swing found before MSS — would have blocked/penalized`;
+      : `[OFF] No Judas Swing found before MSS`;
   } else if (!found) {
-    if (config.gateMode === "hard") {
-      passed = false;
-      reason = `Judas Swing BLOCKED: no liquidity sweep found before ${tradeDirection} MSS`;
-    } else {
-      passed = true;
-      scoreAdjustment = config.noSweepPenalty;
-      reason = `No Judas Swing: ${config.noSweepPenalty} penalty applied`;
-    }
+    passed = false;
+    reason = `Judas Swing BLOCKED: no liquidity sweep found before ${tradeDirection} MSS`;
   } else {
-    passed = true;
-    scoreAdjustment = config.sweepConfirmedBonus;
     reason = `Judas Swing confirmed: swept ${bestSweep!.sweptLevel.toFixed(5)} (${bestSweep!.wickDepthATR.toFixed(2)}x ATR depth, closed back: ${bestSweep!.closedBack})`;
   }
 
-  return { found, sweep: bestSweep, scoreAdjustment, passed, reason };
+  return { found, sweep: bestSweep, passed, reason };
 }

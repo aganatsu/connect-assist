@@ -834,7 +834,6 @@ function generatePostMortem(
   position: any, exitPrice: number, pnl: number, pnlPips: number, closeReason: string,
 ): any {
   const entryPrice = parseFloat(position.entry_price);
-  const signalScore = parseFloat(position.signal_score || "0");
   const signalReason = position.signal_reason || "";
   const openTime = position.open_time;
   const closedAt = new Date().toISOString();
@@ -876,11 +875,7 @@ function generatePostMortem(
     whatFailed = absentFactors.length > 0
       ? `Not all factors were present: missing ${absentFactors.join(", ")}`
       : "All factors aligned — textbook setup";
-    lessonLearned = signalScore >= 65
-      ? "High-confluence setup played out as expected. Continue targeting similar setups."
-      : signalScore >= 10
-      ? "Trade won despite moderate confluence. Consider if the setup was fortunate or skill-based."
-      : "Trade won — note: score may be in legacy 0-10 format if from an older scan.";
+    lessonLearned = "Setup played out as expected. Continue targeting similar setups.";
   } else if (outcome === "Loss") {
     whatWorked = presentFactors.length > 0
       ? `These factors were correctly identified: ${presentFactors.join(", ")}`
@@ -888,9 +883,7 @@ function generatePostMortem(
     whatFailed = closeReason === "sl_hit"
       ? "Stop loss was hit — market structure changed after entry or SL was too tight"
       : `Trade closed with loss: ${closeReason}`;
-    lessonLearned = signalScore < 55
-      ? `Confluence score was ${signalScore > 10 ? signalScore.toFixed(1) + "%" : signalScore.toFixed(1) + "/10"}. Consider raising minimum threshold to reduce weak signals.`
-      : "Setup had good confluence but market conditions shifted. Review if HTF bias was truly aligned.";
+    lessonLearned = "Market conditions shifted after entry. Review if HTF bias was truly aligned.";
   } else {
     whatWorked = "Trade reached breakeven — partial validation of the setup";
     whatFailed = "Insufficient momentum for follow-through to TP";
@@ -903,7 +896,6 @@ function generatePostMortem(
     pnlPips,
     holdDuration,
     exitReason: closeReason,
-    confluenceScore: signalScore,
     factorsPresent: presentFactors,
     factorsAbsent: absentFactors,
     whatWorked,
@@ -1327,7 +1319,7 @@ if (import.meta.main) Deno.serve(async (req) => {
                   pnl: partialPnl.toFixed(2), pnl_pips: partialPnlPips.toFixed(1),
                   open_time: pos.open_time, closed_at: new Date().toISOString(),
                   signal_reason: pos.signal_reason || "",
-                  signal_score: pos.signal_score, order_id: pos.order_id,
+                  order_id: pos.order_id,
                   stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
                 },
               });
@@ -1363,7 +1355,7 @@ if (import.meta.main) Deno.serve(async (req) => {
                 exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
                 open_time: pos.open_time, closed_at: new Date().toISOString(),
                 close_reason: closeReason, signal_reason: pos.signal_reason || "",
-                signal_score: pos.signal_score, order_id: pos.order_id,
+                order_id: pos.order_id,
                 stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
               },
             });
@@ -1431,8 +1423,7 @@ if (import.meta.main) Deno.serve(async (req) => {
           pnl: calcPnl(p.direction, parseFloat(p.entry_price), parseFloat(p.current_price), parseFloat(p.size), p.symbol).pnl,
           stopLoss: p.stop_loss ? parseFloat(p.stop_loss) : null,
           takeProfit: p.take_profit ? parseFloat(p.take_profit) : null,
-          openTime: p.open_time, signalReason: p.signal_reason || "",
-          signalScore: parseFloat(p.signal_score || "0"), orderId: p.order_id,
+          openTime: p.open_time, signalReason: p.signal_reason || "", orderId: p.order_id,
           botId: p.bot_id || "smc",
           // Per-trade management overrides. Omitted until 2026-09-08, which
           // meant the UI could not see settings the user had saved: the BE
@@ -1451,7 +1442,7 @@ if (import.meta.main) Deno.serve(async (req) => {
         exitPrice: parseFloat(t.exit_price), pnl: parseFloat(t.pnl),
         pnlPips: parseFloat(t.pnl_pips), openTime: t.open_time,
         closedAt: t.closed_at, closeReason: t.close_reason,
-        signalReason: t.signal_reason || "", signalScore: parseFloat(t.signal_score || "0"),
+        signalReason: t.signal_reason || "",
         orderId: t.order_id,
         botId: t.bot_id || "smc",
         stopLoss: t.stop_loss ? parseFloat(t.stop_loss) : null,
@@ -1520,7 +1511,7 @@ if (import.meta.main) Deno.serve(async (req) => {
 
     // ── Place order ──
     if (action === "place_order") {
-      const { symbol, direction, size, stopLoss, takeProfit, signalReason, signalScore } = payload;
+      const { symbol, direction, size, stopLoss, takeProfit, signalReason } = payload;
       const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
       if (!account) {
         await supabase.from("paper_accounts").insert({ user_id: user.id, balance: "10000", peak_balance: "10000", daily_pnl_base: "10000" });
@@ -1593,7 +1584,7 @@ if (import.meta.main) Deno.serve(async (req) => {
         frozen_strategy_context: manualFrozenDecision,
         entry_price: entryPrice.toString(), current_price: entryPrice.toString(),
         stop_loss: adjustedSL?.toString() || null, take_profit: adjustedTP?.toString() || null,
-        open_time: now, signal_reason: signalReason || "", signal_score: (signalScore || 0).toString(),
+        open_time: now, signal_reason: signalReason || "",
         order_id: orderId, position_status: "open",
       });
       // Real exposure is server-only (migration 20261009030000) and the entries lock refuses
@@ -1731,7 +1722,7 @@ if (import.meta.main) Deno.serve(async (req) => {
           exit_price: ep.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toString(),
           open_time: pos.open_time, closed_at: new Date().toISOString(),
           close_reason: closeReason, signal_reason: pos.signal_reason || "",
-          signal_score: pos.signal_score, order_id: pos.order_id,
+          order_id: pos.order_id,
           stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
         },
       });
@@ -1803,7 +1794,7 @@ if (import.meta.main) Deno.serve(async (req) => {
                 exit_price: ep.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toString(),
                 open_time: pos.open_time, closed_at: new Date().toISOString(),
                 close_reason: "kill_switch", signal_reason: pos.signal_reason || "",
-                signal_score: pos.signal_score, order_id: pos.order_id,
+                order_id: pos.order_id,
                 stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
               },
             });

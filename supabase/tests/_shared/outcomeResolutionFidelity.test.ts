@@ -91,13 +91,12 @@ Deno.test("rejections record the premium/discount reading on every timeframe", (
   }
 });
 
-Deno.test("both rejection paths persist the snapshot", () => {
-  // Two call sites: gate_blocked, and below_threshold_strong_t1. The second is
-  // the control group — rejected on score rather than by the P/D gate — so it
-  // is only useful for comparison if it carries the same fields.
+Deno.test("the gate-blocked rejection path persists the snapshot", () => {
+  // One call site: gate_blocked. (The below-threshold path went with the
+  // confluence score.)
   const calls = scanner.match(/rawDetail:\s*buildPdSnapshot\(/g) ?? [];
   assert(
-    calls.length === 2,
-    `expected both logRejectedSetup call sites to pass rawDetail, found ${calls.length}`,
+    calls.length === 1,
+    `expected the logRejectedSetup call site to pass rawDetail, found ${calls.length}`,
   );
 });

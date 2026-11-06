@@ -13,8 +13,6 @@ import { getQuoteToUSDRate, SPECS } from "./smcAnalysis.ts";
 export type GateMode = "gate" | "log";
 
 export interface SimplificationSwitches {
-  /** SMC confluence score threshold: decision gate + Gate 9. */
-  scoreGateMode: GateMode;
   /** Gate 3b reaction confirmation. */
   reactionGateMode: GateMode;
   /** Gate 10 R:R on the confluence engine's pre-override SL/TP ("legacy"), or the
@@ -54,7 +52,6 @@ export interface SimplificationSwitches {
 }
 
 export const LEGACY_SWITCHES: SimplificationSwitches = {
-  scoreGateMode: "gate",
   reactionGateMode: "gate",
   rrGateMode: "legacy",
   orderRRMin: 1.0,
@@ -77,7 +74,6 @@ export function resolveSimplification(raw: Record<string, unknown> | null | unde
   const s = (raw?.simplification ?? {}) as Record<string, unknown>;
   const rrMin = typeof s.orderRRMin === "number" && Number.isFinite(s.orderRRMin) && s.orderRRMin > 0 ? s.orderRRMin : LEGACY_SWITCHES.orderRRMin;
   return {
-    scoreGateMode: mode(s.scoreGateMode, LEGACY_SWITCHES.scoreGateMode),
     reactionGateMode: mode(s.reactionGateMode, LEGACY_SWITCHES.reactionGateMode),
     rrGateMode: s.rrGateMode === "order_geometry" ? "order_geometry" : "legacy",
     orderRRMin: rrMin,
@@ -103,7 +99,7 @@ export function effectiveRiskPercent(sw: SimplificationSwitches, legacyRiskPerTr
   return sw.sizingMode === "fill_time" ? sw.riskPercent : legacyRiskPerTrade;
 }
 
-export type GateId = "reaction" | "score" | "rr_legacy" | "news_event" | "news_alignment";
+export type GateId = "reaction" | "rr_legacy" | "news_event" | "news_alignment";
 
 /**
  * Every safety gate's key (gateKey, or gateId for the five gates that had one before step 4a), classified (Impulse-on-V3 step 4, owner decisions D1 = a / S1 / D2, 2026-10-26/27).
@@ -114,8 +110,8 @@ export type GateId = "reaction" | "score" | "rr_legacy" | "news_event" | "news_a
  */
 export const GATE_CLASS = {
   direction_verdict: "strategy", htf_bias: "strategy", premium_discount: "strategy", conviction: "strategy", reaction: "strategy",
-  score: "strategy", smt: "strategy", rr_legacy: "strategy", opening_range: "strategy", kill_zone: "strategy", news_event: "strategy",
-  news_alignment: "strategy", fotsi: "strategy", atr_range: "strategy", tier1: "strategy", regime: "strategy", game_plan: "strategy",
+  smt: "strategy", rr_legacy: "strategy", opening_range: "strategy", kill_zone: "strategy", news_event: "strategy",
+  news_alignment: "strategy", fotsi: "strategy", atr_range: "strategy", regime: "strategy", game_plan: "strategy",
   spread_info: "strategy",
   instrument_enabled: "risk", max_positions: "risk", per_symbol: "risk", portfolio_heat: "risk", daily_loss: "risk", drawdown: "risk",
   cooldown: "risk", consecutive_losses: "risk", daily_dollar_loss: "risk", correlation: "risk",
@@ -123,6 +119,11 @@ export const GATE_CLASS = {
 export type AnyGateId = keyof typeof GATE_CLASS;
 /** Gate keys that only record (never block) when the V3 structure owns the trade. Read via gateKey ?? gateId. */
 export const gateKeyOf = (g: { gateKey?: string; gateId?: string }) => g.gateKey ?? g.gateId ?? null;
+/**
+ * Gate modes that used to offer "soft" (a confluence-score adjustment). The score was removed, so a stored
+ * "soft" — or anything that is not "hard" — reads as "off": informational, never blocking.
+ */
+export const hardOrOff = (mode: unknown): "hard" | "off" => (mode === "hard" ? "hard" : "off");
 export const V3_LOGGED_ONLY_GATE_IDS: ReadonlySet<string> = new Set(Object.entries(GATE_CLASS).filter(([, c]) => c === "strategy").map(([id]) => id));
 export interface GateResult { passed: boolean; reason: string; gateId?: GateId; gateKey?: string; loggedOnly?: boolean; wouldBlock?: boolean }
 
@@ -130,7 +131,6 @@ export interface GateResult { passed: boolean; reason: string; gateId?: GateId; 
 export function loggedOnlyGateIds(sw: SimplificationSwitches): Set<GateId> {
   const ids = new Set<GateId>();
   if (sw.reactionGateMode === "log") ids.add("reaction");
-  if (sw.scoreGateMode === "log") ids.add("score");
   if (sw.rrGateMode === "order_geometry") ids.add("rr_legacy");
   if (sw.newsGateMode === "log") { ids.add("news_event"); ids.add("news_alignment"); }
   return ids;

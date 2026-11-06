@@ -444,11 +444,6 @@ export default function Chart() {
                       <span className="flex items-center gap-2">
                         <Radio className="h-3.5 w-3.5 text-primary" />
                         Bot Scan (live)
-                        {botScanSignal?.signal?.score != null && (
-                          <span className={`font-mono font-bold ml-auto ${Number(botScanSignal.signal.score) > 10 ? (Number(botScanSignal.signal.score) >= 60 ? 'text-success' : Number(botScanSignal.signal.score) >= 40 ? 'text-warning' : 'text-muted-foreground') : (botScanSignal.signal.score >= 6 ? 'text-success' : botScanSignal.signal.score >= 4 ? 'text-warning' : 'text-muted-foreground')}`}>
-                            {Number(botScanSignal.signal.score) > 10 ? `${Number(botScanSignal.signal.score).toFixed(1)}%` : `${Number(botScanSignal.signal.score).toFixed(1)}/10`}
-                          </span>
-                        )}
                       </span>
                     </AccordionTrigger>
                     <AccordionContent className="px-3 pb-2">

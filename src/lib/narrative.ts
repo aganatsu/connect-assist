@@ -9,34 +9,18 @@
 
 interface FactorInfo {
   name: string;
-  weight: number;
-  tier?: string;
-}
-
-interface WatchlistNarrativeInput {
-  symbol: string;
-  direction: "long" | "short";
-  current_score: number;
-  watch_threshold: number;
-  current_factors: FactorInfo[];
-  missing_factors: FactorInfo[];
-  tier1_count: number;
-  tier2_count: number;
-  setup_type: string | null;
-  analysis_snapshot?: any;
+  present?: boolean;
+  weight?: number;
 }
 
 interface DetailNarrativeInput {
   pair: string;
   direction: string;
-  score: number;
   status: string;
   factors?: FactorInfo[];
-  tieredScoring?: { tier1: any; tier2: any; tier3: any };
   regimeData?: { daily?: { regime?: string; bias?: string }; h4?: { regime?: string; bias?: string } };
   rejectionReasons?: string[];
   gates?: Array<{ passed: boolean; reason: string }>;
-  staging?: { action?: string; cycles?: number; initialScore?: number };
   limitOrder?: { entry_price?: number; zone_type?: string };
 }
 
@@ -48,19 +32,14 @@ interface PendingOrderNarrativeInput {
   entry_zone_type: string;
   order_type: "limit_ob" | "limit_fvg";
   expires_at: string;
-  signal_score: number;
   setup_type: string | null;
-  from_watchlist: boolean;
 }
 
 interface TradeEntryNarrativeInput {
   pair: string;
   direction: string;
-  score: number;
   factors?: FactorInfo[];
-  tieredScoring?: { tier1: any; tier2: any; tier3: any };
   regimeData?: { daily?: { regime?: string; bias?: string }; h4?: { regime?: string; bias?: string } };
-  staging?: { action?: string; cycles?: number; initialScore?: number };
   limitOrder?: { entry_price?: number; zone_type?: string };
 }
 
@@ -95,15 +74,8 @@ function regimeLabel(regimeData: any): string {
   return regime.replace(/_/g, " ") || "unknown";
 }
 
-function topFactorNames(factors: FactorInfo[], limit = 3): string {
-  if (!factors || factors.length === 0) return "";
-  const sorted = [...factors].sort((a, b) => (b.weight || 0) - (a.weight || 0));
-  return sorted.slice(0, limit).map(f => f.name).join(" + ");
-}
-
-function missingTier1Names(missing: FactorInfo[]): string[] {
-  return missing.filter(f => f.tier === "T1").map(f => f.name);
-}
+/** Present per the recorded flag; rows written before it existed fall back to a positive weight. */
+const isPresent = (f: FactorInfo) => (typeof f.present === "boolean" ? f.present : (f.weight || 0) > 0);
 
 function minutesRemaining(expiresAt: string): number {
   return Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 60_000));
@@ -112,61 +84,28 @@ function minutesRemaining(expiresAt: string): number {
 // ── Public Generators ──
 
 /**
- * Watchlist card narrative — describes the thesis and what's needed to trigger.
- * Example: "SHORT setup in 4H premium. Score 58.7% → needs OB or FVG at level to trigger."
- */
-export function generateWatchlistNarrative(input: WatchlistNarrativeInput): string {
-  const { direction, current_score, current_factors, missing_factors, tier1_count, setup_type } = input;
-
-  // Build thesis part
-  const dir = dirLabel(direction);
-  const setupDesc = setup_type ? `${setup_type} ` : "";
-  const topFactors = topFactorNames(current_factors, 2);
-
-  let thesis = `${dir} ${setupDesc}setup`;
-  if (topFactors) thesis += ` — ${topFactors}`;
-  thesis += `. Score ${current_score.toFixed(1)}%`;
-
-  // Build "needs" part
-  const missingT1 = missingTier1Names(missing_factors);
-  if (missingT1.length > 0) {
-    thesis += ` → needs ${missingT1.slice(0, 2).join(" or ")} to trigger.`;
-  } else if (missing_factors.length > 0) {
-    const topMissing = missing_factors.slice(0, 2).map(f => f.name).join(" or ");
-    thesis += ` → needs ${topMissing} to strengthen.`;
-  } else {
-    thesis += ` → approaching trigger threshold.`;
-  }
-
-  return thesis;
-}
-
-/**
  * Detail breakdown header narrative — describes the overall thesis for the scan result.
  * Example: "Bearish continuation — 2 BOS confirmed, price in premium, waiting for entry zone."
  */
 export function generateDetailNarrative(input: DetailNarrativeInput): string {
-  const { direction, score, status, factors, regimeData, rejectionReasons, gates } = input;
+  const { direction, status, factors, regimeData, rejectionReasons, gates } = input;
 
-  // Determine if it's a trade, watchlist, or rejection
-  const isTraded = status === "trade_placed" || status === "trade_placed_from_watchlist";
-  const isLimit = status === "limit_order_placed" || status === "limit_order_from_watchlist" || status === "zone_setup_active" || status === "zone_setup_from_watchlist";
+  // Determine if it's a trade, a zone setup, or a rejection
+  const isTraded = status === "trade_placed";
+  const isLimit = status === "limit_order_placed" || status === "zone_setup_active";
   const isRejected = status === "rejected";
-  const isSkipped = status === "below_threshold";
 
   const dir = dirLabel(direction);
   const zone = zoneDescription(regimeData, direction);
   const regime = regimeLabel(regimeData);
 
-  // Count key structure factors
-  const factorNames = (factors || []).filter(f => (f.weight || 0) > 0).map(f => f.name);
+  // Key structure factors
+  const factorNames = (factors || []).filter(isPresent).map(f => f.name);
   const hasMS = factorNames.includes("Market Structure");
   const hasOB = factorNames.includes("Order Block");
   const hasFVG = factorNames.includes("Fair Value Gap");
-  const hasPD = factorNames.includes("Premium/Discount & Fib");
   const hasSweep = factorNames.includes("Liquidity Sweep");
 
-  // Build narrative
   let narrative = "";
 
   if (isTraded) {
@@ -178,12 +117,12 @@ export function generateDetailNarrative(input: DetailNarrativeInput): string {
     if (hasFVG) confluences.push("FVG confluence");
     if (hasSweep) confluences.push("liquidity swept");
     if (confluences.length > 0) narrative += `: ${confluences.join(", ")}`;
-    narrative += `. Score ${score.toFixed(1)}%.`;
+    narrative += ".";
   } else if (isLimit) {
     const zoneType = input.limitOrder?.zone_type || "OB/FVG";
     narrative = `${dir} zone setup at ${zoneType}`;
     if (zone) narrative += ` ${zone}`;
-    narrative += `. Watching for retrace → 5m CHoCH confirmation. Score ${score.toFixed(1)}%.`;
+    narrative += ". Watching for retrace → 5m CHoCH confirmation.";
   } else if (isRejected) {
     const failedGates = (gates || []).filter(g => !g.passed);
     if (failedGates.length > 0) {
@@ -191,22 +130,14 @@ export function generateDetailNarrative(input: DetailNarrativeInput): string {
     } else if (rejectionReasons && rejectionReasons.length > 0) {
       narrative = `${dir} rejected — ${rejectionReasons[0]}.`;
     } else {
-      narrative = `${dir} setup rejected at ${score.toFixed(1)}%.`;
-    }
-  } else if (isSkipped) {
-    const missingFactors = (factors || []).filter(f => (f.weight || 0) <= 0);
-    const missingT1 = missingFactors.filter(f => f.tier === "T1");
-    if (missingT1.length > 0) {
-      narrative = `${dir} below threshold — missing ${missingT1.slice(0, 2).map(f => f.name).join(", ")}. Score ${score.toFixed(1)}%.`;
-    } else {
-      narrative = `${dir} below threshold (${score.toFixed(1)}%). ${regime !== "unknown" ? `Market is ${regime}.` : ""}`;
+      narrative = `${dir} setup rejected.`;
     }
   } else {
     // Generic / watching
     narrative = `${dir} setup`;
     if (zone) narrative += ` ${zone}`;
     if (regime !== "unknown") narrative += `, market ${regime}`;
-    narrative += `. Score ${score.toFixed(1)}%.`;
+    narrative += ".";
   }
 
   return narrative;
@@ -217,7 +148,7 @@ export function generateDetailNarrative(input: DetailNarrativeInput): string {
  * Example: "Watching for price to reach OB zone at 157.82 → will hunt 5m CHoCH. Expires in 45 min."
  */
 export function generatePendingOrderNarrative(input: PendingOrderNarrativeInput): string {
-  const { direction, entry_price, entry_zone_type, order_type, expires_at, from_watchlist, signal_score } = input;
+  const { direction, entry_price, entry_zone_type, order_type, expires_at } = input;
 
   const dir = dirLabel(direction);
   const zoneLabel = order_type === "limit_ob" ? "Order Block" : "FVG";
@@ -238,10 +169,6 @@ export function generatePendingOrderNarrative(input: PendingOrderNarrativeInput)
     narrative += `. Zone watch expired.`;
   }
 
-  if (from_watchlist) {
-    narrative += ` (promoted from watchlist)`;
-  }
-
   return narrative;
 }
 
@@ -250,48 +177,34 @@ export function generatePendingOrderNarrative(input: PendingOrderNarrativeInput)
  * Example: "Entered SHORT: 4H premium + 1H bearish CHoCH + OB at level + FVG confluence."
  */
 export function generateTradeEntryNarrative(input: TradeEntryNarrativeInput): string {
-  const { pair, direction, score, factors, regimeData, staging, limitOrder } = input;
+  const { direction, factors, regimeData } = input;
 
   const dir = dirLabel(direction);
   const zone = zoneDescription(regimeData, direction);
 
-  // Build list of key confluences
+  // Key confluences, structure first
   const confluences: string[] = [];
   if (zone) confluences.push(zone);
 
-  const factorNames = (factors || []).filter(f => (f.weight || 0) > 0);
-  const tier1Present = factorNames.filter(f => f.tier === "T1");
-  const tier2Present = factorNames.filter(f => f.tier === "T2");
-
-  // Add T1 factors by name
-  for (const f of tier1Present) {
-    if (f.name === "Market Structure") confluences.push("structure confirmed");
-    else if (f.name === "Order Block") confluences.push("OB at level");
-    else if (f.name === "Fair Value Gap") confluences.push("FVG confluence");
-    else if (f.name === "Premium/Discount & Fib") confluences.push("Fib/PD zone");
-  }
-
-  // Add notable T2 factors
-  for (const f of tier2Present.slice(0, 2)) {
-    if (f.name === "Liquidity Sweep") confluences.push("liquidity swept");
-    else if (f.name === "Displacement") confluences.push("displacement");
-    else if (f.name === "Reversal Candle") confluences.push("reversal candle");
-    else if (f.name === "HTF POI Alignment") confluences.push("HTF alignment");
-    else if (f.name === "HTF Fib + PD + Liquidity") confluences.push("HTF Fib+PD");
-    else if (f.name === "Confluence Stack") confluences.push("stacked confluence");
-    else confluences.push(f.name.toLowerCase());
-  }
+  const present = new Set((factors || []).filter(isPresent).map(f => f.name));
+  const LABELS: [string, string][] = [
+    ["Market Structure", "structure confirmed"],
+    ["Order Block", "OB at level"],
+    ["Fair Value Gap", "FVG confluence"],
+    ["Premium/Discount & Fib", "Fib/PD zone"],
+    ["Liquidity Sweep", "liquidity swept"],
+    ["Displacement", "displacement"],
+    ["Reversal Candle", "reversal candle"],
+    ["HTF POI Alignment", "HTF alignment"],
+    ["HTF Fib + PD + Liquidity", "HTF Fib+PD"],
+  ];
+  for (const [name, label] of LABELS) if (present.has(name)) confluences.push(label);
 
   let narrative = `Entered ${dir}`;
   if (confluences.length > 0) {
     narrative += `: ${confluences.join(" + ")}`;
   }
-  narrative += `.`;
-
-  // Add watchlist promotion context
-  if (staging?.action === "promoted_and_traded" && staging.cycles) {
-    narrative += ` Watched ${staging.cycles} cycle${staging.cycles !== 1 ? "s" : ""}.`;
-  }
+  narrative += ".";
 
   return narrative;
 }

@@ -223,7 +223,7 @@ function makeDeps(db: any): ResetDeps {
           symbol: full.symbol, direction: full.direction, size: full.size, entry_price: full.entry_price,
           exit_price: exitPrice, pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
           open_time: full.open_time, closed_at: new Date().toISOString(), close_reason: "account_reset_flatten",
-          signal_reason: full.signal_reason || "", signal_score: full.signal_score || "0", order_id: full.order_id || "",
+          signal_reason: full.signal_reason || "", order_id: full.order_id || "",
           stop_loss: full.stop_loss, take_profit: full.take_profit,
         },
       });

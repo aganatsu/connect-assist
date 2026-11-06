@@ -1,8 +1,8 @@
 /**
  * rejectedSetupLogger.ts — Rejected Setup Logging
  * ────────────────────────────────────────────────
- * Logs setups that passed confluence threshold but were blocked by gates,
- * plus below-threshold setups with strong Tier 1 factors (≥2 T1 present).
+ * Logs setups that a gate blocked, so outcome-tracker can grade what the gate
+ * refused.
  *
  * Non-fatal: all operations are wrapped in try/catch. A logging failure
  * must never prevent the scanner from continuing.
@@ -12,7 +12,7 @@
 
 // ── Public types ──
 
-export type RejectionType = "gate_blocked" | "below_threshold_strong_t1";
+export type RejectionType = "gate_blocked";
 
 export interface RejectedSetupParams {
   /** Supabase client instance */
@@ -29,12 +29,6 @@ export interface RejectedSetupParams {
   rejectionType: RejectionType;
   /** Gate reasons that blocked (for gate_blocked type) */
   failedGates?: string[];
-  /** Confluence score achieved */
-  confluenceScore: number;
-  /** Number of Tier 1 factors present */
-  tier1Count: number;
-  /** Names of present Tier 1 factors */
-  tier1Factors?: string[];
   /** Entry price (zone level or last price) */
   entryPrice: number;
   /** Stop loss level */
@@ -79,9 +73,6 @@ export async function logRejectedSetup(params: RejectedSetupParams): Promise<boo
       direction,
       rejectionType,
       failedGates,
-      confluenceScore,
-      tier1Count,
-      tier1Factors,
       entryPrice,
       stopLoss,
       takeProfit,
@@ -103,9 +94,7 @@ export async function logRejectedSetup(params: RejectedSetupParams): Promise<boo
       direction,
       rejection_type: rejectionType,
       failed_gates: failedGates ?? [],
-      confluence_score: confluenceScore,
-      tier1_count: tier1Count,
-      tier1_factors: tier1Factors ?? [],
+      confluence_score: 0, // placeholder: NOT NULL legacy column — the confluence score no longer exists,
       entry_price: entryPrice,
       price_at_rejection: priceAtRejection ?? entryPrice,
       outcome_status: "pending",
@@ -135,12 +124,4 @@ export async function logRejectedSetup(params: RejectedSetupParams): Promise<boo
     console.warn(`[rejected-setup-logger] Unexpected error: ${(e as Error)?.message}`);
     return false;
   }
-}
-
-/**
- * Determine if a below-threshold setup should be logged.
- * Criteria: ≥2 Tier 1 factors present.
- */
-export function shouldLogBelowThreshold(tier1Count: number): boolean {
-  return tier1Count >= 2;
 }

@@ -22,8 +22,6 @@ export interface ResolvedRejection {
   symbol: string;
   direction: string;
   failed_gates: string[] | null;
-  confluence_score: number;
-  tier1_count: number;
   outcome_status: string; // "would_have_won" | "would_have_lost"
   mfe_pips: number | null;
   mae_pips: number | null;

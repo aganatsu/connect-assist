@@ -58,13 +58,6 @@ export default function TradeReplay() {
     refetchInterval: 15000,
   });
 
-  /* ─── Fetch staged setups ─── */
-  const { data: stagedSetups } = useQuery({
-    queryKey: ["staged-setups-replay"],
-    queryFn: () => scannerApi.activeStaged(),
-    refetchInterval: 30000,
-  });
-
   /* ─── Fetch scan logs for analysis snapshots ─── */
   const { data: scanLogs } = useQuery({
     queryKey: ["scan-logs-replay"],
@@ -120,30 +113,8 @@ export default function TradeReplay() {
       }
     }
 
-    // Staged setups
-    const staged = Array.isArray(stagedSetups) ? stagedSetups : [];
-    if (staged.length > 0) {
-      for (const s of staged) {
-        const snapshot = s.analysis_snapshot as any;
-        items.push({
-          position_id: s.id || `staged-${s.symbol}`,
-          symbol: s.symbol,
-          direction: s.direction?.toUpperCase() === "LONG" || s.direction?.toUpperCase() === "BUY" ? "BUY" : "SELL",
-          entry_price: Number(s.entry_price) || 0,
-          stop_loss: s.sl_level != null ? Number(s.sl_level) : null,
-          take_profit: s.tp_level != null ? Number(s.tp_level) : null,
-          status: "staged",
-          opened_at: s.staged_at || s.created_at,
-          signal_reason: {
-            score: Number(s.current_score ?? s.initial_score ?? 0),
-            summary: snapshot?.summary || s.promotion_reason || "",
-          },
-        });
-      }
-    }
-
     return items;
-  }, [status, stagedSetups]);
+  }, [status]);
 
   /* ─── Selected trade ─── */
   const selectedTrade = useMemo(

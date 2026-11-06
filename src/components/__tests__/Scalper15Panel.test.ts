@@ -17,13 +17,13 @@ describe("Scalper15 panel", () => {
     expect(scalper15Headline("paused", {}, undefined, undefined)).toBe("no decision recorded");
   });
 
-  it("the scan detail renders it whenever the row carries Scalper15 data, above the tier score", () => {
+  it("the scan detail renders it whenever the row carries Scalper15 data, above the factor list", () => {
     const view = read("..", "..", "pages", "BotView.tsx");
     const start = view.indexOf("function ScanDetailInline");
     const body = view.slice(start);
     const panel = body.indexOf("{d.scalper15 && <Scalper15Panel status={d.status} s={d.scalper15} skipReason={d.skipReason} reason={d.reason} />}");
     expect(panel).toBeGreaterThan(-1);
-    expect(panel).toBeLessThan(body.indexOf("<TierScoreSummary"));
+    expect(panel).toBeLessThan(body.indexOf("<FactorBreakdown"));
     expect(view).toContain("scalper15_order_placed: 2,");
   });
 

@@ -13,7 +13,7 @@
  *   Unified supplied the entry AND Unified modifiers are on                  → unified
  *   legacy OB/FVG entry (computeLimitEntryPrice)                             → ob_fvg
  * With modifiers off, Unified can only appear as a contributor, detected_only.
- * The SMC score is evidence (log-only gate), never the primary engine.
+ * There is no confluence score; the detected factors are recorded as evidence.
  */
 import type { Route2EntrySource } from "./route2Forward.ts";
 
@@ -54,7 +54,6 @@ const GATE_PATTERNS: [RegExp, string][] = [
   [/^Daily net P&L/, "daily_dollar_loss"],
   [/FOTSI/, "fotsi"],
   [/[Hh]edge conflict|correlat/i, "correlation"],
-  [/^Tier 1/, "tier1"],
   [/^Regime/, "regime"],
   [/^\[Info\] Spread|^Spread/, "spread"],
   [/SMT/, "smt"],
@@ -106,7 +105,6 @@ export interface AttributionInput {
   caps: { mode: string; maxOpenPositions: number; maxPerSymbol: number };
   impulseSlCapMultiplier?: number | null;
   riskProfileVersion?: string | null;
-  promotedFromWatchlist?: { stagedSetupId: string | null; initialScore: number | null; cycles: number | null } | null;
   entrySource: Route2EntrySource;
   izGateMode: string;
   gamePlanEnabled: boolean;
@@ -116,10 +114,7 @@ export interface AttributionInput {
   obFvgZone?: Record<string, any> | null;
   unifiedDetected?: unknown;
   unifiedComparison?: unknown;
-  gateScore: number | null;
-  decisionScoreGate?: { mode?: string; score?: number; threshold?: number; wouldBlock?: boolean } | null;
-  factors?: { name: string; present: boolean; weight: number; tier?: number; group?: string }[] | null;
-  tieredScoring?: Record<string, any> | null;
+  factors?: { name: string; present: boolean; group?: string }[] | null;
   gates: GateLike[];
   ictFvgGate?: Record<string, any> | null;
   orderRR?: { rawRR?: number; effectiveRR?: number; costInPrice?: number; wouldBlock?: boolean; min?: number; mode?: string } | null;
@@ -151,9 +146,8 @@ export function buildAttribution(i: AttributionInput): Record<string, unknown> {
     tp_pips: i.tpSmallGate.tpPips, min_tp_pips: i.tpSmallGate.minTpPips, basis: i.tpSmallGate.basis,
   });
   if (i.riskGate) gates.push({ gate_id: "risk_profile", mode: "gate", passed: i.riskGate.enabled ? !!i.riskGate.allowed : true, would_block: i.riskGate.enabled ? !i.riskGate.allowed : false, reason: String(i.riskGate.reason ?? (i.riskGate.enabled ? "" : "no active risk profile")).slice(0, 300) });
-  const scoreGateBlocks = !!i.decisionScoreGate?.wouldBlock;
   const ictBlocks = !!i.ictFvgGate?.wouldBlock;
-  const legacyWouldAdmit = i.loggedOnlyWouldBlock.length === 0 && !scoreGateBlocks && !ictBlocks;
+  const legacyWouldAdmit = i.loggedOnlyWouldBlock.length === 0 && !ictBlocks;
 
   const mgmtOff = !i.management.breakEvenEnabled && !i.management.trailingStopEnabled && !i.management.partialTPEnabled && !i.management.maxHoldEnabled;
   const stopSource = i.route2Stop?.anchor === "limit" && i.route2Stop.limit?.source ? i.route2Stop.limit.source : "market_chain";
@@ -161,14 +155,12 @@ export function buildAttribution(i: AttributionInput): Record<string, unknown> {
   const intendedPct = num(i.plannedSizing?.riskPercentTarget) ?? (i.switches.sizingMode === "fill_time" ? i.switches.riskPercent : i.legacyRiskPercent);
 
   const contributors: { engine: string; role: string; value: unknown }[] = [
-    { engine: "smc_score", role: "scoring", value: { gate_score: i.gateScore, decision_gate: i.decisionScoreGate ?? null } },
     { engine: "direction_verdict", role: "gate", value: i.directionVerdict ? { verdict: i.directionVerdict.verdict, confidence: i.directionVerdict.confidence, agreement: i.directionVerdict.agreement } : null },
     { engine: "game_plan", role: "context", value: { alignment: gpAlign, bias: i.gamePlanContext?.bias ?? null } },
     { engine: "unified", role: "detected_only", value: i.unifiedDetected ?? null },
     { engine: "stop", role: "stop_source", value: stopSource },
   ];
   if (pe !== "impulse_zone" && i.impulse?.hasZone) contributors.push({ engine: "impulse_zone", role: "gate", value: { selectedTF: i.impulse.selectedTF ?? null } });
-  if (i.promotedFromWatchlist) contributors.push({ engine: "watchlist", role: "origin", value: i.promotedFromWatchlist });
 
   return {
     signal_id: i.signalId,
@@ -195,7 +187,7 @@ export function buildAttribution(i: AttributionInput): Record<string, unknown> {
       : `mgmt_v1;be=${!!i.management.breakEvenEnabled};trail=${!!i.management.trailingStopEnabled};partial=${!!i.management.partialTPEnabled};maxHold=${i.management.maxHoldEnabled ? i.management.maxHoldHours ?? 0 : "off"}`,
     risk_profile_version: i.riskProfileVersion ?? null,
     caps_version: `${i.caps.mode}_${i.caps.maxOpenPositions}_${i.caps.maxPerSymbol}`,
-    route: i.promotedFromWatchlist ? "watchlist_promotion" : "route2_pending_confirmation",
+    route: "route2_pending_confirmation",
     // B
     primary_engine: pe,
     primary_engine_rule: PRIMARY_ENGINE_RULE,
@@ -221,11 +213,10 @@ export function buildAttribution(i: AttributionInput): Record<string, unknown> {
     },
     ob_fvg_zone: i.obFvgZone ?? null,
     unified: { detected: i.unifiedDetected ?? null, comparison: i.unifiedComparison ?? null, modifiers_applied: i.switches.unifiedModifiersEnabled && i.entrySource === "unified" },
+    // Column name kept (NOT NULL jsonb): there is no confluence score or tier, only
+    // the factors that were detected for the decision.
     score: {
-      gate_score: i.gateScore,
-      decision_gate: i.decisionScoreGate ?? null,
-      components: (i.factors ?? []).filter((f) => f.present).map((f) => ({ name: f.name, weight: f.weight, tier: f.tier ?? null, group: f.group ?? null })),
-      tiers: i.tieredScoring ? { tier1: i.tieredScoring.tier1Count ?? null, tier2: i.tieredScoring.tier2Count ?? null, tier3: i.tieredScoring.tier3Count ?? null, tiered_score: i.tieredScoring.tieredScore ?? null } : null,
+      factors: (i.factors ?? []).filter((f) => f.present).map((f) => ({ name: f.name, group: f.group ?? null })),
     },
     gates,
     risk_gate: i.riskGate ?? null,

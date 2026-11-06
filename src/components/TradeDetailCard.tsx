@@ -17,8 +17,6 @@ interface TradeDetailProps {
   slHit: boolean | null;
   tpHitTimeMinutes: number | null;
   priceReachedEntry: boolean | null;
-  confluenceScore: number;
-  tier1Count: number;
   failedGates: string[] | null;
   sessionName: string | null;
   regime: string | null;
@@ -29,8 +27,7 @@ interface TradeDetailProps {
 export function TradeDetailCard({ 
   symbol, direction, entryPrice, stopLoss, takeProfit,
   mfePips, maePips, rrRatio, outcomeStatus, tpHit, slHit,
-  tpHitTimeMinutes, priceReachedEntry, confluenceScore,
-  tier1Count, failedGates, sessionName, regime,
+  tpHitTimeMinutes, priceReachedEntry, failedGates, sessionName, regime,
 }: TradeDetailProps) {
   const pipSize = getPipSize(symbol);
   const isLong = direction === "long";
@@ -88,7 +85,7 @@ export function TradeDetailCard({
             {isLong ? "▲ LONG" : "▼ SHORT"} {symbol}
           </Badge>
           <span className="text-xs text-muted-foreground">
-            Score: {confluenceScore.toFixed(1)} | T1: {tier1Count} | RR: {rrRatio?.toFixed(1) || "—"}
+            RR: {rrRatio?.toFixed(1) || "—"}
           </span>
         </div>
         <div className={`text-sm font-semibold ${outcomeColor}`}>

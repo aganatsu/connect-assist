@@ -258,33 +258,6 @@ Deno.test("HTF Fib+PD+Liq: combined scoring capped at 2.5", () => {
   assert(factor!.detail.includes("1H Fib"), "Should include 1H Fib");
 });
 
-Deno.test("HTF Fib+PD+Liq: factor is classified as Tier 2", () => {
-  const candles = makeBullishCandles(50);
-  const daily = makeDailyCandles(30);
-  const lastPrice = candles[candles.length - 1].close;
-
-  const htfFibLevels = {
-    h4: {
-      swingHigh: lastPrice + 0.01,
-      swingLow: lastPrice - 0.01,
-      direction: "up" as const,
-      retracements: [
-        { ratio: 0.618, price: lastPrice, label: "61.8%", type: "retracement" as const },
-      ],
-      extensions: [],
-      pivotHigh: { index: 40, price: lastPrice + 0.01, type: "high" as const, datetime: "2024-01-02T00:00:00Z" },
-      pivotLow: { index: 30, price: lastPrice - 0.01, type: "low" as const, datetime: "2024-01-01T00:00:00Z" },
-    },
-    h1: null,
-  };
-
-  const config = { ...baseConfig, _htfFibLevels: htfFibLevels, _htfPD: null, _htfLiquidityPools: null };
-  const result = runConfluenceAnalysis(candles, daily, config);
-  const factor = result.factors.find((f: any) => f.name === "HTF Fib + PD + Liquidity");
-  assert(factor, "HTF Fib + PD + Liquidity factor should exist");
-  assertEquals((factor as any).tier, 2);
-});
-
 Deno.test("HTF Fib+PD+Liq: no regression — absent data same as explicit null", () => {
   const candles = makeBullishCandles(50);
   const daily = makeDailyCandles(30);

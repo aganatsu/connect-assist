@@ -26,7 +26,7 @@ interface Props {
   config: Record<string, any> | null | undefined;
 }
 
-type Status = "rejects" | "scores" | "ignored" | "off" | "observed" | "unknown";
+type Status = "rejects" | "ignored" | "off" | "observed" | "unknown";
 
 interface Signal {
   label: string;
@@ -190,8 +190,7 @@ export function signalStatus(s: Signal, config: Props["config"]): Status {
   if (s.gateKey !== undefined) {
     if (gate === undefined) return "unknown";
     if (gate === "hard") return "rejects";
-    if (gate === "soft") return "scores";
-    return "ignored";          // runs, result discarded
+    return "ignored";          // runs, result discarded (a stored "soft" too: the score it moved is gone)
   }
   return enabled === true ? "rejects" : "off";
 }
@@ -200,10 +199,6 @@ const GROUPS: { status: Status; title: string; blurb: string; tone: string }[] =
   {
     status: "rejects", title: "Can refuse a trade", tone: "text-destructive",
     blurb: "A setup failing any of these is rejected outright.",
-  },
-  {
-    status: "scores", title: "Affects the score only", tone: "text-yellow-400",
-    blurb: "Moves the confluence score. Cannot reject on its own.",
   },
   {
     status: "ignored", title: "Runs, then the result is thrown away", tone: "text-orange-400",

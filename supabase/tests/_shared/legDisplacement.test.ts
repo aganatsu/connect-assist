@@ -140,13 +140,8 @@ Deno.test("the measurement is persisted, not just displayed", () => {
     /leg_displacement: \(detail as any\)\.unifiedZone\?\.impulse\?\.displacement \?\? null,/.test(scanner),
     "written onto trade_reasonings at the entry path",
   );
-  // It must NOT go into factors_json: that column is an array and
-  // bot-weekly-advisor iterates it, so an object nested there breaks silently.
-  const advisor = Deno.readTextFileSync(
-    new URL("../../functions/bot-weekly-advisor/index.ts", import.meta.url),
-  );
-  assert(/for \(const f of r\.factors_json\)/.test(advisor),
-    "the advisor still iterates factors_json as an array");
+  // It must NOT go into factors_json: that column is an array (readers
+  // iterate it), so an object nested there breaks silently.
   assert(!/factors_json: \{/.test(scanner), "factors_json must stay an array");
 });
 

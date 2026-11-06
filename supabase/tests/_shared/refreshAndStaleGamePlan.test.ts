@@ -31,7 +31,7 @@ Deno.test("a refreshed order gets fresh risk levels, and NO fresh clock", () => 
   const i = scanner.indexOf("if (samePriceOrders.length > 0) {");
   assert(i > -1, "the refresh branch was not found");
   const block = scanner.slice(i, scanner.indexOf(".in(\"order_id\", samePriceOrders", i));
-  for (const f of ["signal_score", "current_price", "stop_loss", "take_profit", "size"]) {
+  for (const f of ["current_price", "stop_loss", "take_profit", "size"]) {
     assert(new RegExp(`${f}:`).test(block), `the refresh must update ${f}`);
   }
   assert(!/expires_at/.test(block.replace(/\/\/.*$/gm, "")),

@@ -43,7 +43,7 @@ const SCALPER = {
   trailingStopActivation: "after_1r", breakEvenEnabled: false, breakEvenPips: 8,
   partialTPEnabled: false, maxHoldEnabled: true, maxHoldHours: 4,
 };
-const TP_RATIO = 2.0, MIN_CONFLUENCE = 40, MIN_ZONE_SCORE = 4, SCAN_MIN = 5;
+const TP_RATIO = 2.0, MIN_ZONE_SCORE = 4, SCAN_MIN = 5;
 /**
  * smcAnalysis.MIN_SL_PIPS via resolveStaticFloorPips (fallback 15).
  * ETH/USD is ABSENT from the production table, so it inherits the 15-pip
@@ -253,14 +253,12 @@ if (import.meta.main) {
           s.candles, s.dailyCandles.length >= 10 ? s.dailyCandles : null, cfg,
           s.hourlyCandles.length ? s.hourlyCandles : undefined, tMs,
         ) as Record<string, unknown>;
-        row.confluence = (analysis.score as number) ?? null;
-        row.rawScore = (analysis.rawScore as number) ?? null;
-        row.enabledMax = (analysis.enabledMax as number) ?? null;
+        // The confluence score was removed (tier scoring retired): confluence/rawScore/enabledMax stay null.
         const fs = (analysis.factors ?? []) as Array<{ name: string; present: boolean; weight: number }>;
         row.fNames = fs.map((f) => f.name);
         row.fPresent = fs.map((f) => (f.present ? 1 : 0));
         row.fWeight = fs.map((f) => Number(f.weight) || 0);
-        row.passConfluence = (row.confluence ?? -1) >= MIN_CONFLUENCE;
+        row.passConfluence = true; // no confluence gate any more
 
         const entry = lastPrice + (long ? half + slip : -(half + slip));
         const slRaw = long ? Math.min(zl, entry - floor * pip) : Math.max(zh, entry + floor * pip);

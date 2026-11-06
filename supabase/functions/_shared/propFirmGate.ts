@@ -270,7 +270,6 @@ export async function propFirmEmergencyClose(
           closed_at: new Date().toISOString(),
           close_reason: "prop_firm_emergency",
           pnl: pnl.toFixed(2),
-          signal_score: pos.signal_score || "0",
         },
       });
       if (settlement.outcome !== "settled") {

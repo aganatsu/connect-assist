@@ -52,10 +52,10 @@ Deno.test("rejection_type is one the CHECK constraint allows", () => {
   )].sort();
   assertEquals(allowed, ["below_threshold_strong_t1", "gate_blocked"]);
   assert(/rejectionType: "gate_blocked"/.test(scanner), "the zone gate records gate_blocked");
-  assert(
-    /"gate_blocked" \| "below_threshold_strong_t1"/.test(scanner),
-    "the helper's type should mirror the constraint, so a bad value cannot compile",
-  );
+  // The helper's type is a subset of the constraint, so a bad value cannot compile.
+  // (below_threshold_strong_t1 stays allowed by the constraint for historical rows; the
+  // score-based path that wrote it was removed.)
+  assert(/rejectionType: "gate_blocked";/.test(scanner), "the helper's type allows only gate_blocked");
 });
 
 Deno.test("direction is only ever long or short", () => {

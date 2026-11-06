@@ -30,7 +30,7 @@ Deno.test("it sits on the detail object, not nested in a sub-object", () => {
   const i = scanner.indexOf("const detail: any = {");
   assert(i > -1, "the detail object was not found");
   const j = scanner.indexOf("      lastPrice: analysis.lastPrice,", i);
-  const sibling = scanner.indexOf("      score: analysis.score,", i);
+  const sibling = scanner.indexOf("      direction: analysis.direction,", i);
   assert(j > i, "lastPrice must appear inside the detail object");
   assert(sibling > j, "and at the same level, before its known sibling");
 });

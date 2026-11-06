@@ -62,9 +62,9 @@ Deno.test("no override object leaves everything alone", () => {
 });
 
 Deno.test("the other overrides still work alongside it", () => {
-  const c = cfg({ "GBP/USD": { zoneEntryDepth: 0.6, minConfluence: 55, maxPerSymbol: 3 } });
+  const c = cfg({ "GBP/USD": { zoneEntryDepth: 0.6, minRiskReward: 1.5, maxPerSymbol: 3 } });
   applyPairOverrides(c, "GBP/USD");
   assertEquals(c.zoneEntryDepth, 0.6);
-  assertEquals(c.minConfluence, 55);
+  assertEquals(c.minRiskReward, 1.5);
   assertEquals(c.maxPerSymbol, 3);
 });

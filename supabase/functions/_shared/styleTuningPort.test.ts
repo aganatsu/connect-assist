@@ -68,13 +68,6 @@ Deno.test("swing_trader STYLE_OVERRIDES: partialTPEnabled is false (validated)",
   assertEquals(swingBlock[0].includes("partialTPEnabled: false"), true, "Swing partial TP should be disabled");
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: minConfluence is 40 (validated)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  const confMatch = swingBlock[0].match(/minConfluence:\s*(\d+)/);
-  assertEquals(confMatch?.[1], "40", "Swing minConfluence should be 40 (validated)");
-});
-
 Deno.test("swing_trader STYLE_OVERRIDES: riskPerTrade is 1.5 (higher conviction)", () => {
   const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
   if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
@@ -135,13 +128,6 @@ Deno.test("day_trader STYLE_OVERRIDES: breakEvenEnabled still true (unchanged)",
   const dayBlock = scannerSource.match(/day_trader:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*swing_trader)/);
   if (!dayBlock) throw new Error("Could not find day_trader STYLE_OVERRIDES block");
   assertEquals(dayBlock[0].includes("breakEvenEnabled: true"), true, "Day trader BE should remain enabled");
-});
-
-Deno.test("day_trader STYLE_OVERRIDES: minConfluence still 55 (unchanged)", () => {
-  const dayBlock = scannerSource.match(/day_trader:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*swing_trader)/);
-  if (!dayBlock) throw new Error("Could not find day_trader STYLE_OVERRIDES block");
-  const confMatch = dayBlock[0].match(/minConfluence:\s*(\d+)/);
-  assertEquals(confMatch?.[1], "55", "Day trader minConfluence should remain 55");
 });
 
 // ── Test 5: Cascade engine module exports correctly ──

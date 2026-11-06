@@ -665,8 +665,6 @@ Deno.serve(async (req) => {
             zoneType: pending.entry_zone_type,
             zoneLow: parseFloat(pending.entry_zone_low || "0"),
             zoneHigh: parseFloat(pending.entry_zone_high || "0"),
-            fromWatchlist: pending.from_watchlist,
-            stagedCycles: pending.staged_cycles,
           },
         };
 
@@ -730,7 +728,6 @@ Deno.serve(async (req) => {
           take_profit: pending.take_profit.toString(),
           open_time: nowStr,
           signal_reason: JSON.stringify(signalReason),
-          signal_score: pending.signal_score?.toString() || "0",
           order_id: orderId,
           position_status: "open",
           bot_id: BOT_ID,
@@ -784,8 +781,8 @@ Deno.serve(async (req) => {
           position_id: positionId,
           symbol: pending.symbol,
           direction: pending.direction,
-          confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-          summary: `[FAST-CONFIRM] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
+          confluence_score: 0, // placeholder: NOT NULL legacy column — the confluence score no longer exists
+          summary: `[FAST-CONFIRM] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
           bias: pending.direction === "long" ? "bullish" : "bearish",
           session: "confirmation_fill",
           timeframe: confirmTF,
@@ -818,13 +815,11 @@ Deno.serve(async (req) => {
             `<b>Zone Level:</b> ${entryPrice}\n` +
             `<b>SL:</b> ${pending.stop_loss}\n` +
             `<b>TP:</b> ${pending.take_profit}\n` +
-            `<b>Score:</b> ${pending.signal_score}\n` +
             `<b>Confirmation:</b> ${tierLabel(confirmationRecord.tier) ?? `T${confirmationRecord.tier}`} · ${typeLabel(confirmationRecord.type) ?? confirmationRecord.type} · ${confirmationRecord.timeframe ?? ""}` +
             (confirmationRecord.displacement !== null ? ` (disp: ${(confirmationRecord.displacement * 100).toFixed(0)}%)` : "") + `\n` +
             (confirmationRecord.supportingSignals.length ? `<b>Signals:</b> ${confirmationRecord.supportingSignals.join(", ")}\n` : "") +
             `<b>Scanner:</b> Fast-confirm (60s poll)\n` +
-            `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
-            (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
+            `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]`;
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${supabaseUrl}/functions/v1/telegram-notify`, {

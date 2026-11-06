@@ -1,8 +1,8 @@
 // ============================================================
 // Bot Weekly Strategy Advisor — Deep Self-Learning Review
 // Runs every Sunday at 23:00 UTC via pg_cron
-// Performs deeper analysis: factor weight optimization,
-// week-over-week trends, regime detection, feature gap analysis
+// Performs deeper analysis: week-over-week trends,
+// regime detection, feature gap analysis
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -81,7 +81,6 @@ interface TradeReasoning {
   user_id: string;
   symbol: string;
   direction: string;
-  confluence_score: number;
   summary: string;
   factors_json: Array<{
     name: string;
@@ -113,18 +112,6 @@ interface WeeklyMetrics {
   maxDrawdownPercent: number;
 }
 
-interface FactorWeightSuggestion {
-  factorName: string;
-  group: string;
-  currentWeight: number;
-  suggestedWeight: number;
-  reason: string;
-  winRateWhenPresent: number;
-  winRateWhenAbsent: number;
-  sampleSize: number;
-  confidence: string;
-}
-
 interface RegimeAnalysis {
   currentRegime: string;
   regimeConfidence: number;
@@ -151,7 +138,6 @@ interface WeeklyDiagnosis {
     evidence: string;
     severity: string;
   }>;
-  factor_weight_suggestions: FactorWeightSuggestion[];
   regime_analysis: RegimeAnalysis;
   recommendations: Array<{
     category: string;
@@ -222,124 +208,6 @@ function computeWeeklyMetrics(trades: TradeRecord[], weekLabel: string, startDat
     avgRRAchieved: avgRR,
     maxDrawdownPercent: maxDD,
   };
-}
-
-function computeFactorWeightSuggestions(
-  trades: TradeRecord[],
-  reasonings: TradeReasoning[]
-): FactorWeightSuggestion[] {
-  // Match trades to reasonings
-  const tradeFactors = new Map<string, TradeReasoning>();
-  for (const trade of trades) {
-    let bestMatch: TradeReasoning | null = null;
-    let bestTimeDiff = Infinity;
-    for (const r of reasonings) {
-      if (r.symbol === trade.symbol && r.direction?.toLowerCase() === trade.direction?.toLowerCase()) {
-        const timeDiff = Math.abs(new Date(trade.opened_at).getTime() - new Date(r.created_at).getTime());
-        if (timeDiff < bestTimeDiff && timeDiff < 300000) {
-          bestTimeDiff = timeDiff;
-          bestMatch = r;
-        }
-      }
-    }
-    if (bestMatch) tradeFactors.set(trade.id, bestMatch);
-  }
-
-  // Collect all factor names with their current weights and groups
-  const factorInfo = new Map<string, { weight: number; group: string }>();
-  for (const r of reasonings) {
-    if (!r.factors_json) continue;
-    for (const f of r.factors_json) {
-      if (!factorInfo.has(f.name)) {
-        factorInfo.set(f.name, { weight: f.weight, group: f.group || "Unknown" });
-      }
-    }
-  }
-
-  const suggestions: FactorWeightSuggestion[] = [];
-
-  for (const [factorName, info] of factorInfo) {
-    let presentWins = 0, presentLosses = 0, absentWins = 0, absentLosses = 0;
-    let presentPnl = 0, absentPnl = 0;
-
-    for (const trade of trades) {
-      const reasoning = tradeFactors.get(trade.id);
-      if (!reasoning?.factors_json) continue;
-
-      const factor = reasoning.factors_json.find(f => f.name === factorName);
-      const isPresent = factor?.present === true;
-      const isWin = trade.pnl > 0;
-
-      if (isPresent) {
-        if (isWin) presentWins++; else presentLosses++;
-        presentPnl += trade.pnl;
-      } else {
-        if (isWin) absentWins++; else absentLosses++;
-        absentPnl += trade.pnl;
-      }
-    }
-
-    const presentTotal = presentWins + presentLosses;
-    const absentTotal = absentWins + absentLosses;
-
-    // Only suggest changes for factors with enough data
-    if (presentTotal < 5) continue;
-
-    const winRatePresent = presentTotal > 0 ? (presentWins / presentTotal) * 100 : 0;
-    const winRateAbsent = absentTotal > 0 ? (absentWins / absentTotal) * 100 : 0;
-    const avgPnlPresent = presentTotal > 0 ? presentPnl / presentTotal : 0;
-
-    // Determine confidence based on sample size
-    const confidence = presentTotal >= 20 ? "high" : presentTotal >= 10 ? "medium" : "low";
-
-    // Calculate suggested weight adjustment
-    let suggestedWeight = info.weight;
-    let reason = "";
-
-    // Factor is strongly predictive of wins
-    if (winRatePresent > 65 && winRatePresent > winRateAbsent + 15 && avgPnlPresent > 0) {
-      suggestedWeight = Math.min(info.weight * 1.25, 3.0); // Cap at 3.0
-      reason = `Strong win predictor: ${winRatePresent.toFixed(0)}% win rate when present vs ${winRateAbsent.toFixed(0)}% when absent. Avg P&L when present: $${avgPnlPresent.toFixed(2)}`;
-    }
-    // Factor is weakly predictive or harmful
-    else if (winRatePresent < 35 && presentTotal >= 8) {
-      suggestedWeight = Math.max(info.weight * 0.5, 0.25); // Floor at 0.25
-      reason = `Weak predictor: only ${winRatePresent.toFixed(0)}% win rate when present (${presentTotal} trades). Consider reducing weight.`;
-    }
-    // Factor makes no difference
-    else if (Math.abs(winRatePresent - winRateAbsent) < 5 && presentTotal >= 10) {
-      suggestedWeight = Math.max(info.weight * 0.75, 0.25);
-      reason = `No edge detected: ${winRatePresent.toFixed(0)}% win rate present vs ${winRateAbsent.toFixed(0)}% absent — factor may be noise.`;
-    }
-    // Factor is moderately helpful
-    else if (winRatePresent > 50 && winRatePresent > winRateAbsent + 5 && avgPnlPresent > 0) {
-      // Keep current weight — it's working
-      suggestedWeight = info.weight;
-      reason = `Performing well: ${winRatePresent.toFixed(0)}% win rate, positive P&L. Keep current weight.`;
-    }
-
-    // Only include if there's an actual change suggestion
-    if (Math.abs(suggestedWeight - info.weight) > 0.1 || confidence !== "low") {
-      suggestions.push({
-        factorName,
-        group: info.group,
-        currentWeight: info.weight,
-        suggestedWeight: Math.round(suggestedWeight * 4) / 4, // Round to 0.25 increments
-        reason,
-        winRateWhenPresent: winRatePresent,
-        winRateWhenAbsent: winRateAbsent,
-        sampleSize: presentTotal,
-        confidence,
-      });
-    }
-  }
-
-  return suggestions.sort((a, b) => {
-    // Sort by impact: biggest weight change first
-    const impactA = Math.abs(a.suggestedWeight - a.currentWeight) / a.currentWeight;
-    const impactB = Math.abs(b.suggestedWeight - b.currentWeight) / b.currentWeight;
-    return impactB - impactA;
-  });
 }
 
 // ─── Per-Instrument Regime Detection (Price-Based) ──────────
@@ -660,49 +528,22 @@ function detectMarketRegime(trades: TradeRecord[]): RegimeAnalysis {
 
 // ─── Regime Presets & Auto-Adaptation ────────────────────────
 
-const REGIME_PRESETS: Record<string, { description: string; factorWeightOverrides: Record<string, number>; configOverrides: Record<string, any> }> = {
+const REGIME_PRESETS: Record<string, { description: string; configOverrides: Record<string, any> }> = {
   strong_trend: {
-    description: "Strong trending market — favor trend-following factors, widen TP targets",
-    factorWeightOverrides: {
-      marketStructure: 2.0,
-      trendDirection: 2.0,
-      displacement: 1.5,
-      premiumDiscount: 1.0,
-      orderBlock: 1.5,
-      fvg: 1.5,
-      breaker: 0.5,
-      silverBullet: 1.0,
-      amd: 1.0,
-    },
+    description: "Strong trending market — widen TP targets",
     configOverrides: {
       "strategy.tpRatio": 4.0,
       "exit.trailingStopEnabled": true,
     },
   },
   mild_trend: {
-    description: "Mild trending market — standard weights, slightly favor trend factors",
-    factorWeightOverrides: {
-      marketStructure: 1.8,
-      trendDirection: 1.5,
-      displacement: 1.2,
-    },
+    description: "Mild trending market",
     configOverrides: {
       "strategy.tpRatio": 3.5,
     },
   },
   choppy_range: {
-    description: "Choppy/ranging market — reduce trend-following, tighten SL, favor reversal setups",
-    factorWeightOverrides: {
-      marketStructure: 0.8,
-      trendDirection: 0.5,
-      premiumDiscount: 2.0,
-      orderBlock: 1.8,
-      breaker: 1.5,
-      fvg: 0.8,
-      displacement: 0.5,
-      silverBullet: 1.5,
-      amd: 1.5,
-    },
+    description: "Choppy/ranging market — tighten SL and risk",
     configOverrides: {
       "strategy.tpRatio": 2.0,
       "strategy.slATRMultiple": 1.5,
@@ -710,13 +551,7 @@ const REGIME_PRESETS: Record<string, { description: string; factorWeightOverride
     },
   },
   mild_range: {
-    description: "Mild ranging market — slightly reduce trend factors, tighten risk",
-    factorWeightOverrides: {
-      marketStructure: 1.0,
-      trendDirection: 0.8,
-      premiumDiscount: 1.5,
-      orderBlock: 1.5,
-    },
+    description: "Mild ranging market — tighten risk",
     configOverrides: {
       "strategy.tpRatio": 2.5,
       "risk.riskPerTrade": 0.85,
@@ -724,7 +559,6 @@ const REGIME_PRESETS: Record<string, { description: string; factorWeightOverride
   },
   transitional: {
     description: "Market transitioning — reduce exposure, use conservative settings",
-    factorWeightOverrides: {},
     configOverrides: {
       "risk.riskPerTrade": 0.5,
       "risk.maxConcurrent": 2,
@@ -740,34 +574,6 @@ function generateRegimeRecommendation(
   if (!preset || regime.currentRegime === "unknown" || regime.regimeConfidence < 0.4) return [];
 
   const recs: Array<{ category: string; title: string; description: string; current_value: Record<string, any>; suggested_value: Record<string, any>; confidence: string; evidence: string; risk_level: string }> = [];
-
-  // Factor weight adjustments for this regime
-  if (Object.keys(preset.factorWeightOverrides).length > 0) {
-    const currentWeights: Record<string, any> = {};
-    const suggestedWeights: Record<string, number> = {};
-    const currentFactorWeights = currentConfig?.factorWeights || {};
-
-    for (const [key, suggested] of Object.entries(preset.factorWeightOverrides)) {
-      const current = currentFactorWeights[key] ?? "default";
-      if (current !== suggested) {
-        currentWeights[key] = current;
-        suggestedWeights[key] = suggested;
-      }
-    }
-
-    if (Object.keys(suggestedWeights).length > 0) {
-      recs.push({
-        category: "regime_adaptation",
-        title: `Regime Shift: Adjust Factor Weights for ${regime.currentRegime.replace(/_/g, " ")} Market`,
-        description: `${preset.description}. Detected with ${(regime.regimeConfidence * 100).toFixed(0)}% confidence. ${regime.regimeIndicators.slice(0, 2).join(". ")}.`,
-        current_value: currentWeights,
-        suggested_value: suggestedWeights,
-        confidence: regime.regimeConfidence >= 0.7 ? "high" : "medium",
-        evidence: regime.regimeIndicators.join("; "),
-        risk_level: regime.regimeConfidence >= 0.7 ? "low" : "medium",
-      });
-    }
-  }
 
   // Config overrides for this regime (SL, TP, risk)
   if (Object.keys(preset.configOverrides).length > 0) {
@@ -835,7 +641,7 @@ function generateRegimeRecommendation(
           suggested_value: {
             instruments: symbols,
             regime: instrRegime,
-            factorWeightOverrides: instrPreset.factorWeightOverrides,
+            configOverrides: instrPreset.configOverrides,
             note: "These are per-instrument suggestions — review each pair individually",
           },
           confidence: "medium",
@@ -958,20 +764,16 @@ You have access to:
 - 4 weeks of week-over-week performance data
 - Factor-level win rate analysis with sample sizes
 - Market regime indicators
-- Pre-computed factor weight suggestions based on statistical analysis
 - Previous recommendation history and their outcomes
 
 Your job is to:
 1. Identify TRENDS across weeks — is performance improving, degrading, or stable?
-2. Validate or challenge the statistical factor weight suggestions with your trading expertise
-3. Detect market regime changes and recommend strategy adjustments
-4. Review past recommendations — did approved ones help? Were dismissed ones correct to dismiss?
-5. Suggest at most 1 new feature/capability if there's a clear gap
+2. Detect market regime changes and recommend strategy adjustments
+3. Review past recommendations — did approved ones help? Were dismissed ones correct to dismiss?
+4. Suggest at most 1 new feature/capability if there's a clear gap
 
 RULES:
-- Max 5 recommendations total (including factor weight changes)
-- Factor weight changes must be justified by BOTH statistics AND trading logic
-- Never suggest removing a core SMC factor entirely — minimum weight 0.25
+- Max 5 recommendations total
 - Regime-based suggestions should be temporary (include "revert when..." conditions)
 - Be specific about numbers: "increase from 2.0 to 2.5" not "increase slightly"
 - If the bot is profitable and improving, say so — don't fix what isn't broken
@@ -984,16 +786,8 @@ RULES:
 - Rate overall weekly_trend as: "improving" | "degrading" | "stable" | "volatile" | "insufficient_data"
 - ALL suggested_value keys MUST use the EXACT camelCase keys below. NEVER invent keys.
 - Values MUST be numbers, booleans, or valid enum strings. NEVER use vague values like "looser_setting" or "default".
-- tier1Minimum is NOT configurable (hardcoded to 3). Do NOT recommend changing it.
 
 VALID CONFIG KEYS BY CATEGORY:
-
-[factor_weights] suggested_value keys MUST be one of:
-  marketStructure, orderBlock, fairValueGap, premiumDiscountFib, sessionQuality, judasSwing,
-  pdPwLevels, reversalCandle, liquiditySweep, displacement, breakerBlock, unicornModel,
-  smtDivergence, volumeProfile, amdPhase, currencyStrength, dailyBias, htfPoiAlignment,
-  htfFibPdLiquidity, confluenceStack, pullbackHealth, gamePlanKeyLevel, sessionAffinity
-  (values: number 0.0-5.0, where default is typically 1.0-2.5)
 
 [take_profit] keys:
   tpRRRatio (number, R:R target e.g. 1.5-5.0)
@@ -1026,8 +820,7 @@ VALID CONFIG KEYS BY CATEGORY:
   maxDrawdown (number, total % drawdown limit)
   maxPortfolioHeat (number, % e.g. 5-15)
   allowSameDirectionStacking (bool)
-  conflictBlockAt (number, correlation threshold to block)
-  conflictThresholdRaise (number)
+  conflictBlockAt (number, opposing-factor count that blocks the trade)
   atrVolatilityMultiplier (number)
   minRR (number, minimum R:R gate e.g. 1.0-3.0)
 
@@ -1064,13 +857,10 @@ VALID CONFIG KEYS BY CATEGORY:
   scanIntervalMinutes (number, how often bot scans)
 
 [strategy] keys:
-  confluenceThreshold (number, 20-90, minimum score % to take trade)
   structureLookback (number, candles for structure detection e.g. 30-200)
-  regimeScoringEnabled (bool, adapt weights to market regime)
-  regimeScoringStrength (number, 0.0-1.0, how much regime affects weights)
+  regimeScoringEnabled (bool, classify the market regime; feeds the regime gate)
   htfBiasHardVeto (bool, block trades against HTF bias entirely)
   requireHTFBias (bool)
-  normalizedScoring (bool)
   onlyBuyInDiscount (bool, only long below 50% fib)
   onlySellInPremium (bool, only short above 50% fib)
   useOrderBlocks (bool)
@@ -1098,16 +888,6 @@ Respond with valid JSON:
   "key_findings": [
     { "finding": "description", "evidence": "specific numbers across weeks", "severity": "critical|warning|info" }
   ],
-  "factor_weight_suggestions": [
-    {
-      "factorName": "exact factor name",
-      "group": "group name",
-      "currentWeight": 1.5,
-      "suggestedWeight": 2.0,
-      "reason": "Statistical evidence + trading logic justification",
-      "confidence": "high|medium|low"
-    }
-  ],
   "regime_analysis": {
     "currentRegime": "strong_trend|mild_trend|transitional|mild_range|choppy_range",
     "regimeConfidence": 0.8,
@@ -1116,7 +896,7 @@ Respond with valid JSON:
   },
   "recommendations": [
     {
-      "category": "stop_loss|take_profit|factor_weights|session_filter|instrument_filter|risk_management|protection|exit_management|entry_refinement|strategy|timing|regime_adaptation|general",
+      "category": "stop_loss|take_profit|session_filter|instrument_filter|risk_management|protection|exit_management|entry_refinement|strategy|timing|regime_adaptation|general",
       "title": "Short actionable title",
       "description": "Detailed explanation",
       "current_value": {},
@@ -1136,7 +916,6 @@ function buildWeeklyPrompt(
   balance: number,
   peakBalance: number,
   weeklyData: WeeklyMetrics[],
-  factorSuggestions: FactorWeightSuggestion[],
   regimeAnalysis: RegimeAnalysis,
   pastRecommendations: PreviousRecommendation[],
   config: any,
@@ -1155,21 +934,6 @@ Current balance: $${balance.toFixed(2)} | Peak: $${peakBalance.toFixed(2)} | Dra
   prompt += `---|---|---|---|---|---|---|---|---\n`;
   for (const w of weeklyData) {
     prompt += `${w.weekLabel} | ${w.totalTrades} | ${w.winRate.toFixed(1)}% | $${w.totalPnl.toFixed(2)} | $${w.avgWin.toFixed(2)} | $${w.avgLoss.toFixed(2)} | ${w.profitFactor === Infinity ? "∞" : w.profitFactor.toFixed(2)} | ${w.maxConsecutiveLosses} | ${w.maxDrawdownPercent.toFixed(1)}%\n`;
-  }
-
-  // Factor weight suggestions (pre-computed statistically)
-  if (factorSuggestions.length > 0) {
-    prompt += `\n=== STATISTICAL FACTOR WEIGHT ANALYSIS ===\n`;
-    prompt += `These are pre-computed based on win rate correlation. Please validate with your trading expertise.\n\n`;
-    prompt += `Factor | Group | Current Wt | Suggested Wt | Win% Present | Win% Absent | Sample | Confidence\n`;
-    prompt += `---|---|---|---|---|---|---|---\n`;
-    for (const f of factorSuggestions) {
-      prompt += `${f.factorName} | ${f.group} | ${f.currentWeight} | ${f.suggestedWeight} | ${f.winRateWhenPresent.toFixed(1)}% | ${f.winRateWhenAbsent.toFixed(1)}% | ${f.sampleSize} | ${f.confidence}\n`;
-    }
-    prompt += `\n`;
-    for (const f of factorSuggestions) {
-      if (f.reason) prompt += `• ${f.factorName}: ${f.reason}\n`;
-    }
   }
 
   // Regime analysis
@@ -1199,7 +963,6 @@ Current balance: $${balance.toFixed(2)} | Peak: $${peakBalance.toFixed(2)} | Dra
   const c = config;
   prompt += `SL: ${c.slMethod || "atr"} (ATR×${c.slATRMultiple || 2.0})\n`;
   prompt += `TP: ${c.tpMethod || "rr_ratio"} (RR ${c.tpRatio || 3.0})\n`;
-  prompt += `Confluence Threshold: ${c.confluenceThreshold || 55}%\n`;
   prompt += `Risk/Trade: ${c.riskPerTrade || 1.0}% | Max Concurrent: ${c.maxConcurrent || 3}\n`;
   prompt += `Max Daily Loss: ${c.maxDailyLoss || 5.0}% | Max Hold: ${c.maxHoldHours || 48}h\n`;
   prompt += `Trailing: ${c.trailingStopEnabled ? "ON" : "OFF"} | Break-Even: ${c.breakEvenEnabled ? "ON" : "OFF"}\n`;
@@ -1249,16 +1012,6 @@ async function sendTelegramNotification(
   if (diagnosis.regime_analysis) {
     message += `🌊 *Market Regime:* ${diagnosis.regime_analysis.currentRegime.replace(/_/g, " ")} (${(diagnosis.regime_analysis.regimeConfidence * 100).toFixed(0)}% confidence)\n`;
     message += `${diagnosis.regime_analysis.regimeImpact}\n\n`;
-  }
-
-  // Factor weight suggestions
-  if (diagnosis.factor_weight_suggestions?.length > 0) {
-    message += `⚖️ *Factor Weight Suggestions:*\n`;
-    for (const f of diagnosis.factor_weight_suggestions.slice(0, 5)) {
-      const arrow = f.suggestedWeight > f.currentWeight ? "⬆️" : f.suggestedWeight < f.currentWeight ? "⬇️" : "➡️";
-      message += `${arrow} ${f.factorName}: ${f.currentWeight} → ${f.suggestedWeight} [${f.confidence}]\n`;
-    }
-    message += "\n";
   }
 
   // Recommendations
@@ -1459,9 +1212,6 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Step 5: Compute factor weight suggestions
-      const factorSuggestions = computeFactorWeightSuggestions(normalizedBotTrades, botReasonings);
-
       // Step 5.5: Fetch bot config (needed for instrument list in regime detection)
       const { data: configRow } = await supabase
         .from("bot_configs")
@@ -1547,7 +1297,6 @@ Deno.serve(async (req) => {
         riskPerTrade: configObj.risk?.riskPerTrade || 1.0,
         maxConcurrent: configObj.risk?.maxConcurrent || 3,
         maxDailyLoss: configObj.risk?.maxDailyLoss || 5.0,
-        confluenceThreshold: configObj.strategy?.confluenceThreshold ?? configObj.strategy?.minConfluenceScore ?? 55,
         maxHoldHours: configObj.risk?.maxHoldHours || 48,
         trailingStopEnabled: configObj.exit?.trailingStopEnabled ?? true,
         breakEvenEnabled: configObj.exit?.breakEvenEnabled ?? true,
@@ -1558,7 +1307,7 @@ Deno.serve(async (req) => {
       try {
         const { data: resolvedRejections } = await supabase
           .from("rejected_setups")
-          .select("id, symbol, direction, failed_gates, confluence_score, tier1_count, outcome_status, mfe_pips, mae_pips, tp_hit, sl_hit, regime, session_name, rejected_at, rr_ratio")
+          .select("id, symbol, direction, failed_gates, outcome_status, mfe_pips, mae_pips, tp_hit, sl_hit, regime, session_name, rejected_at, rr_ratio")
           .eq("user_id", userId)
           .in("outcome_status", ["would_have_won", "would_have_lost"])
           .gte("rejected_at", fourWeeksAgo.toISOString())
@@ -1602,7 +1351,7 @@ Deno.serve(async (req) => {
       const peakBalanceNum = toSafeNumber(account.peak_balance, balanceNum);
       const userPrompt = buildWeeklyPrompt(
         botId, botName, balanceNum, peakBalanceNum,
-        weeklyData, factorSuggestions, regimeAnalysis,
+        weeklyData, regimeAnalysis,
         pastRecs || [], strategyConfig, gatePerformancePromptStr || undefined
       );
 
@@ -1631,7 +1380,6 @@ Deno.serve(async (req) => {
           review_type: "weekly",
           performance_summary: {
             weeklyData,
-            factorSuggestions: factorSuggestions.slice(0, 20),
             regimeAnalysis,
             balance: balanceNum,
             peakBalance: peakBalanceNum,
@@ -1639,16 +1387,6 @@ Deno.serve(async (req) => {
           diagnosis: diagnosis.diagnosis,
           recommendations: [
             ...(diagnosis.recommendations || []),
-            ...(diagnosis.factor_weight_suggestions || []).map(f => ({
-              category: "factor_weights",
-              title: `${f.factorName}: ${f.currentWeight} → ${f.suggestedWeight}`,
-              description: f.reason,
-              current_value: { [f.factorName]: f.currentWeight },
-              suggested_value: { [f.factorName]: f.suggestedWeight },
-              confidence: f.confidence,
-              evidence: `Win rate when present: ${f.winRateWhenPresent?.toFixed(1)}%, absent: ${f.winRateWhenAbsent?.toFixed(1)}%`,
-              risk_level: "medium",
-            })),
             ...regimeRecs,
           ],
           feature_gaps: diagnosis.feature_gaps || [],
@@ -1669,7 +1407,7 @@ Deno.serve(async (req) => {
 
       results.push({
         botId, userId,
-        status: `${diagnosis.overall_assessment} / ${diagnosis.weekly_trend} — ${(diagnosis.recommendations?.length || 0) + (diagnosis.factor_weight_suggestions?.length || 0)} recommendations`,
+        status: `${diagnosis.overall_assessment} / ${diagnosis.weekly_trend} — ${diagnosis.recommendations?.length || 0} recommendations`,
       });
     }
 

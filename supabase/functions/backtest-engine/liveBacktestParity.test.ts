@@ -18,11 +18,6 @@ import {
 } from "../_shared/smcAnalysis.ts";
 import { normalizeSessionFilter } from "../_shared/sessions.ts";
 import {
-  DEFAULT_FACTOR_WEIGHTS,
-  resolveWeightScale,
-  applyWeightScale,
-} from "../_shared/confluenceScoring.ts";
-import {
   assertEquals,
   assertAlmostEquals,
   assert,
@@ -44,13 +39,6 @@ function mapConfig(raw: any): any {
   const protection = raw?.protection || {};
   return {
     ...DEFAULTS,
-    minConfluence: (() => {
-      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw?.minConfluence ?? DEFAULTS.minConfluence;
-      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw?.normalizedScoring ?? true)) {
-        return raw_mc * 10;
-      }
-      return raw_mc;
-    })(),
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     htfBiasHardVeto: strategy.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
     enableOB: strategy.useOrderBlocks ?? true,
@@ -79,14 +67,12 @@ function mapConfig(raw: any): any {
           : [...DEFAULTS.enabledSessions]
     ),
     maxDrawdown: Math.min(risk.maxDrawdown ?? DEFAULTS.maxDrawdown, protection.circuitBreakerPct ?? 100),
-    factorWeights: raw?.factorWeights || {},
     useVolumeProfile: strategy.useVolumeProfile ?? raw?.useVolumeProfile ?? DEFAULTS.useVolumeProfile,
     useTrendDirection: strategy.useTrendDirection ?? raw?.useTrendDirection ?? DEFAULTS.useTrendDirection,
     useDailyBias: strategy.useDailyBias ?? raw?.useDailyBias ?? DEFAULTS.useDailyBias,
     useAMD: strategy.useAMD ?? raw?.useAMD ?? DEFAULTS.useAMD,
     useFOTSI: strategy.useFOTSI ?? raw?.useFOTSI ?? DEFAULTS.useFOTSI,
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw?.regimeScoringEnabled ?? DEFAULTS.regimeScoringEnabled,
-    regimeScoringStrength: strategy.regimeScoringStrength ?? raw?.regimeScoringStrength ?? DEFAULTS.regimeScoringStrength,
   };
 }
 
@@ -96,34 +82,12 @@ function mapConfig(raw: any): any {
 
 Deno.test("Config parity: empty config uses DEFAULTS for all fields", () => {
   const config = mapConfig({});
-  assertEquals(config.minConfluence, DEFAULTS.minConfluence);
   assertEquals(config.htfBiasRequired, DEFAULTS.htfBiasRequired);
   assertEquals(config.riskPerTrade, DEFAULTS.riskPerTrade);
   assertEquals(config.minRiskReward, DEFAULTS.minRiskReward);
   assertEquals(config.slMethod, DEFAULTS.slMethod);
   assertEquals(config.tpMethod, DEFAULTS.tpMethod);
   assertEquals(config.maxDrawdown, DEFAULTS.maxDrawdown);
-});
-
-Deno.test("Config parity: legacy 0-10 confluenceThreshold auto-scales to percentage", () => {
-  const config = mapConfig({
-    strategy: { confluenceThreshold: 5.5 }
-  });
-  assertEquals(config.minConfluence, 55); // 5.5 × 10 = 55%
-});
-
-Deno.test("Config parity: confluenceThreshold > 10 is NOT auto-scaled", () => {
-  const config = mapConfig({
-    strategy: { confluenceThreshold: 55 }
-  });
-  assertEquals(config.minConfluence, 55); // Already in percentage
-});
-
-Deno.test("Config parity: normalizedScoring=false disables auto-scaling", () => {
-  const config = mapConfig({
-    strategy: { confluenceThreshold: 5.5, normalizedScoring: false }
-  });
-  assertEquals(config.minConfluence, 5.5); // Not scaled
 });
 
 Deno.test("Config parity: risk.riskPerTrade overrides default", () => {
@@ -184,41 +148,6 @@ Deno.test("Config parity: factor toggles can be overridden via strategy", () => 
   assertEquals(config.useVolumeProfile, false);
   assertEquals(config.useTrendDirection, false);
   assertEquals(config.useDailyBias, false);
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-// SECTION 2: Weight System Parity
-// ═══════════════════════════════════════════════════════════════════════
-
-Deno.test("Weight parity: DEFAULT_FACTOR_WEIGHTS has 22 factors", () => {
-  // Updated: added htfPoiAlignment, htfFibPdLiquidity, confluenceStack, pullbackHealth, gamePlanKeyLevel, sessionAffinity
-  const keys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
-  assertEquals(keys.length, 23);
-});
-
-Deno.test("Weight parity: resolveWeightScale returns 1.0 for default config", () => {
-  // When user doesn't override any weight, scale should be 1.0
-  const scale = resolveWeightScale("marketStructure", { factorWeights: {} });
-  assertEquals(scale, 1.0);
-});
-
-Deno.test("Weight parity: resolveWeightScale with 2x override", () => {
-  const defaultWeight = (DEFAULT_FACTOR_WEIGHTS as any)["marketStructure"];
-  const scale = resolveWeightScale("marketStructure", { factorWeights: { marketStructure: defaultWeight * 2 } });
-  assertAlmostEquals(scale, 2.0, 0.001);
-});
-
-Deno.test("Weight parity: applyWeightScale multiplies raw score by scale", () => {
-  // applyWeightScale(pts, factorKey, displayWeight, config) => { pts, displayWeight }
-  const defaultWeight = (DEFAULT_FACTOR_WEIGHTS as any)["marketStructure"];
-  const result = applyWeightScale(0.8, "marketStructure", 1.0, { factorWeights: { marketStructure: defaultWeight * 1.5 } });
-  assertAlmostEquals(result.pts, 0.8 * 1.5, 0.001);
-});
-
-Deno.test("Weight parity: applyWeightScale with 0 scale zeros the score", () => {
-  const result = applyWeightScale(0.8, "marketStructure", 1.0, { factorWeights: { marketStructure: 0 } });
-  assertEquals(result.pts, 0);
-  assertEquals(result.displayWeight, 0);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -288,11 +217,6 @@ Deno.test("SPECS: type is one of forex/commodity/crypto/index", () => {
 // ═══════════════════════════════════════════════════════════════════════
 // SECTION 5: DEFAULTS Consistency
 // ═══════════════════════════════════════════════════════════════════════
-
-Deno.test("DEFAULTS: minConfluence is a percentage (0-100)", () => {
-  assert(DEFAULTS.minConfluence >= 0 && DEFAULTS.minConfluence <= 100,
-    `minConfluence ${DEFAULTS.minConfluence} should be 0-100`);
-});
 
 Deno.test("DEFAULTS: riskPerTrade is reasonable (0.1-10%)", () => {
   assert(DEFAULTS.riskPerTrade >= 0.1 && DEFAULTS.riskPerTrade <= 10,

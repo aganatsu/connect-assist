@@ -133,8 +133,6 @@ Deno.test("zone score gate: custom threshold of 6 rejects scores 0-5.5", () => {
 Deno.test("regression: adding minZoneScore does not affect other impulse zone defaults", () => {
   const result = mapNestedToFlat(null);
   assertEquals(result.impulseZoneEnabled, true);
-  assertEquals(result.impulseZonePenalty, 2.0);
-  assertEquals(result.impulseZoneBonus, 1.0);
   assertEquals(result.impulseZoneGateMode, "hard");
   assertEquals(result.impulseSlCapMultiplier, 4);
 });

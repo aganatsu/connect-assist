@@ -6,7 +6,7 @@
  * 2. Opposing displacement produces negative weight (not 0)
  * 3. Opposing AMD phase produces negative weight (not 0)
  * 4. Counter-directional confluence stack produces negative weight (not 0)
- * 5. Opposing factors are tracked in tieredScoring.opposingFactorCount
+ * 5. Opposing factors are tracked in analysis.opposingFactorCount
  * 6. Opposing factors reduce tieredScore (not just raw score)
  * 7. Structural conviction gate blocks when opposing > 2.5× supporting
  * 8. Regression: aligned factors still score positive (no regression)
@@ -15,7 +15,7 @@
  * Run: deno test --allow-all --no-check supabase/functions/_shared/bidirectionalScoring.test.ts
  */
 import { assertEquals, assert, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { runConfluenceAnalysis, DEFAULT_FACTOR_WEIGHTS } from "./confluenceScoring.ts";
+import { runConfluenceAnalysis } from "./confluenceScoring.ts";
 import { type Candle } from "./smcAnalysis.ts";
 
 // ─── Fixture: Bullish candles with bearish displacement ──────────────
@@ -123,7 +123,6 @@ const BASE_CONFIG = {
   _currentSymbol: "EUR/USD",
   entryTimeframe: "15m",
   normalizedScoring: true,
-  factorWeights: { ...DEFAULT_FACTOR_WEIGHTS },
 };
 
 // Use a fixed London Kill Zone timestamp (Wed 10:00 UTC) so tests are
@@ -158,21 +157,18 @@ Deno.test("Bidirectional: opposing displacement produces negative weight (not 0)
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// Test 2: opposingFactorCount is tracked in tieredScoring
+// Test 2: opposingFactorCount is a top-level analysis field
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("Bidirectional: tieredScoring includes opposingFactorCount field", () => {
+Deno.test("Bidirectional: analysis carries opposingFactorCount (no tiered scoring object)", () => {
   const candles = generateCleanBullish();
   const daily = makeDailyCandles(30, 1.0800, "up");
 
   const result = analyze(candles, daily);
 
-  assertExists(result.tieredScoring, "tieredScoring should exist");
+  assert(!("tieredScoring" in result), "there is no tiered scoring object");
+  assert(!("score" in result), "there is no confluence score");
   assert(
-    "opposingFactorCount" in result.tieredScoring,
-    "tieredScoring should have opposingFactorCount field"
-  );
-  assert(
-    typeof result.tieredScoring.opposingFactorCount === "number",
+    typeof result.opposingFactorCount === "number",
     "opposingFactorCount should be a number"
   );
 });
@@ -187,7 +183,7 @@ Deno.test("Regression: clean bullish fixture has 0 or minimal opposing factors",
   const result = analyze(candles, daily);
 
   // In a clean bullish trend with bullish daily, opposing count should be low
-  const opposing = result.tieredScoring.opposingFactorCount;
+  const opposing = result.opposingFactorCount;
   assert(opposing <= 2, `Clean bullish should have ≤2 opposing factors, got ${opposing}`);
 });
 
@@ -277,15 +273,6 @@ Deno.test("Bidirectional: bearish daily candles on long trade produce negative D
 // ═══════════════════════════════════════════════════════════════════════
 // Test 9: Score is non-negative even with many opposing factors
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("Bidirectional: final score is clamped at 0 (never negative)", () => {
-  const candles = generateBullishWithBearishDisplacement();
-  const daily = makeDailyCandles(30, 1.1200, "down"); // opposing daily
-
-  const result = analyze(candles, daily);
-
-  assert(result.score >= 0, `Score should never be negative, got ${result.score}`);
-});
-
 // ═══════════════════════════════════════════════════════════════════════
 // Test 10: Summary includes opposing count when > 0
 // ═══════════════════════════════════════════════════════════════════════
@@ -295,7 +282,7 @@ Deno.test("Bidirectional: summary includes opposing count annotation when presen
 
   const result = analyze(candles, daily);
 
-  if (result.tieredScoring.opposingFactorCount > 0) {
+  if (result.opposingFactorCount > 0) {
     assert(
       result.summary.includes("opposing"),
       `Summary should mention opposing factors when count > 0. Summary: ${result.summary}`
@@ -323,19 +310,11 @@ Deno.test("Regression: aligned factors still produce positive weight after bidir
   const negativeWithoutOpposing = result.factors.filter(f => f.weight < 0 && !(f as any)._opposing);
   assertEquals(negativeWithoutOpposing.length, 0, `No factor should be negative without _opposing flag: ${negativeWithoutOpposing.map(f => f.name).join(", ")}`);
 
-  // Score should be non-negative
-  assert(result.score >= 0, `Score should be non-negative, got ${result.score}`);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
 // Test 12: DEFAULT_FACTOR_WEIGHTS count is correct (regression)
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("Regression: DEFAULT_FACTOR_WEIGHTS has expected factor count", () => {
-  const count = Object.keys(DEFAULT_FACTOR_WEIGHTS).length;
-  // Should be 21 factors (17 original + htfPoiAlignment + htfFibPdLiquidity + confluenceStack + pullbackHealth + gamePlanKeyLevel = 22)
-  assert(count >= 21, `Should have at least 21 configurable factors, got ${count}`);
-});
-
 // ═══════════════════════════════════════════════════════════════════════
 // Test 13: FOTSI negative values use _opposing flag and negative weight
 // ═══════════════════════════════════════════════════════════════════════
@@ -375,7 +354,7 @@ Deno.test("Bidirectional: negative FOTSI contributes to opposingFactorCount", ()
 
   // Run once WITHOUT FOTSI
   const resultNoFotsi = analyze(candles, daily, { useFOTSI: false });
-  const opposingWithout = resultNoFotsi.tieredScoring.opposingFactorCount;
+  const opposingWithout = resultNoFotsi.opposingFactorCount;
 
   // Run again WITH opposing FOTSI
   const resultWithFotsi = analyze(candles, daily, {
@@ -388,7 +367,7 @@ Deno.test("Bidirectional: negative FOTSI contributes to opposingFactorCount", ()
       timestamp: Date.now(),
     },
   });
-  const opposingWith = resultWithFotsi.tieredScoring.opposingFactorCount;
+  const opposingWith = resultWithFotsi.opposingFactorCount;
 
   const fotsiFactor = resultWithFotsi.factors.find(f => f.name === "Currency Strength");
   assertExists(fotsiFactor, "Currency Strength factor should exist");
@@ -405,14 +384,14 @@ Deno.test("Bidirectional: negative FOTSI contributes to opposingFactorCount", ()
 // ═══════════════════════════════════════════════════════════════════════
 // Test 15: Conflict counter thresholds are configurable (config passthrough)
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("Config: conflictThresholdRaise and conflictBlockAt have correct defaults in BASE_CONFIG", async () => {
+Deno.test("Config: conflictBlockAt has its default in BASE_CONFIG (the threshold raise was removed with the score)", async () => {
   // This test verifies the UI defaults match the expected values.
   // The actual threshold logic is in bot-scanner, but we verify the config shape here.
   // Read the BotConfigModal to verify defaults
   const modalPath = "src/components/BotConfigModal.tsx";
   try {
     const content = await Deno.readTextFile(modalPath);
-    assert(content.includes("conflictThresholdRaise: 4"), "BASE_CONFIG should have conflictThresholdRaise: 4");
+    assert(!content.includes("conflictThresholdRaise"), "the score threshold raise is gone");
     assert(content.includes("conflictBlockAt: 6"), "BASE_CONFIG should have conflictBlockAt: 6");
   } catch {
     // If file doesn't exist in test context (edge functions), skip gracefully
@@ -423,7 +402,7 @@ Deno.test("Config: conflictThresholdRaise and conflictBlockAt have correct defau
   const scannerPath = "supabase/functions/bot-scanner/index.ts";
   try {
     const content = await Deno.readTextFile(scannerPath);
-    assert(content.includes("risk.conflictThresholdRaise"), "loadConfig should read conflictThresholdRaise from risk section");
+    assert(!content.includes("conflictThresholdRaise"), "the score threshold raise is gone");
     assert(content.includes("risk.conflictBlockAt"), "loadConfig should read conflictBlockAt from risk section");
   } catch {
     console.log("bot-scanner/index.ts not accessible — skipping file check");

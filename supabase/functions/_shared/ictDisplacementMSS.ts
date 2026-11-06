@@ -12,10 +12,9 @@
  *   2. Range >= 1.2x ATR — above-average movement
  *   3. Consecutive displacement candles strengthen the signal
  *
- * Gate modes: "hard" | "soft" | "off"
+ * Gate modes: "hard" (blocks) | "off" (informational). There is no score to adjust.
  *   - hard: MSS without displacement is rejected (trade skipped)
- *   - soft: MSS without displacement gets a score penalty
- *   - off: logs only, no impact
+ *   - off: logs only, no impact (a stored legacy "soft" behaves the same)
  */
 
 import type { Candle } from "./smcAnalysis.ts";
@@ -23,17 +22,13 @@ import type { Candle } from "./smcAnalysis.ts";
 // ─── Configuration ────────────────────────────────────────────────────
 export interface DisplacementMSSConfig {
   enabled: boolean;
-  gateMode: "hard" | "soft" | "off";
+  gateMode: "hard" | "off";
   /** Minimum body/range ratio for a candle to qualify as displacement */
   minBodyRatio: number;
   /** Minimum range/ATR multiple for displacement */
   minRangeATRMult: number;
   /** How many candles before/after the break to check for displacement */
   lookbackCandles: number;
-  /** Score penalty when MSS lacks displacement (soft mode) */
-  noDisplacementPenalty: number;
-  /** Score bonus when MSS has strong displacement */
-  strongDisplacementBonus: number;
 }
 
 export const DEFAULT_DISPLACEMENT_MSS_CONFIG: DisplacementMSSConfig = {
@@ -42,8 +37,6 @@ export const DEFAULT_DISPLACEMENT_MSS_CONFIG: DisplacementMSSConfig = {
   minBodyRatio: 0.6,
   minRangeATRMult: 1.2,
   lookbackCandles: 3,
-  noDisplacementPenalty: -2.0,
-  strongDisplacementBonus: 1.0,
 };
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -62,7 +55,6 @@ export interface MSSValidationResult {
   displacementCandles: DisplacementCandidate[];
   /** Number of consecutive displacement candles in the break direction */
   consecutiveCount: number;
-  scoreAdjustment: number;
   passed: boolean; // gate decision
   reason: string;
 }
@@ -136,7 +128,6 @@ export function validateMSSDisplacement(
     displacementStrength: "none",
     displacementCandles: [],
     consecutiveCount: 0,
-    scoreAdjustment: 0,
     passed: true,
     reason: "",
   };
@@ -194,38 +185,18 @@ export function validateMSSDisplacement(
     displacementStrength = "weak";
   }
 
-  // Gate decision
+  // Gate decision. Only "hard" blocks; any other mode is informational.
   let passed = true;
-  let scoreAdjustment = 0;
-  let reason = "";
-
-  if (config.gateMode === "off") {
-    // Log only — always pass, no score adjustment
-    passed = true;
-    scoreAdjustment = 0;
+  let reason: string;
+  if (config.gateMode !== "hard") {
     reason = hasDisplacement
       ? `[OFF] MSS has ${displacementStrength} displacement (${displacementCandles.length} candles, ${maxConsecutive} consecutive)`
-      : `[OFF] MSS lacks displacement — would have blocked/penalized`;
+      : `[OFF] MSS lacks displacement`;
   } else if (!hasDisplacement) {
-    // No displacement on the break
-    if (config.gateMode === "hard") {
-      passed = false;
-      reason = `MSS BLOCKED: no displacement on ${breakDirection} break at index ${breakIndex}`;
-    } else {
-      // soft mode
-      passed = true;
-      scoreAdjustment = config.noDisplacementPenalty;
-      reason = `MSS lacks displacement: ${config.noDisplacementPenalty} penalty applied`;
-    }
+    passed = false;
+    reason = `MSS BLOCKED: no displacement on ${breakDirection} break at index ${breakIndex}`;
   } else {
-    // Has displacement
-    passed = true;
-    if (displacementStrength === "strong") {
-      scoreAdjustment = config.strongDisplacementBonus;
-      reason = `MSS confirmed with strong displacement (+${config.strongDisplacementBonus})`;
-    } else {
-      reason = `MSS confirmed with ${displacementStrength} displacement`;
-    }
+    reason = `MSS confirmed with ${displacementStrength} displacement`;
   }
 
   return {
@@ -234,7 +205,6 @@ export function validateMSSDisplacement(
     displacementStrength,
     displacementCandles,
     consecutiveCount: maxConsecutive,
-    scoreAdjustment,
     passed,
     reason,
   };
@@ -259,7 +229,6 @@ export function validateRecentMSS(
       displacementStrength: "none",
       displacementCandles: [],
       consecutiveCount: 0,
-      scoreAdjustment: 0,
       passed: true,
       reason: config.enabled ? "No structure breaks to validate" : "Disabled",
     };
@@ -274,7 +243,6 @@ export function validateRecentMSS(
       displacementStrength: "none",
       displacementCandles: [],
       consecutiveCount: 0,
-      scoreAdjustment: config.gateMode === "hard" ? 0 : config.noDisplacementPenalty,
       passed: config.gateMode !== "hard",
       reason: `No ${tradeDirection} structure breaks found`,
     };

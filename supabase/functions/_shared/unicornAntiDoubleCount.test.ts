@@ -1,14 +1,12 @@
 /**
- * unicornAntiDoubleCount.test.ts — Unicorn Tier Promotion & Anti-Double-Count Regression Tests
- * ─────────────────────────────────────────────────────────────────────────────────────────────
- * Verifies that:
- *   1. When Unicorn fires WITH FVG present: FVG keeps full Tier 1 credit, Breaker is zeroed,
- *      Unicorn gets Tier 3 bonus. Net = FVG(2.0) + Unicorn(0.5) > FVG-only(2.0).
- *   2. When Unicorn fires WITHOUT FVG present: Unicorn is promoted to Tier 1 (2.0 pts).
- *   3. Breaker Block is always zeroed when Unicorn fires (no double-counting).
- *   4. Rule 2 (Displacement + FVG) still works correctly.
- *   5. Rule 3 (OB + FVG cap at 3.0) still works correctly.
- *   6. Rule 5 (AMD + Sweep absorbs Judas) still works correctly.
+ * unicornAntiDoubleCount.test.ts — Anti-Double-Count Regression Tests
+ * ─────────────────────────────────────────────────────────────────────
+ * Verifies that (factor strengths only — there is no tiered score):
+ *   1. When Unicorn fires, FVG keeps its strength (not zeroed).
+ *   2. Breaker Block is always zeroed when Unicorn fires (no double-counting).
+ *   3. Rule 2 (Displacement + FVG) still works correctly.
+ *   4. Rule 3 (OB + FVG cap at 3.0) still works correctly.
+ *   5. Rule 5 (AMD + Sweep absorbs Judas) still works correctly.
  *
  * Run: deno test --allow-all supabase/functions/_shared/unicornAntiDoubleCount.test.ts
  */
@@ -199,72 +197,6 @@ Deno.test("REGRESSION: Breaker Block IS zeroed when Unicorn fires", () => {
   }
 });
 
-Deno.test("REGRESSION: Unicorn setup scores HIGHER than FVG-only (never penalizes)", () => {
-  const candles = generateBullishFixture();
-  const dailyCandles = generateBullishDailyCandles();
-  const fixedTime = new Date("2024-03-15T14:30:00Z").getTime();
-
-  // Run with Unicorn enabled
-  const withUnicorn = runConfluenceAnalysis(candles, dailyCandles, {
-    ...baseConfig,
-    useUnicornModel: true,
-    useBreakerBlocks: true,
-  }, undefined, fixedTime);
-
-  // Run with Unicorn disabled (FVG-only baseline)
-  const withoutUnicorn = runConfluenceAnalysis(candles, dailyCandles, {
-    ...baseConfig,
-    useUnicornModel: false,
-    useBreakerBlocks: true,
-  }, undefined, fixedTime);
-
-  const unicornFactor = withUnicorn.factors.find((f: any) => f.name === "Unicorn Model");
-
-  // If Unicorn actually fired, the score with Unicorn must be >= score without
-  if (unicornFactor && unicornFactor.present) {
-    assert(
-      withUnicorn.score >= withoutUnicorn.score,
-      `Unicorn setup score (${withUnicorn.score}) must be >= FVG-only score (${withoutUnicorn.score}). ` +
-      `Unicorn should NEVER penalize. This was the critical bug: Unicorn used to zero FVG (Tier 1, 2pts) ` +
-      `but only contributed Tier 3 (0.5pts), causing a net -1.5pt penalty.`
-    );
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-// TEST: Unicorn Tier 1 promotion when FVG is absent
-// ═══════════════════════════════════════════════════════════════════════
-
-Deno.test("REGRESSION: Unicorn tier classification is correct", () => {
-  const candles = generateBullishFixture();
-  const dailyCandles = generateBullishDailyCandles();
-  const fixedTime = new Date("2024-03-15T14:30:00Z").getTime();
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig, undefined, fixedTime);
-
-  const unicorn = result.factors.find((f: any) => f.name === "Unicorn Model");
-  const fvg = result.factors.find((f: any) => f.name === "Fair Value Gap");
-
-  if (unicorn && unicorn.present) {
-    if (fvg && fvg.present && fvg.weight > 0) {
-      // FVG is present → Unicorn stays Tier 3 (bonus on top)
-      assert(
-        (unicorn as any).tier === 3,
-        `When FVG is present, Unicorn should be Tier 3 (bonus). Got tier=${(unicorn as any).tier}`
-      );
-    } else {
-      // FVG is absent → Unicorn promoted to Tier 1
-      assert(
-        (unicorn as any).tier === 1,
-        `When FVG is absent, Unicorn should be promoted to Tier 1. Got tier=${(unicorn as any).tier}`
-      );
-      assert(
-        unicorn.detail.includes("promoted to Tier 1"),
-        `Promoted Unicorn detail should mention promotion. Got: ${unicorn.detail}`
-      );
-    }
-  }
-});
-
 // ═══════════════════════════════════════════════════════════════════════
 // TEST: Other anti-double-count rules still work correctly
 // ═══════════════════════════════════════════════════════════════════════
@@ -342,42 +274,3 @@ Deno.test("REGRESSION: Rule 5 — AMD + Sweep absorbs Judas", () => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// TEST: Tiered scoring integrity after changes
-// ═══════════════════════════════════════════════════════════════════════
-
-Deno.test("Tiered scoring: tier counts are valid after Unicorn fix", () => {
-  const candles = generateBullishFixture();
-  const dailyCandles = generateBullishDailyCandles();
-  const fixedTime = new Date("2024-03-15T14:30:00Z").getTime();
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig, undefined, fixedTime);
-
-  const ts = result.tieredScoring;
-  assertExists(ts, "tieredScoring must exist");
-
-  // Tier 1 max can be 4 (MS, OB, FVG, PD) or 5 (if Unicorn promoted)
-  assert(ts.tier1Max >= 4 && ts.tier1Max <= 5,
-    `tier1Max should be 4-5, got ${ts.tier1Max}`);
-  assert(ts.tier1Count >= 0 && ts.tier1Count <= ts.tier1Max,
-    `tier1Count (${ts.tier1Count}) must be 0..tier1Max (${ts.tier1Max})`);
-  assert(ts.tier2Count >= 0 && ts.tier2Count <= ts.tier2Max,
-    `tier2Count (${ts.tier2Count}) must be 0..tier2Max (${ts.tier2Max})`);
-  assert(ts.tier3Count >= 0,
-    `tier3Count must be >= 0, got ${ts.tier3Count}`);
-
-  // Score must be a valid percentage
-  assert(result.score >= 0 && result.score <= 100,
-    `Score must be 0-100%, got ${result.score}`);
-});
-
-Deno.test("Tiered scoring: rawScore <= enabledMax", () => {
-  const candles = generateBullishFixture();
-  const dailyCandles = generateBullishDailyCandles();
-  const fixedTime = new Date("2024-03-15T14:30:00Z").getTime();
-  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig, undefined, fixedTime);
-
-  assert(
-    result.rawScore <= result.enabledMax + 0.01,
-    `rawScore (${result.rawScore}) must be <= enabledMax (${result.enabledMax})`
-  );
-});

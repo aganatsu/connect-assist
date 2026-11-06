@@ -121,35 +121,32 @@ Deno.test("validateMSSDisplacement: rejects sluggish break in hard mode", () => 
   assertEquals(result.reason.includes("BLOCKED"), true);
 });
 
-Deno.test("validateMSSDisplacement: penalizes sluggish break in soft mode", () => {
+Deno.test("validateMSSDisplacement: a stored legacy \"soft\" mode is informational, like off", () => {
   const candles = makeCandlesWithSluggishBreak(20);
-  const config: DisplacementMSSConfig = { ...DEFAULT_DISPLACEMENT_MSS_CONFIG, gateMode: "soft" };
+  const config = { ...DEFAULT_DISPLACEMENT_MSS_CONFIG, gateMode: "soft" } as unknown as DisplacementMSSConfig;
   const result = validateMSSDisplacement(candles, 20, "bullish", config);
 
   assertEquals(result.hasDisplacement, false);
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, config.noDisplacementPenalty);
+  assertEquals(result.reason.includes("[OFF]"), true);
 });
 
-Deno.test("validateMSSDisplacement: off mode always passes with no score adjustment", () => {
+Deno.test("validateMSSDisplacement: off mode always passes", () => {
   const candles = makeCandlesWithSluggishBreak(20);
   const config: DisplacementMSSConfig = { ...DEFAULT_DISPLACEMENT_MSS_CONFIG, gateMode: "off" };
   const result = validateMSSDisplacement(candles, 20, "bullish", config);
 
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, 0);
   assertEquals(result.reason.includes("[OFF]"), true);
 });
 
-Deno.test("validateMSSDisplacement: strong displacement gives bonus", () => {
+Deno.test("validateMSSDisplacement: displacement passes hard mode and carries no score field", () => {
   const candles = makeCandlesWithDisplacement(20, "bullish");
-  const config: DisplacementMSSConfig = { ...DEFAULT_DISPLACEMENT_MSS_CONFIG, gateMode: "soft" };
+  const config: DisplacementMSSConfig = { ...DEFAULT_DISPLACEMENT_MSS_CONFIG, gateMode: "hard" };
   const result = validateMSSDisplacement(candles, 20, "bullish", config);
 
-  if (result.displacementStrength === "strong") {
-    assertEquals(result.scoreAdjustment, config.strongDisplacementBonus);
-  }
-  assertEquals(result.passed, true);
+  if (result.hasDisplacement) assertEquals(result.passed, true);
+  assertEquals("scoreAdjustment" in result, false);
 });
 
 Deno.test("validateMSSDisplacement: disabled config always passes", () => {

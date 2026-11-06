@@ -44,7 +44,6 @@ interface TradeReasoning {
   user_id: string;
   symbol: string;
   direction: string;
-  confluence_score: number;
   summary: string;
   factors_json: Array<{
     name: string;
@@ -68,7 +67,6 @@ interface BotConfig {
   riskPerTrade: number;
   maxConcurrent: number;
   maxDailyLoss: number;
-  confluenceThreshold: number;
   maxHoldHours: number;
   cooldownMinutes: number;
   trailingStopEnabled: boolean;
@@ -510,16 +508,8 @@ RULES:
   * Only recommend gate threshold changes when CUSUM has breached AND walk-forward validates
 - ALL suggested_value keys MUST use the EXACT camelCase keys below. NEVER invent keys.
 - Values MUST be numbers, booleans, or valid enum strings. NEVER use vague values like "looser_setting" or "default".
-- tier1Minimum is NOT configurable (hardcoded to 3). Do NOT recommend changing it.
 
 VALID CONFIG KEYS BY CATEGORY:
-
-[factor_weights] suggested_value keys MUST be one of:
-  marketStructure, orderBlock, fairValueGap, premiumDiscountFib, sessionQuality, judasSwing,
-  pdPwLevels, reversalCandle, liquiditySweep, displacement, breakerBlock, unicornModel,
-  smtDivergence, volumeProfile, amdPhase, currencyStrength, dailyBias, htfPoiAlignment,
-  htfFibPdLiquidity, confluenceStack, pullbackHealth, gamePlanKeyLevel, sessionAffinity
-  (values: number 0.0-5.0, where default is typically 1.0-2.5)
 
 [take_profit] keys:
   tpRRRatio (number, R:R target e.g. 1.5-5.0)
@@ -552,8 +542,7 @@ VALID CONFIG KEYS BY CATEGORY:
   maxDrawdown (number, total % drawdown limit)
   maxPortfolioHeat (number, % e.g. 5-15)
   allowSameDirectionStacking (bool)
-  conflictBlockAt (number, correlation threshold to block)
-  conflictThresholdRaise (number)
+  conflictBlockAt (number, opposing-factor count that blocks the trade)
   atrVolatilityMultiplier (number)
   minRR (number, minimum R:R gate e.g. 1.0-3.0)
 
@@ -590,13 +579,10 @@ VALID CONFIG KEYS BY CATEGORY:
   scanIntervalMinutes (number, how often bot scans)
 
 [strategy] keys:
-  confluenceThreshold (number, 20-90, minimum score % to take trade)
   structureLookback (number, candles for structure detection e.g. 30-200)
-  regimeScoringEnabled (bool, adapt weights to market regime)
-  regimeScoringStrength (number, 0.0-1.0, how much regime affects weights)
+  regimeScoringEnabled (bool, classify the market regime; feeds the regime gate)
   htfBiasHardVeto (bool, block trades against HTF bias entirely)
   requireHTFBias (bool)
-  normalizedScoring (bool)
   onlyBuyInDiscount (bool, only long below 50% fib)
   onlySellInPremium (bool, only short above 50% fib)
   useOrderBlocks (bool)
@@ -625,7 +611,7 @@ You MUST respond with valid JSON in this exact format:
   ],
   "recommendations": [
     {
-      "category": "stop_loss|take_profit|factor_weights|session_filter|instrument_filter|risk_management|protection|exit_management|entry_refinement|strategy|timing|general",
+      "category": "stop_loss|take_profit|session_filter|instrument_filter|risk_management|protection|exit_management|entry_refinement|strategy|timing|general",
       "title": "Short actionable title",
       "description": "Detailed explanation with numbers from the data",
       "current_value": { "config_key": "current_value" },
@@ -738,7 +724,6 @@ Avg RR Achieved (winners): ${weeklyMetrics.avgRRAchieved.toFixed(2)}
   prompt += `\n=== CURRENT BOT CONFIGURATION ===\n`;
   prompt += `SL Method: ${config.slMethod}, ATR Multiple: ${config.slATRMultiple}\n`;
   prompt += `TP Method: ${config.tpMethod}, RR Ratio: ${config.tpRatio}\n`;
-  prompt += `Confluence Threshold: ${config.confluenceThreshold}%\n`;
   prompt += `Risk Per Trade: ${config.riskPerTrade}%, Max Concurrent: ${config.maxConcurrent}\n`;
   prompt += `Max Daily Loss: ${config.maxDailyLoss}%, Max Hold Hours: ${config.maxHoldHours}\n`;
   prompt += `Trailing Stop: ${config.trailingStopEnabled ? "ON" : "OFF"}, Break Even: ${config.breakEvenEnabled ? "ON" : "OFF"}\n`;
@@ -1001,7 +986,6 @@ Deno.serve(async (req) => {
         riskPerTrade: configObj.risk?.riskPerTrade || configObj.riskPerTrade || 1.0,
         maxConcurrent: configObj.risk?.maxConcurrent || configObj.maxConcurrent || 3,
         maxDailyLoss: configObj.risk?.maxDailyLoss || configObj.maxDailyLoss || 5.0,
-        confluenceThreshold: configObj.strategy?.confluenceThreshold ?? configObj.strategy?.minConfluenceScore ?? configObj.confluenceThreshold ?? 55,
         maxHoldHours: configObj.risk?.maxHoldHours || configObj.maxHoldHours || 48,
         cooldownMinutes: configObj.risk?.cooldownMinutes || configObj.cooldownMinutes || 60,
         trailingStopEnabled: configObj.exit?.trailingStopEnabled ?? configObj.trailingStopEnabled ?? true,
@@ -1023,7 +1007,7 @@ Deno.serve(async (req) => {
       try {
         const { data: resolvedRejections } = await supabase
           .from("rejected_setups")
-          .select("id, symbol, direction, failed_gates, confluence_score, tier1_count, outcome_status, mfe_pips, mae_pips, tp_hit, sl_hit, regime, session_name, rejected_at, rr_ratio")
+          .select("id, symbol, direction, failed_gates, outcome_status, mfe_pips, mae_pips, tp_hit, sl_hit, regime, session_name, rejected_at, rr_ratio")
           .eq("user_id", userId)
           .in("outcome_status", ["would_have_won", "would_have_lost"])
           .gte("rejected_at", weeklyCutoff)

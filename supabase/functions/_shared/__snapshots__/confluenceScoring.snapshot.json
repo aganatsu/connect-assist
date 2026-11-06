@@ -1,171 +1,131 @@
 {
-  "score": 10.4,
-  "rawScore": 2.5,
   "direction": "short",
   "bias": "bearish",
-  "strongFactorCount": 2,
-  "enabledMax": 24,
-  "tieredScoring": {
-    "tier1Count": 0,
-    "tier1Max": 4,
-    "tier2Count": 2,
-    "tier2Max": 10,
-    "tier3Count": 2,
-    "tier3Max": 10,
-    "tieredScore": 2.5,
-    "tieredMax": 24,
-    "tier1GatePassed": false,
-    "tier1GateReason": "Tier 1 gate FAILED: only 0 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib",
-    "regimeGatePassed": false,
-    "regimeGateReason": "Regime mismatch: strong trend — short entry opposes strong trend (neutral) → -1.1 penalty (conf: 75%)",
-    "spreadGatePassed": true,
-    "spreadGateReason": "Spread OK: 14.3% of ATR",
-    "opposingFactorCount": 1
+  "opposingFactorCount": 1,
+  "regimeGate": {
+    "passed": false,
+    "reason": "Regime mismatch: strong trend — short entry opposes strong trend (neutral) → alignment -1.1 (conf: 75%)"
   },
   "factorSummary": [
     {
       "name": "Market Structure",
       "present": false,
-      "weight": 0,
-      "tier": 1
+      "weight": 0
     },
     {
       "name": "Order Block",
       "present": false,
-      "weight": 2,
-      "tier": 1
+      "weight": 2
     },
     {
       "name": "Fair Value Gap",
       "present": false,
-      "weight": 2,
-      "tier": 1
+      "weight": 2
     },
     {
       "name": "Premium/Discount & Fib",
       "present": false,
-      "weight": 2,
-      "tier": 1
+      "weight": 2
     },
     {
       "name": "Session Quality",
       "present": true,
-      "weight": 1.5,
-      "tier": 2
+      "weight": 1.5
     },
     {
       "name": "Judas Swing",
       "present": false,
-      "weight": 0.75,
-      "tier": 3
+      "weight": 0.75
     },
     {
       "name": "PD/PW Levels",
       "present": true,
-      "weight": 1.5,
-      "tier": 2
+      "weight": 1.5
     },
     {
       "name": "Reversal Candle",
       "present": false,
-      "weight": 1.5,
-      "tier": 2
+      "weight": 1.5
     },
     {
       "name": "Liquidity Sweep",
       "present": false,
-      "weight": 1.5,
-      "tier": 2
+      "weight": 1.5
     },
     {
       "name": "Displacement",
       "present": false,
-      "weight": 1,
-      "tier": 2
+      "weight": 1
     },
     {
       "name": "Breaker Block",
       "present": false,
-      "weight": 1,
-      "tier": 3
+      "weight": 1
     },
     {
       "name": "Unicorn Model",
       "present": false,
-      "weight": 1.5,
-      "tier": 3
+      "weight": 1.5
     },
     {
       "name": "SMT Divergence",
       "present": false,
-      "weight": 1,
-      "tier": 3
+      "weight": 1
     },
     {
       "name": "Volume Profile",
       "present": true,
-      "weight": 0.75,
-      "tier": 3
+      "weight": 0.75
     },
     {
       "name": "AMD Phase",
       "present": false,
-      "weight": 1.5,
-      "tier": 3
+      "weight": 1.5
     },
     {
       "name": "Currency Strength",
       "present": false,
-      "weight": 1.5,
-      "tier": 3
+      "weight": 1.5
     },
     {
       "name": "Daily Bias",
       "present": true,
-      "weight": 1.5,
-      "tier": 3
+      "weight": 1.5
     },
     {
       "name": "Confluence Stack",
       "present": true,
-      "weight": -1.5,
-      "tier": 2
+      "weight": -1.5
     },
     {
       "name": "Pullback Health",
       "present": false,
-      "weight": 0.5,
-      "tier": 2
+      "weight": 0.5
     },
     {
       "name": "HTF POI Alignment",
       "present": false,
-      "weight": 0,
-      "tier": 2
+      "weight": 0
     },
     {
       "name": "HTF Fib + PD + Liquidity",
       "present": false,
-      "weight": 0,
-      "tier": 2
+      "weight": 0
     },
     {
       "name": "GP Key Level Alignment",
       "present": false,
-      "weight": 0,
-      "tier": 2
+      "weight": 0
     },
     {
       "name": "Session Affinity",
       "present": false,
-      "weight": 0,
-      "tier": 3
+      "weight": 0
     },
     {
       "name": "Power of 3 Combo",
       "present": false,
-      "weight": 0,
-      "tier": 3
+      "weight": 0
     },
     {
       "name": "Regime Alignment",
@@ -174,11 +134,6 @@
     },
     {
       "name": "Spread Quality",
-      "present": false,
-      "weight": 0
-    },
-    {
-      "name": "GP Bias Confidence",
       "present": false,
       "weight": 0
     }

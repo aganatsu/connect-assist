@@ -108,7 +108,6 @@ Deno.serve(async (req) => {
           notes: `Auto-imported from bot. Reason: ${pt.signal_reason || "N/A"}. Close: ${pt.close_reason}`,
           reasoning_json: {
             paper_position_id: pt.position_id,
-            signal_score: pt.signal_score,
             signal_reason: pt.signal_reason,
             close_reason: pt.close_reason,
             order_id: pt.order_id,

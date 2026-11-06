@@ -8,9 +8,9 @@
  * v2 additions:
  *   - All 22 gates (matching bot-scanner exactly)
  *   - Direction engine integration (Daily→4H→1H top-down)
- *   - Impulse zone engine with HTF confluence data + Tier 1/2 credits
- *   - effectiveScore = score + fotsiPenalty + impulseZonePenalty
- *   - Bidirectional conflict counter
+ *   - Impulse zone engine with HTF confluence data
+ *   - Bidirectional conflict counter (hard block)
+ *   - No confluence score / tiers: a setup with a direction goes to the gates
  *   - H1/H4 candle fetching per instrument
  *   - HTF POI detection (FVGs, OBs, Breakers on D/4H/1H)
  *   - HTF Fib/PD/Liquidity on D/4H/1H
@@ -76,12 +76,7 @@ import {
   detectZigZagPivots,
   computeFibLevels,
 } from "../_shared/smcAnalysis.ts";
-import {
-  runConfluenceAnalysis,
-  DEFAULT_FACTOR_WEIGHTS,
-  resolveWeightScale,
-  applyWeightScale,
-} from "../_shared/confluenceScoring.ts";
+import { runConfluenceAnalysis } from "../_shared/confluenceScoring.ts";
 import { mapNestedToFlat, RUNTIME_DEFAULTS, applyPairOverrides } from "../_shared/configMapper.ts";
 import {
   detectSession,
@@ -130,9 +125,7 @@ interface BacktestTrade {
   pnlPips: number;
   commission: number;
   closeReason: string;
-  confluenceScore: number;
-  effectiveScore: number;
-  factors: { name: string; present: boolean; weight: number }[];
+  factors: { name: string; present: boolean }[];
   gatesBlocked: string[];
   regime?: string;
   session?: string;
@@ -142,10 +135,8 @@ interface BlockedTrade {
   symbol: string;
   direction: "long" | "short";
   time: string;
-  score: number;
-  effectiveScore: number;
   blockedBy: string[];
-  factors: { name: string; present: boolean; weight: number }[];
+  factors: { name: string; present: boolean }[];
   wouldHaveWon: boolean | null;
   mfe: number;
   mae: number;
@@ -191,9 +182,7 @@ interface OpenPosition {
   size: number;
   entryTime: string;
   entryBarIndex: number;
-  confluenceScore: number;
-  effectiveScore: number;
-  factors: { name: string; present: boolean; weight: number }[];
+  factors: { name: string; present: boolean }[];
   exitFlags: any;
   partialTPFired: boolean;
   currentSL: number;
@@ -548,25 +537,12 @@ function runBacktestSafetyGates(
   }
 
   // Gate 15: Regime gate (from confluenceScoring)
-  if (config.regimeScoringEnabled && analysis.tieredScoring) {
-    const regimeGatePassed = analysis.tieredScoring.regimeGatePassed ?? true;
+  if (config.regimeScoringEnabled && analysis.regimeGate) {
+    const regimeGatePassed = analysis.regimeGate.passed ?? true;
     gates.push({
       passed: regimeGatePassed,
-      reason: analysis.tieredScoring.regimeGateReason || (regimeGatePassed ? "Regime gate passed" : "Regime gate failed"),
+      reason: analysis.regimeGate.reason || (regimeGatePassed ? "Regime gate passed" : "Regime gate failed"),
     });
-  }
-
-  // Gate 16: Tier 1 gate (from confluenceScoring)
-  if (analysis.tieredScoring) {
-    if (config.tier1GateEnabled === false) {
-      gates.push({ passed: true, reason: `Tier 1 gate DISABLED by config (${analysis.tieredScoring.tier1Count} core factors present)` });
-    } else {
-      const tier1Passed = analysis.tieredScoring.tier1GatePassed ?? true;
-      gates.push({
-        passed: tier1Passed,
-        reason: analysis.tieredScoring.tier1GateReason || (tier1Passed ? "Tier 1 gate passed" : "Tier 1 gate failed"),
-      });
-    }
   }
 
   // Gate 17: HTF Bias Alignment
@@ -825,8 +801,6 @@ function processExits(
           pnlPips,
           commission: partialComm,
           closeReason: "partial_tp",
-          confluenceScore: pos.confluenceScore,
-          effectiveScore: pos.effectiveScore,
           factors: pos.factors,
           gatesBlocked: [],
           regime: pos.regime,
@@ -854,8 +828,6 @@ function processExits(
         pnlPips,
         commission: comm,
         closeReason,
-        confluenceScore: pos.confluenceScore,
-        effectiveScore: pos.effectiveScore,
         factors: pos.factors,
         gatesBlocked: [],
         regime: pos.regime,
@@ -980,7 +952,6 @@ interface ResearchAnalytics {
   factorEdge: Record<string, { present: number; absent: number; winRateWhenPresent: number; winRateWhenAbsent: number; edge: number }>;
   regimeBreakdown: Record<string, { trades: number; winRate: number; avgPnl: number; profitFactor: number }>;
   sessionBreakdown: Record<string, { trades: number; winRate: number; avgPnl: number }>;
-  thresholdCurve: { threshold: number; trades: number; winRate: number; profitFactor: number; expectancy: number }[];
   blockedTrades: BlockedTrade[];
   counterfactualStats: BacktestStats | null;
 }
@@ -1060,23 +1031,6 @@ function computeResearchAnalytics(
     data.avgPnl = sesTrades.length > 0 ? sesTrades.reduce((s, t) => s + t.pnl, 0) / sesTrades.length : 0;
   }
 
-  // Threshold curve (what-if analysis at different confluence thresholds)
-  const thresholdCurve: { threshold: number; trades: number; winRate: number; profitFactor: number; expectancy: number }[] = [];
-  for (let thresh = 20; thresh <= 90; thresh += 5) {
-    // Combine actual trades + blocked trades that would have passed at this threshold
-    const qualifiedActual = fullTrades.filter(t => t.effectiveScore >= thresh);
-    const qualifiedBlocked = blockedTrades.filter(bt => bt.effectiveScore >= thresh && bt.wouldHaveWon !== null);
-    const totalAtThresh = qualifiedActual.length + qualifiedBlocked.length;
-    const winsAtThresh = qualifiedActual.filter(t => t.pnl > 0).length + qualifiedBlocked.filter(bt => bt.wouldHaveWon).length;
-    const wr = totalAtThresh > 0 ? (winsAtThresh / totalAtThresh) * 100 : 0;
-    // Approximate PF from actual trades only
-    const gp = qualifiedActual.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
-    const gl = Math.abs(qualifiedActual.filter(t => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0));
-    const pf = gl > 0 ? gp / gl : gp > 0 ? Infinity : 0;
-    const exp = qualifiedActual.length > 0 ? qualifiedActual.reduce((s, t) => s + t.pnl, 0) / qualifiedActual.length : 0;
-    thresholdCurve.push({ threshold: thresh, trades: totalAtThresh, winRate: wr, profitFactor: pf, expectancy: exp });
-  }
-
   // Counterfactual stats (what if ALL blocked trades had been taken)
   let counterfactualStats: BacktestStats | null = null;
   const counterfactualTrades: BacktestTrade[] = [...trades];
@@ -1095,8 +1049,6 @@ function computeResearchAnalytics(
         pnlPips: bt.hypotheticalPnlPips,
         commission: 0,
         closeReason: "counterfactual",
-        confluenceScore: bt.score,
-        effectiveScore: bt.effectiveScore,
         factors: bt.factors,
         gatesBlocked: bt.blockedBy,
         regime: bt.regime,
@@ -1113,7 +1065,6 @@ function computeResearchAnalytics(
     factorEdge,
     regimeBreakdown,
     sessionBreakdown,
-    thresholdCurve,
     blockedTrades,
     counterfactualStats,
   };
@@ -1264,9 +1215,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
     const config = mapConfig(rawConfig || {});
     if (tradingStyle && STYLE_OVERRIDES[tradingStyle]) {
-      const userMinConf = config.minConfluence;
       Object.assign(config, STYLE_OVERRIDES[tradingStyle]);
-      config.minConfluence = userMinConf;
     }
 
     const startMs = new Date(startDate).getTime();
@@ -1306,7 +1255,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedSession: 0,
       skippedDay: 0,
       skippedNoDirection: 0,
-      skippedBelowThreshold: 0,
       skippedGateBlocked: 0,
       skippedNoSLTP: 0,
       skippedImpulseNoZone: 0,
@@ -1314,37 +1262,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedByPreGate: 0,
       signalsGenerated: 0,
       tradesOpened: 0,
-      highestScoreSeen: 0,
-      enabledFactorCount: 0,
-      totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
-      scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
       gateBlockReasons: {} as Record<string, number>,
       confluenceErrors: 0,
       firstConfluenceError: "" as string | undefined,
     };
-
-    // Compute enabledFactorCount
-    const DIAG_TOGGLE_MAP: Record<string, string> = {
-      marketStructure: "enableStructureBreak",
-      orderBlock: "enableOB",
-      fairValueGap: "enableFVG",
-      liquiditySweep: "enableLiquiditySweep",
-      displacement: "useDisplacement",
-      breakerBlock: "useBreakerBlocks",
-      unicornModel: "useUnicornModel",
-      smtDivergence: "useSMT",
-      volumeProfile: "useVolumeProfile",
-      amdPhase: "useAMD",
-      currencyStrength: "useFOTSI",
-      dailyBias: "useDailyBias",
-    };
-    let enabledCount = 0;
-    for (const key of Object.keys(DEFAULT_FACTOR_WEIGHTS)) {
-      const toggleKey = DIAG_TOGGLE_MAP[key];
-      if (toggleKey && (config as any)[toggleKey] === false) continue;
-      enabledCount++;
-    }
-    diagnostics.enabledFactorCount = enabledCount;
 
     // ── Determine this chunk's symbols ──
     const supportedInstruments = instruments.filter((s: string) => SUPPORTED_SYMBOLS[s]);
@@ -1855,9 +1776,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           } catch { /* non-fatal */ }
         }
 
-        // ── Impulse Zone Gate + Credits (mirrors bot-scanner exactly) ──
+        // ── Impulse Zone Gate (mirrors bot-scanner: "hard" skips, anything else is informational) ──
         const izGateMode = config.impulseZoneGateMode || "hard";
-        let impulseZonePenaltyVal = 0;
 
         if (config.impulseZoneEnabled !== false && izGateMode === "hard") {
           if (!izData || !izData.hasZone) {
@@ -1870,185 +1790,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             diagnostics.skippedImpulseNotAtZone++;
             continue;
           }
-          // Price IS at zone — apply bonus
-          impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
-
-          // ── Impulse Zone → Tier 1 Credit ──
-          if (analysis.tieredScoring && izData?.bestZone && !analysis.tieredScoring.tier1GatePassed) {
-            const ts = analysis.tieredScoring;
-            const zonePOIType = izData.bestZone.type;
-            const htfLayers = izData.bestZone.htfLayers || [];
-            const izTier1Credits: string[] = [];
-
-            if (zonePOIType === "fvg") {
-              const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
-              if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
-                fvgFactor.present = true;
-                fvgFactor.weight = 1.0;
-                (fvgFactor as any).tier = 1;
-                fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is FVG`;
-                izTier1Credits.push("FVG (impulse-zone-confirmed)");
-              }
-            } else if (zonePOIType === "ob") {
-              const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
-              if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
-                obFactor.present = true;
-                obFactor.weight = 1.0;
-                (obFactor as any).tier = 1;
-                obFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is OB`;
-                izTier1Credits.push("OB (impulse-zone-confirmed)");
-              }
-            }
-
-            // HTF layer credits
-            if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) {
-              const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
-              if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
-                obFactor.present = true;
-                obFactor.weight = 1.0;
-                (obFactor as any).tier = 1;
-                obFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains OB`;
-                if (!izTier1Credits.includes("OB (impulse-zone-confirmed)")) izTier1Credits.push("OB (HTF-zone-layer)");
-              }
-            }
-            if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) {
-              const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
-              if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
-                fvgFactor.present = true;
-                fvgFactor.weight = 1.0;
-                (fvgFactor as any).tier = 1;
-                fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains FVG`;
-                if (!izTier1Credits.includes("FVG (impulse-zone-confirmed)")) izTier1Credits.push("FVG (HTF-zone-layer)");
-              }
-            }
-
-            if (izTier1Credits.length > 0) {
-              const newTier1Count = ts.tier1Count + izTier1Credits.length;
-              const newPassed = newTier1Count >= 3;
-              const creditPts = izTier1Credits.length * 1.0;
-              const newTieredScore = ts.tieredScore + creditPts;
-              const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-              analysis.tieredScoring = {
-                ...ts,
-                tier1Count: newTier1Count,
-                tier1GatePassed: newPassed,
-                tier1GateReason: newPassed
-                  ? `Tier 1 gate passed (impulse-zone credit): ${newTier1Count} core factors`
-                  : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least 3`,
-                tieredScore: newTieredScore,
-              };
-              analysis.score = newScore;
-            }
-          }
-
-          // ── Impulse Zone → P/D & Fib Credit (Tier 1) ──
-          if (analysis.tieredScoring && izData?.bestZone) {
-            const pdFactor = analysis.factors?.find((f: any) => f.name === "Premium/Discount & Fib");
-            const fibDepth = izData.bestZone.fibDepth ?? 0;
-            if (pdFactor && (!pdFactor.present || pdFactor.weight <= 0) && fibDepth >= 0.5) {
-              pdFactor.present = true;
-              pdFactor.weight = fibDepth >= 0.71 ? 2.0 : fibDepth >= 0.618 ? 1.5 : 1.0;
-              (pdFactor as any).tier = 1;
-              pdFactor.detail += ` | IMPULSE-ZONE CREDIT: zone at ${(fibDepth * 100).toFixed(1)}% Fib depth`;
-              const ts = analysis.tieredScoring;
-              if (ts && ts.tier1Count !== undefined) {
-                const newCount = ts.tier1Count + 1;
-                const newPassed = newCount >= 3;
-                const newTieredScore = ts.tieredScore + pdFactor.weight;
-                const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-                analysis.tieredScoring = { ...ts, tier1Count: newCount, tier1GatePassed: newPassed,
-                  tier1GateReason: newPassed ? `Tier 1 gate passed (impulse-zone credit): ${newCount} core factors` : `Tier 1 gate FAILED: only ${newCount} core factors — need at least 3`,
-                  tieredScore: newTieredScore };
-                analysis.score = newScore;
-              }
-            }
-          }
-
-          // ── Impulse Zone → Confluence Stack Credit (Tier 2) ──
-          if (analysis.tieredScoring && izData?.bestZone) {
-            const stackFactor = analysis.factors?.find((f: any) => f.name === "Confluence Stack");
-            const srConfirmed = izData.bestZone.srConfirmed ?? false;
-            const htfLayers = izData.bestZone.htfLayers || [];
-            const stackLayers = (srConfirmed ? 1 : 0) + htfLayers.length;
-            if (stackFactor && (!stackFactor.present || stackFactor.weight <= 0) && stackLayers >= 2) {
-              stackFactor.present = true;
-              stackFactor.weight = stackLayers >= 3 ? 1.5 : 1.0;
-              stackFactor.detail += ` | IMPULSE-ZONE CREDIT: ${stackLayers}-layer confluence`;
-              const ts = analysis.tieredScoring;
-              if (ts && ts.tier2Count !== undefined) {
-                const newTieredScore = ts.tieredScore + stackFactor.weight;
-                const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-                analysis.tieredScoring = { ...ts, tier2Count: ts.tier2Count + 1, tieredScore: newTieredScore };
-                analysis.score = newScore;
-              }
-            }
-          }
-
-          // ── Impulse Zone → HTF POI Alignment Credit (Tier 2) ──
-          if (analysis.tieredScoring && izData?.bestZone && izData.bestZone.priceAtZone) {
-            const htfPoiFactor = analysis.factors?.find((f: any) => f.name === "HTF POI Alignment");
-            const htfLayers = izData.bestZone.htfLayers || [];
-            const hasHTFOBorFVG = htfLayers.some((l: string) => l.toLowerCase().includes("ob") || l.toLowerCase().includes("fvg"));
-            if (htfPoiFactor && (!htfPoiFactor.present || htfPoiFactor.weight <= 0) && hasHTFOBorFVG) {
-              let boost = 0;
-              if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) boost += 0.8;
-              if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) boost += 0.7;
-              boost = Math.min(2.0, boost);
-              htfPoiFactor.present = true;
-              htfPoiFactor.weight = boost;
-              htfPoiFactor.detail += ` | IMPULSE-ZONE CREDIT: zone overlaps ${htfLayers.join(", ")}`;
-              const ts = analysis.tieredScoring;
-              if (ts && ts.tier2Count !== undefined) {
-                const newTieredScore = ts.tieredScore + boost;
-                const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
-                analysis.tieredScoring = { ...ts, tier2Count: ts.tier2Count + 1, tieredScore: newTieredScore };
-                analysis.score = newScore;
-              }
-            }
-          }
-        } else if (config.impulseZoneEnabled !== false && izGateMode === "soft") {
-          // SOFT MODE: penalty/bonus
-          if (izData) {
-            if (!izData.hasZone) {
-              impulseZonePenaltyVal = -(config.impulseZonePenalty ?? 2.0);
-            } else if (izData.bestZone?.priceAtZone) {
-              impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
-            }
-          }
         }
 
-        // ── FOTSI Penalty (soft — not a hard block, just score reduction) ──
-        let fotsiPenalty = 0;
-        if (fotsiForDate && config.useFOTSI !== false && analysis.direction) {
-          const currencies = parsePairCurrencies(symbol);
-          if (currencies) {
-            const [base, quote] = currencies;
-            const dir = analysis.direction === "long" ? "BUY" : "SELL";
-            const veto = checkOverboughtOversoldVeto(base, quote, dir as "BUY" | "SELL", fotsiForDate.strengths, fotsiForDate.series);
-            if (veto.vetoed) fotsiPenalty = -2.0;
-          }
-        }
-
-        // ── Effective Score ──
-        const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal;
-
-        // ── Bidirectional Conflict Counter ──
-        const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
-        let conflictAdjustedMinConfluence = config.minConfluence;
-        let conflictHardBlock = false;
-        if (opposingCount >= config.conflictBlockAt) {
-          conflictHardBlock = true;
-        } else if (opposingCount >= config.conflictThresholdRaise) {
-          conflictAdjustedMinConfluence = config.minConfluence + 10;
-        }
-
-        // ── Score distribution tracking ──
-        if (effectiveScore < 20) diagnostics.scoreDistribution.below20++;
-        else if (effectiveScore < 40) diagnostics.scoreDistribution.below40++;
-        else if (effectiveScore < 60) diagnostics.scoreDistribution.below60++;
-        else if (effectiveScore < 80) diagnostics.scoreDistribution.below80++;
-        else diagnostics.scoreDistribution.above80++;
-        if (effectiveScore > diagnostics.highestScoreSeen) diagnostics.highestScoreSeen = effectiveScore;
+        // ── Bidirectional Conflict Counter: too many opposing factors = hard block ──
+        const opposingCount = analysis.opposingFactorCount ?? 0;
+        const conflictHardBlock = opposingCount >= config.conflictBlockAt;
 
         // ── Conflict hard block ──
         if (conflictHardBlock) {
@@ -2057,20 +1803,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             const cf = computeCounterfactual(symbol, analysis.direction, candle.close, analysis.stopLoss, analysis.takeProfit, entryCandles, i + 1, 200);
             blockedTrades.push({
               symbol, direction: analysis.direction, time: candle.datetime,
-              score: analysis.score, effectiveScore,
               blockedBy: [`Conflict block: ${opposingCount} opposing factors`],
-              factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
+              factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present })),
               ...cf,
               regime: analysis.regimeInfo?.regime || "unknown",
               session: session.name,
             });
           }
-          continue;
-        }
-
-        // ── Threshold check ──
-        if (effectiveScore < conflictAdjustedMinConfluence) {
-          diagnostics.skippedBelowThreshold++;
           continue;
         }
 
@@ -2103,9 +1842,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             const cf = computeCounterfactual(symbol, analysis.direction, candle.close, analysis.stopLoss, analysis.takeProfit, entryCandles, i + 1, 200);
             blockedTrades.push({
               symbol, direction: analysis.direction, time: candle.datetime,
-              score: analysis.score, effectiveScore,
               blockedBy: failedGates.map(g => g.reason),
-              factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
+              factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present })),
               ...cf,
               regime: analysis.regimeInfo?.regime || "unknown",
               session: session.name,
@@ -2166,9 +1904,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           size: posSize,
           entryTime: candle.datetime,
           entryBarIndex: i,
-          confluenceScore: analysis.score,
-          effectiveScore,
-          factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
+          factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present })),
           exitFlags: {
             breakEven: config.breakEvenEnabled,
             breakEvenPips: config.breakEvenPips,
@@ -2257,8 +1993,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           pnlPips,
           commission: comm,
           closeReason: "end_of_test",
-          confluenceScore: pos.confluenceScore,
-          effectiveScore: pos.effectiveScore,
           factors: pos.factors,
           gatesBlocked: [],
           regime: pos.regime,
@@ -2310,7 +2044,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         factorEdge: researchAnalytics.factorEdge,
         regimeBreakdown: researchAnalytics.regimeBreakdown,
         sessionBreakdown: researchAnalytics.sessionBreakdown,
-        thresholdCurve: researchAnalytics.thresholdCurve,
         blockedTradeCount: blockedTrades.length,
         blockedTrades: researchAnalytics.blockedTrades.slice(0, maxBlockedStored),
         counterfactualStats: researchAnalytics.counterfactualStats,

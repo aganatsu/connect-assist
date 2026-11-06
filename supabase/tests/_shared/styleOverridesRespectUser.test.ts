@@ -107,7 +107,7 @@ Deno.test("the source lists match the mapper's own ?? chains", () => {
   const missing: string[] = [];
   for (const [key, declared] of Object.entries(STYLE_PROTECTED_SOURCES)) {
     const m = mapper.match(new RegExp(`^    ${key}: (.+?),\\s*$`, "m"));
-    if (!m) continue; // minConfluence uses an IIFE; covered by its own case below
+    if (!m) continue;
     const sources = [...m[1].matchAll(/\b(strategy|entry|exit|risk)\.(\w+)/g)].map((x) => `${x[1]}.${x[2]}`);
     const roots = [...m[1].matchAll(/\braw\.(\w+)/g)].map((x) => x[1]);
     for (const src of [...sources, ...roots]) {
@@ -117,13 +117,3 @@ Deno.test("the source lists match the mapper's own ?? chains", () => {
   assertEquals(missing, [], "sources read by the mapper but not declared here");
 });
 
-Deno.test("minConfluence's IIFE sources are declared too", () => {
-  // It resolves inside an arrow-IIFE, so the regex above skips it. Assert its
-  // real sources explicitly rather than leaving a hole.
-  const i = mapper.indexOf("minConfluence: (() => {");
-  const block = mapper.slice(i, mapper.indexOf("})(),", i));
-  for (const src of ["strategy.confluenceThreshold", "strategy.minConfluenceScore"]) {
-    assert(block.includes(src), `mapper should read ${src}`);
-    assert(STYLE_PROTECTED_SOURCES.minConfluence.includes(src), `must declare ${src}`);
-  }
-});

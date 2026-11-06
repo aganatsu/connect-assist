@@ -123,7 +123,7 @@ export function buildEntryTelemetry(i: EntryTelemetryInput): EntryTelemetry {
  */
 export function entryConfigSnapshot(cfg: Record<string, unknown>): Record<string, unknown> {
   const pick = [
-    "tradingStyle", "tpRatio", "minZoneScore", "minConfluence", "marketFillAtZone",
+    "tradingStyle", "tpRatio", "minZoneScore", "marketFillAtZone",
     "limitOrderEnabled", "impulseZoneGateMode", "requireUnifiedZone",
     "breakEvenEnabled", "trailingStopEnabled", "partialTPEnabled",
     "maxHoldEnabled", "maxHoldHours", "riskPerTrade", "minStopPips",
@@ -141,7 +141,7 @@ export function entryConfigSnapshot(cfg: Record<string, unknown>): Record<string
  * recalculated here — a recomputed field would describe a different moment.
  */
 export function entryDecisionSnapshot(i: {
-  zoneScore?: number | null; confluenceScore?: number | null;
+  zoneScore?: number | null;
   directionVerdict?: string | null; directionConfidence?: number | null;
   zoneTimeframe?: string | null; zoneHigh?: number | null; zoneLow?: number | null;
   zoneType?: string | null; impulseDirection?: string | null;

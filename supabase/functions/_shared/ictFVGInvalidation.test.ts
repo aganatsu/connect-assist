@@ -154,25 +154,24 @@ Deno.test("validateFVG: Rule of 2 disabled — two touches still valid", () => {
   assertEquals(result.passed, true);
 });
 
-Deno.test("validateFVG: soft mode penalizes invalidated FVG", () => {
+Deno.test("validateFVG: a stored legacy \"soft\" mode is informational, like off", () => {
   const fvg = makeBullishFVG(5);
   const candles = makeCandlesWithInvalidation(5);
-  const config: FVGInvalidationConfig = { ...DEFAULT_FVG_INVALIDATION_CONFIG, gateMode: "soft" };
+  const config = { ...DEFAULT_FVG_INVALIDATION_CONFIG, gateMode: "soft" } as unknown as FVGInvalidationConfig;
   const result = validateFVG(fvg, candles, config);
 
   assertEquals(result.status, "invalidated");
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, config.invalidatedPenalty);
+  assertEquals(result.reason.includes("[OFF]"), true);
 });
 
-Deno.test("validateFVG: off mode always passes with no score adjustment", () => {
+Deno.test("validateFVG: off mode always passes", () => {
   const fvg = makeBullishFVG(5);
   const candles = makeCandlesWithInvalidation(5);
   const config: FVGInvalidationConfig = { ...DEFAULT_FVG_INVALIDATION_CONFIG, gateMode: "off" };
   const result = validateFVG(fvg, candles, config);
 
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, 0);
   assertEquals(result.reason.includes("[OFF]"), true);
 });
 

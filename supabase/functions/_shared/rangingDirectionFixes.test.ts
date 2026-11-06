@@ -377,17 +377,6 @@ Deno.test("Fix 5: Ranging + low-confidence regime → no HTF Tier 1 promotions",
   }
 });
 
-Deno.test("Fix 5: source contains _skipHTFPromotion guard", () => {
-  const source = Deno.readTextFileSync(
-    new URL("./confluenceScoring.ts", import.meta.url).pathname
-  );
-
-  assertStringIncludes(source, "_skipHTFPromotion");
-  assertStringIncludes(source, 'structure.trend === "ranging"');
-  assertStringIncludes(source, "regimeInfo?.confidence");
-  assertStringIncludes(source, "0.70");
-});
-
 // ═══════════════════════════════════════════════════════════════════════
 // REGRESSION: Trending markets should NOT be affected by these fixes
 // ═══════════════════════════════════════════════════════════════════════

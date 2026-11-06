@@ -35,8 +35,9 @@
  *   - summary: human-readable explanation
  *
  * INTEGRATION:
- *   Shadow mode: logs conviction score alongside trade decisions.
- *   Active mode: gates impulse-zone credit based on conviction threshold.
+ *   Telemetry: the conviction and its granted/reduced/revoked label are logged
+ *   alongside trade decisions. The impulse-zone credit they were built to gate
+ *   (and the confluence score it fed) no longer exist.
  *
  * PERSISTENCE:
  *   Uses kv_cache table (same pattern as FOTSI cache).
@@ -102,8 +103,6 @@ export interface ConvictionResult {
   consecutiveDeclines: number;
   /** Whether the thesis is "dying" (conviction trending down) */
   thesisDegrading: boolean;
-  /** Score adjustment to apply (negative when conviction is low) */
-  scoreAdjustment: number;
 }
 
 /** Input data from the current scan cycle (all pre-computed, zero cost) */
@@ -118,7 +117,7 @@ export interface ConvictionInput {
     confidence: number;
     bias: string; // "bullish" | "bearish" | "neutral"
   } | null;
-  /** Opposing factor count from tieredScoring */
+  /** Opposing factor count from the confluence factor analysis */
   opposingFactorCount: number;
   /** FOTSI alignment for this pair */
   fotsiAlignment: {
@@ -137,7 +136,7 @@ export interface ConvictionInput {
 export interface ConvictionConfig {
   /** Conviction below which impulse credit is REVOKED (default: 40) */
   revokeThreshold: number;
-  /** Conviction below which impulse credit is REDUCED (score +5% threshold) (default: 60) */
+  /** Conviction below which the label becomes REDUCED (default: 60) */
   reduceThreshold: number;
   /** How much each opposing evidence source decays conviction per cycle (default: 8) */
   decayPerOpposingSource: number;
@@ -151,10 +150,6 @@ export interface ConvictionConfig {
   acceleratedDecayAfter: number;
   /** Multiplier for accelerated decay (default: 1.5) */
   acceleratedDecayMultiplier: number;
-  /** Score penalty when conviction is in "reduced" zone (default: 5) */
-  reducedScorePenalty: number;
-  /** Score penalty when conviction is in "revoked" zone (default: 10) */
-  revokedScorePenalty: number;
 }
 
 export const DEFAULT_CONVICTION_CONFIG: ConvictionConfig = {
@@ -166,8 +161,6 @@ export const DEFAULT_CONVICTION_CONFIG: ConvictionConfig = {
   maxHistory: 12,
   acceleratedDecayAfter: 3,
   acceleratedDecayMultiplier: 1.5,
-  reducedScorePenalty: 5,
-  revokedScorePenalty: 10,
 };
 
 // ─── Core Logic ──────────────────────────────────────────────────────
@@ -357,15 +350,12 @@ export function updateConviction(
 
   // Determine impulse credit decision
   let impulseCreditDecision: ImpulseCreditDecision = "granted";
-  let scoreAdjustment = 0;
 
   if (history.length >= config.minCyclesForRevoke) {
     if (newConviction <= config.revokeThreshold) {
       impulseCreditDecision = "revoked";
-      scoreAdjustment = -config.revokedScorePenalty;
     } else if (newConviction <= config.reduceThreshold) {
       impulseCreditDecision = "reduced";
-      scoreAdjustment = -config.reducedScorePenalty;
     }
   }
 
@@ -389,7 +379,6 @@ export function updateConviction(
     cycleCount: history.length,
     consecutiveDeclines,
     thesisDegrading,
-    scoreAdjustment,
   };
 
   return { state: updatedState, result };

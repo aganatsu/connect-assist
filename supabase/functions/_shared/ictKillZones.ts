@@ -21,23 +21,18 @@
  * The existing sessions.ts handles basic session detection. This module adds
  * ICT-specific kill zone granularity and the Silver Bullet windows.
  *
- * Gate modes: "hard" | "soft" | "off"
+ * Gate modes: "hard" (blocks) | "off" (informational). There is no score to adjust.
  */
 
 // ─── Configuration ────────────────────────────────────────────────────
 export interface ICTKillZoneConfig {
   enabled: boolean;
-  gateMode: "hard" | "soft" | "off";
+  /** "hard" blocks dead-zone / outside-kill-zone entries; anything else is informational. */
+  gateMode: "hard" | "off";
   /** Allow Silver Bullet windows as valid entry times */
   enableSilverBullet: boolean;
   /** Allow PM session entries */
   enablePMSession: boolean;
-  /** Penalty for entries outside kill zones (soft mode) */
-  outsideKZPenalty: number;
-  /** Bonus for entries during prime kill zone time */
-  primeKZBonus: number;
-  /** Penalty for entries during dead zones (lunch, late Asian) */
-  deadZonePenalty: number;
 }
 
 export const DEFAULT_ICT_KILLZONE_CONFIG: ICTKillZoneConfig = {
@@ -45,9 +40,6 @@ export const DEFAULT_ICT_KILLZONE_CONFIG: ICTKillZoneConfig = {
   gateMode: "off",
   enableSilverBullet: true,
   enablePMSession: true,
-  outsideKZPenalty: -1.0,
-  primeKZBonus: 0.5,
-  deadZonePenalty: -2.0,
 };
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -70,7 +62,6 @@ export interface ICTKillZoneResult {
   isDeadZone: boolean;
   isPrime: boolean; // highest probability window
   nyHour: number;
-  scoreAdjustment: number;
   passed: boolean;
   reason: string;
 }
@@ -185,7 +176,6 @@ export function evaluateICTKillZone(
       isDeadZone: false,
       isPrime: false,
       nyHour: 0,
-      scoreAdjustment: 0,
       passed: true,
       reason: "ICT Kill Zone filter disabled",
     };
@@ -208,47 +198,23 @@ export function evaluateICTKillZone(
     isAllowed = false;
   }
 
-  // Gate decision
+  // Gate decision. Only "hard" blocks; any other mode is informational.
   let passed = true;
-  let scoreAdjustment = 0;
-  let reason = "";
-
-  if (config.gateMode === "off") {
-    passed = true;
-    scoreAdjustment = 0;
-    if (detection.isDeadZone) {
-      reason = `[OFF] DEAD ZONE: ${detection.label} — would have penalized (${config.deadZonePenalty})`;
-    } else if (detection.isPrime) {
-      reason = `[OFF] PRIME: ${detection.label} — would have applied +${config.primeKZBonus}`;
-    } else if (!isAllowed) {
-      reason = `[OFF] Outside KZ: ${detection.label} — would have blocked/penalized`;
-    } else {
-      reason = `[OFF] In KZ: ${detection.label}`;
-    }
+  let reason: string;
+  if (config.gateMode !== "hard") {
+    reason = detection.isDeadZone ? `[OFF] DEAD ZONE: ${detection.label}`
+      : !isAllowed ? `[OFF] Outside KZ: ${detection.label}`
+      : detection.isPrime ? `[OFF] PRIME: ${detection.label}`
+      : `[OFF] In KZ: ${detection.label}`;
   } else if (detection.isDeadZone) {
-    if (config.gateMode === "hard") {
-      passed = false;
-      reason = `DEAD ZONE BLOCKED: ${detection.label} — no institutional flow`;
-    } else {
-      passed = true;
-      scoreAdjustment = config.deadZonePenalty;
-      reason = `Dead zone: ${detection.label} (${config.deadZonePenalty} penalty)`;
-    }
+    passed = false;
+    reason = `DEAD ZONE BLOCKED: ${detection.label} — no institutional flow`;
   } else if (!isAllowed) {
-    if (config.gateMode === "hard") {
-      passed = false;
-      reason = `Outside ICT Kill Zone: ${detection.label}`;
-    } else {
-      passed = true;
-      scoreAdjustment = config.outsideKZPenalty;
-      reason = `Outside KZ: ${detection.label} (${config.outsideKZPenalty} penalty)`;
-    }
+    passed = false;
+    reason = `Outside ICT Kill Zone: ${detection.label}`;
   } else if (detection.isPrime) {
-    passed = true;
-    scoreAdjustment = config.primeKZBonus;
-    reason = `Prime Kill Zone: ${detection.label} (+${config.primeKZBonus})`;
+    reason = `Prime Kill Zone: ${detection.label}`;
   } else {
-    passed = true;
     reason = `In Kill Zone: ${detection.label}`;
   }
 
@@ -260,7 +226,6 @@ export function evaluateICTKillZone(
     isDeadZone: detection.isDeadZone,
     isPrime: detection.isPrime,
     nyHour: detection.nyHour,
-    scoreAdjustment,
     passed,
     reason,
   };

@@ -33,9 +33,8 @@ const base = (over: Partial<PendingOrder> = {}): PendingOrder => ({
   take_profit: 1.104, size: 1, entry_zone_type: "IZ-OB", entry_zone_low: 1.099,
   entry_zone_high: 1.1012, status: "pending", expiry_minutes: 480,
   expires_at: "2026-09-30T18:00:00Z", fill_reason: null, cancel_reason: null,
-  filled_at: null, resolved_at: null, signal_reason: null, signal_score: 44,
-  setup_type: null, setup_confidence: null, from_watchlist: false, staged_cycles: 0,
-  staged_initial_score: null, exit_flags: null, placed_at: "2026-09-30T10:00:00Z",
+  filled_at: null, resolved_at: null, signal_reason: null,
+  setup_type: null, setup_confidence: null, exit_flags: null, placed_at: "2026-09-30T10:00:00Z",
   created_at: "2026-09-30T10:00:00Z", updated_at: "2026-09-30T10:00:00Z",
   ...over,
 });

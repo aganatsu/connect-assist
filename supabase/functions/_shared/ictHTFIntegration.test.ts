@@ -122,7 +122,6 @@ Deno.test("ictHTFIntegration: returns pass when disabled", () => {
   const dailyCandles = makeDailyWithBearishDisplacement();
   const result = runICTHTFAnalysis(null, dailyCandles, 1.1900, "short", null, { ictHTFEnabled: false });
   assertEquals(result.passed, true);
-  assertEquals(result.scoreAdjustment, 0);
 });
 
 Deno.test("ictHTFIntegration: returns pass when gate mode is off", () => {
@@ -161,20 +160,19 @@ Deno.test("ictHTFIntegration: weekly bias misaligned blocks in hard mode", () =>
   assert(result.reason.includes("FAIL"));
 });
 
-Deno.test("ictHTFIntegration: weekly bias misaligned applies penalty in soft mode", () => {
+Deno.test("ictHTFIntegration: a stored legacy \"soft\" mode never blocks, and records the misalignment", () => {
   const weeklyCandles = makeBullishTrendWeekly(1.0000, 16); // Bullish weekly
   const dailyCandles = makeDailyWithBearishDisplacement();
   const currentPrice = dailyCandles[dailyCandles.length - 1].close;
 
   const result = runICTHTFAnalysis(weeklyCandles, dailyCandles, currentPrice, "short", null, {
-    ictHTFGateMode: "soft",
+    ictHTFGateMode: "soft" as unknown as "off",
     ictWeeklyBiasRequired: true,
   });
 
-  // Soft mode always passes
   assertEquals(result.passed, true);
-  // But should have a negative score adjustment
-  assert(result.scoreAdjustment < 0, `Score adjustment should be negative, got ${result.scoreAdjustment}`);
+  assertEquals(result.weeklyAligned, false);
+  assert(result.details.some((d) => d.includes("Weekly bias misaligned")));
 });
 
 Deno.test("ictHTFIntegration: containment check passes when zone inside Daily OB", () => {
@@ -236,19 +234,19 @@ Deno.test("ictHTFIntegration: no weekly candles — skips weekly check gracefull
   assert(result.details.some(d => d.includes("not available")));
 });
 
-Deno.test("ictHTFIntegration: full alignment gives score bonus", () => {
+Deno.test("ictHTFIntegration: full alignment is recorded in the details", () => {
   const weeklyCandles = makeBearishTrendWeekly(1.3000, 16);
   const dailyCandles = makeDailyWithBearishDisplacement();
   const currentPrice = dailyCandles[dailyCandles.length - 1].close;
 
   const result = runICTHTFAnalysis(weeklyCandles, dailyCandles, currentPrice, "short", null, {
-    ictHTFGateMode: "soft",
-    ictHTFAlignedBonus: 2.0,
+    ictHTFGateMode: "off",
   });
 
-  if (result.weeklyAligned && result.dailyOB?.isValid) {
-    assert(result.scoreAdjustment > 0, `Should have positive score adjustment, got ${result.scoreAdjustment}`);
+  if (result.weeklyAligned && result.zoneContained && result.dailyOB?.isValid) {
+    assert(result.details.some((d) => d.includes("Full ICT HTF alignment")));
   }
+  assertEquals("scoreAdjustment" in result, false);
 });
 
 Deno.test("ictHTFIntegration: result structure is complete", () => {
@@ -260,7 +258,6 @@ Deno.test("ictHTFIntegration: result structure is complete", () => {
   assertExists(result.passed);
   assertExists(result.weeklyAligned);
   assertExists(result.zoneContained);
-  assertExists(result.scoreAdjustment);
   assertExists(result.reason);
   assertExists(result.details);
   assert(Array.isArray(result.details));
@@ -268,8 +265,6 @@ Deno.test("ictHTFIntegration: result structure is complete", () => {
 
 Deno.test("ictHTFIntegration: default config values are sensible", () => {
   assertEquals(DEFAULT_ICT_HTF_CONFIG.ictHTFEnabled, true);
-  assertEquals(DEFAULT_ICT_HTF_CONFIG.ictHTFGateMode, "soft");
-  assertEquals(DEFAULT_ICT_HTF_CONFIG.ictHTFAlignedBonus, 2.0);
-  assertEquals(DEFAULT_ICT_HTF_CONFIG.ictHTFMisalignedPenalty, 3.0);
+  assertEquals(DEFAULT_ICT_HTF_CONFIG.ictHTFGateMode, "off");
   assertEquals(DEFAULT_ICT_HTF_CONFIG.ictHTFMinContainment, 50);
 });

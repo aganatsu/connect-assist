@@ -197,7 +197,6 @@ export interface ShadowIntent {
   direction: string;
   limit: number;
   pipSize: number;
-  score: number;
   lastPrice: number;
   stop: number;
   target: number;
@@ -229,7 +228,7 @@ export async function writeShadowIntents(
   for (const it of intents) {
     try {
       const { data: stale, error: staleErr } = await supabase.from("pending_orders")
-        .select("order_id, entry_price, signal_score, signal_id")
+        .select("order_id, entry_price, signal_id")
         .eq("user_id", userId).eq("bot_id", SHADOW_BOT_ID)
         .eq("symbol", it.symbol).eq("direction", it.direction)
         .eq("status", "pending");
@@ -237,7 +236,7 @@ export async function writeShadowIntents(
       const { same, moved } = splitByLevel<any>(stale ?? [], it.limit, it.pipSize);
       if (same.length > 0) {
         const { error: refErr } = await supabase.from("pending_orders").update({
-          signal_score: it.score, current_price: it.lastPrice,
+          current_price: it.lastPrice,
           stop_loss: it.stop, take_profit: it.target, size: it.size,
         }).in("order_id", same.map((o: any) => o.order_id)).eq("user_id", userId).eq("bot_id", SHADOW_BOT_ID);
         if (refErr) throw new Error(`refresh: ${refErr.message}`);
@@ -246,7 +245,7 @@ export async function writeShadowIntents(
       }
       const supersede = moved.map((o: any) => ({
         order_id: o.order_id as string,
-        cancel_reason: `Superseded by new setup (score ${Number(it.score).toFixed(1)} vs old ${moved[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${it.limit} vs old ${moved[0].entry_price})`,
+        cancel_reason: `Superseded by new setup (entry ${it.limit} vs old ${moved[0].entry_price})`,
       }));
       // Pairing, read off A's records for this setup after A acted on it.
       it.shadowCtx.pairedSignalId = typeof it.cap?.signal_id === "string" ? it.cap.signal_id : null;

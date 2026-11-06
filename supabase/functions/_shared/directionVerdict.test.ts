@@ -347,10 +347,12 @@ Deno.test("game plan below threshold (50%) → no effect", () => {
   assertEquals(withLowConf.confidence, withoutGP.confidence);
 });
 
-// ─── SCORE ADJUSTMENT TESTS ─────────────────────────────────────────
+// ─── NO SCORE ADJUSTMENT ────────────────────────────────────────────
+// The verdict decides direction and whether to block. It no longer produces a
+// score modifier: the confluence score was removed.
 
-Deno.test("high confidence → positive score adjustment", () => {
-  const result = computeDirectionVerdict(makeInput({
+Deno.test("the verdict carries no score adjustment; a weak spine against strong context still blocks or goes neutral", () => {
+  const strong = computeDirectionVerdict(makeInput({
     confirmedTrend: { trend: "bullish", reason: "Fib-confirmed" },
     simpleDirection: {
       direction: "long", bias: "bullish", biasSource: "daily",
@@ -358,13 +360,10 @@ Deno.test("high confidence → positive score adjustment", () => {
     },
     regime: { regime: "strong_trend", confidence: 0.85, directionalBias: "bullish" },
   }));
-  assert(result.scoreAdjustment > 0, `Expected positive adj, got ${result.scoreAdjustment}`);
-  assert(result.scoreAdjustment <= DEFAULT_VERDICT_CONFIG.maxBonus,
-    `Should not exceed maxBonus: ${result.scoreAdjustment} <= ${DEFAULT_VERDICT_CONFIG.maxBonus}`);
-});
+  assertEquals("scoreAdjustment" in strong, false);
+  assertEquals(strong.verdict, "long");
 
-Deno.test("low confidence → blocked or negative score adjustment", () => {
-  const result = computeDirectionVerdict(makeInput({
+  const weak = computeDirectionVerdict(makeInput({
     simpleDirection: {
       direction: "long", bias: "bullish", biasSource: "4h",
       h4Retrace: false, h4ChochAgainst: false, h1Confirmed: false, reason: "Weak",
@@ -372,21 +371,8 @@ Deno.test("low confidence → blocked or negative score adjustment", () => {
     regime: { regime: "strong_trend", confidence: 0.80, directionalBias: "bearish" },
     weeklyBias: { bias: "bearish", confidence: 70 },
   }));
-  // When context strongly opposes a weak spine, the trade gets blocked (verdict=neutral, adj=0)
-  // OR if not blocked, the score adjustment should be negative
-  if (result.verdict === "neutral") {
-    assertEquals(result.shouldBlock, true);
-    assertEquals(result.scoreAdjustment, 0); // neutral → no adjustment (trade won't happen)
-  } else {
-    assert(result.scoreAdjustment < 0, `Expected negative adj, got ${result.scoreAdjustment}`);
-    assert(result.scoreAdjustment >= DEFAULT_VERDICT_CONFIG.maxPenalty,
-      `Should not exceed maxPenalty: ${result.scoreAdjustment} >= ${DEFAULT_VERDICT_CONFIG.maxPenalty}`);
-  }
-});
-
-Deno.test("neutral verdict → zero score adjustment", () => {
-  const result = computeDirectionVerdict(makeInput());
-  assertEquals(result.scoreAdjustment, 0);
+  if (weak.verdict === "neutral") assertEquals(weak.shouldBlock, true);
+  assert(weak.confidence < strong.confidence);
 });
 
 // ─── AGREEMENT TESTS ─────────────────────────────────────────────────
@@ -422,7 +408,7 @@ Deno.test("mixed sources → agreement between 0 and 1", () => {
 
 // ─── FULL SCENARIO TESTS ─────────────────────────────────────────────
 
-Deno.test("ideal bullish setup: all aligned → long, high confidence, positive adj", () => {
+Deno.test("ideal bullish setup: all aligned → long, high confidence", () => {
   const result = computeDirectionVerdict(makeInput({
     confirmedTrend: { trend: "bullish", reason: "Fib-confirmed bullish MSB on Daily" },
     simpleDirection: {
@@ -436,7 +422,6 @@ Deno.test("ideal bullish setup: all aligned → long, high confidence, positive 
   }));
   assertEquals(result.verdict, "long");
   assert(result.confidence >= 85, `Expected >= 85, got ${result.confidence}`);
-  assert(result.scoreAdjustment > 0);
   assertEquals(result.shouldBlock, false);
   assertEquals(result.agreement, 1.0);
 });
@@ -504,20 +489,3 @@ Deno.test("custom minConfidence threshold", () => {
   }
 });
 
-Deno.test("custom maxBonus/maxPenalty caps score adjustment", () => {
-  const result = computeDirectionVerdict(
-    makeInput({
-      confirmedTrend: { trend: "bullish", reason: "Fib-confirmed" },
-      simpleDirection: {
-        direction: "long", bias: "bullish", biasSource: "daily",
-        h4Retrace: true, h4ChochAgainst: false, h1Confirmed: true, reason: "All aligned",
-      },
-      regime: { regime: "strong_trend", confidence: 0.95, directionalBias: "bullish" },
-      weeklyBias: { bias: "bullish", confidence: 90 },
-      gamePlanBias: { bias: "bullish", confidence: 90 },
-    }),
-    { maxBonus: 0.5 },
-  );
-  assert(result.scoreAdjustment <= 0.5,
-    `Should be capped at 0.5: got ${result.scoreAdjustment}`);
-});

@@ -103,7 +103,6 @@ export function classifySetupType(analysis: {
   regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null;
   structure: { trend: "bullish" | "bearish" | "ranging"; swingPoints: SwingPoint[]; bos: any[]; choch: any[] };
   direction: string | null;
-  score: number;
 }): SetupClassification {
   const f = (name: string) => analysis.factors.find(x => x.name === name);
   const fired = (name: string) => f(name)?.present === true;
