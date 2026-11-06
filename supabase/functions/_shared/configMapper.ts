@@ -138,6 +138,8 @@ export const RUNTIME_DEFAULTS = {
   impulseZoneEnabled: true,
   impulseZoneGateMode: "hard" as "hard" | "off",
   minZoneScore: 4,
+  /** Min BOS close strength, percent (0 = off). See bosCloseGate.ts. */
+  minBosCloseStrength: 0,
   impulseSlCapMultiplier: 4,
   /** Origin OB re-test: allow entries when price returns to the block that caused the impulse (fib 1.0). Default off. */
   originOBRetest: false,
@@ -466,6 +468,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? RUNTIME_DEFAULTS.impulseZoneEnabled,
     impulseZoneGateMode: hardOrOff(strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode),
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
+    minBosCloseStrength: strategy.minBosCloseStrength ?? raw.minBosCloseStrength ?? RUNTIME_DEFAULTS.minBosCloseStrength,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
     originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? RUNTIME_DEFAULTS.originOBRetest,
     fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? RUNTIME_DEFAULTS.fibMaxRetracement,
