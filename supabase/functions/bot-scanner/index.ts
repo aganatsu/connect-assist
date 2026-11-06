@@ -97,6 +97,7 @@ import {
 } from "../_shared/route2Confirmation.ts";
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
+import { bosCloseGate, resolveMinBosClose } from "../_shared/bosCloseGate.ts";
 import { applyLoggedOnlyGates, effectiveRiskPercent, gateKeyOf, hardOrOff, orderEffectiveRR, resolveSimplification, unifiedVsImpulse, V3_LOGGED_ONLY_GATE_IDS } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
@@ -279,6 +280,7 @@ const DEFAULTS = {
   impulseZoneEnabled: true,       // When true, apply score penalty/bonus based on zone detection
   impulseZoneGateMode: "hard" as "hard" | "off",
   minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
+  minBosCloseStrength: 0,       // Min BOS close strength, percent (0 = off) — bosCloseGate.ts
   impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
   originOBRetest: false,        // When true, allow entries at the OB that CAUSED the impulse (fib 1.0 re-test)
   fibMaxRetracement: 0.786,     // Max Fib retracement to accept a zone (0.5–1.0). Higher = deeper zones qualify
@@ -1116,6 +1118,7 @@ function _legacyLoadConfigMapping(_raw: any) {
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? true,
     impulseZoneGateMode: hardOrOff(strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard"),
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
+    minBosCloseStrength: strategy.minBosCloseStrength ?? raw.minBosCloseStrength ?? DEFAULTS.minBosCloseStrength,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
     originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? DEFAULTS.originOBRetest,
     fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? DEFAULTS.fibMaxRetracement,
@@ -6979,6 +6982,33 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
         });
         scanDetails.push(detail);
         continue;
+      }
+    }
+    // ── BOS Close Strength Gate (owner rule; Bot Config "Min BOS Close Strength", 0 = off) ──
+    // The Zone Story's "Closes: BOS n%", from the unified impulse, else the Impulse engine's leg.
+    // A leg that did not report it is not blocked. Not a proven edge — see bosCloseGate.ts.
+    {
+      const minBosClose = resolveMinBosClose((pairConfig as any).minBosCloseStrength);
+      if (minBosClose > 0) {
+        const bosClose = (unifiedZoneData as any)?.impulse?.candleQuality?.bosCloseStrength
+          ?? izData?.impulse?.candleQuality?.bosCloseStrength ?? null;
+        const v = bosCloseGate(bosClose, minBosClose);
+        (detail as any).bosCloseGate = { min: minBosClose, bosClose, pass: v.pass, reason: v.reason };
+        if (!v.pass) {
+          detail.status = "skipped_weak_break";
+          detail.skipReason = `BOS Close Gate: ${v.reason}`;
+          console.log(`[scan ${scanCycleId}] ⛔ ${pair}: BOS CLOSE GATE — ${v.reason}. Skipping.`);
+          await recordRejectedSetup(supabase, userId, pair, analysis, {
+            rejectionType: "gate_blocked",
+            failedGates: [`bos_close_gate:${Math.round((bosClose as number) * 100)}/${Math.round(minBosClose * 100)}`],
+            zoneLow: izData?.bestZone?.low ?? null,
+            zoneHigh: izData?.bestZone?.high ?? null,
+            zoneScore: izData?.bestZone?.totalScore ?? null,
+            zoneType: izData?.bestZone?.zone?.poi?.type ?? null,
+          });
+          scanDetails.push(detail);
+          continue;
+        }
       }
     }
     // ── Thesis Conviction Tracker (shadow mode: log only, no trade impact) ──

@@ -84,6 +84,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "off", "blocking", "skip"] },
   { tab: "strategy", label: "Zone Entry Depth", keywords: ["zone", "entry", "depth", "limit", "fill", "near", "far", "edge", "penetration"] },
   { tab: "strategy", label: "Min Zone Score", keywords: ["zone", "score", "gate", "quality", "minimum", "threshold", "weak", "rejected", "conviction"] },
+  { tab: "strategy", label: "Min BOS Close Strength", keywords: ["bos", "break", "close", "strength", "candle", "weak", "wick", "rejection", "impulse"] },
   { tab: "entry_exit", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity", "strict"] },
   { tab: "entry_exit", label: "Zone Proximity (ATR)", keywords: ["atr", "multiplier", "proximity", "zone", "strict", "distance", "market fill"] },
   { tab: "entry_exit", label: "Zone Watch Expiry", keywords: ["zone", "expiry", "watch", "cancel", "minutes"] },
@@ -848,6 +849,15 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-1.5">
                         Zone score = fibDepth + S/R confirmed + LTF refined + HTF confluence. Set to 0 to disable this gate.
+                      </p>
+                    </FieldGroup>
+                    <FieldGroup label="Min BOS Close Strength" description="Skip setups whose break-of-structure candle closed weakly. This is the Zone Story's &quot;Closes: BOS n%&quot; — how far the break candle closed toward the move (100% = at its extreme, 50% = halfway back). 0 = off.">
+                      <div className="flex items-center gap-4">
+                        <Slider value={[config.strategy?.minBosCloseStrength ?? 0]} onValueChange={v => updateField('strategy', 'minBosCloseStrength', v[0])} min={0} max={100} step={5} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{(config.strategy?.minBosCloseStrength ?? 0) > 0 ? `${config.strategy?.minBosCloseStrength}%` : 'Off'}</span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1.5">
+                        Demo trades: breaks closing at 70%+ made +0.76R on 12 trades vs −0.34R on 28 weaker ones. A replay of 889 trades did not confirm it (−0.05R vs −0.10R), so treat it as your rule, not a proven edge.
                       </p>
                     </FieldGroup>
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
