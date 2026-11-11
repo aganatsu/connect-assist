@@ -250,6 +250,15 @@ interface DirectionConfig {
    * changes and why.
    */
   priceAwareStructureBlocks?: boolean;
+  /**
+   * Style-aware path only. When true, the structure-TF CHoCH block fires only if
+   * the MOST RECENT CHoCH in the lookback window is against the bias; a newer
+   * CHoCH back with the bias (the textbook entry signal after a pullback) lifts it.
+   * Default TRUE since 2026-11-11 (owner: fix the flaw). The replay found no harm
+   * (889 trades, expectancy unchanged, 3 trades differ) — docs/LATEST_CHOCH_PREREG_V1.md.
+   * false restores the old rule (any opposing CHoCH in the window blocks).
+   */
+  structureLatestChochDecides?: boolean;
 }
 
 const DEFAULTS = {
@@ -260,6 +269,7 @@ const DEFAULTS = {
   trendSwingLookback: 5,
   useConfirmedTrend: true,
   priceAwareStructureBlocks: false,
+  structureLatestChochDecides: true,
 };
 
 /**
@@ -354,12 +364,15 @@ function rangingReason(tf: string, structure: ReturnType<typeof analyzeMarketStr
 
 // ── Helper: check if 4H is retracing (pulling back without CHoCH) ──
 
-function is4HRetracing(
+export function is4HRetracing(
   h4Structure: ReturnType<typeof analyzeMarketStructure>,
   bias: "bullish" | "bearish",
   h4Candles: Candle[],
   chochLookback: number,
   priceAware = false,
+  latestDecides = false,
+  /** Timeframe named in the reasons. The legacy day-trader path really is 4H; the style-aware path passes its own. */
+  tfLabel = "4H",
 ): { retracing: boolean; chochAgainst: boolean; reason: string } {
   const recentChoch = recentBreaks(h4Structure.choch, h4Candles.length, chochLookback);
   const lastClose = h4Candles[h4Candles.length - 1].close;
@@ -372,7 +385,10 @@ function is4HRetracing(
   const opposing = recentChoch.filter(c => c.type === oppositeType);
   const live = priceAware ? opposing.filter(c => chochStillValid(c, lastClose)) : opposing;
   const reclaimed = opposing.length - live.length;
-  const chochAgainst = live.length > 0;
+  // latestDecides: a newer CHoCH with the bias supersedes any older opposing one.
+  const latest = recentChoch.reduce<typeof recentChoch[number] | null>((a, b) => (!a || b.index > a.index ? b : a), null);
+  const supersededByLatest = latestDecides && latest !== null && latest.type !== oppositeType;
+  const chochAgainst = live.length > 0 && !supersededByLatest;
 
   if (chochAgainst) {
     const chochPrices = live.map(c => c.price.toFixed(5)).join(", ");
@@ -380,7 +396,7 @@ function is4HRetracing(
     return {
       retracing: false,
       chochAgainst: true,
-      reason: `4H CHoCH against ${bias} bias (${live.length} recent ${oppositeType} CHoCH at ${chochPrices}${reclaimedNote})`,
+      reason: `${tfLabel} CHoCH against ${bias} bias (${live.length} recent ${oppositeType} CHoCH at ${chochPrices}${reclaimedNote})`,
     };
   }
 
@@ -398,14 +414,14 @@ function is4HRetracing(
       return {
         retracing: true,
         chochAgainst: false,
-        reason: `4H retracing in bullish structure (price ${lastPrice.toFixed(5)} below swing high ${highestRecent.toFixed(5)}, no CHoCH) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
+        reason: `${tfLabel} retracing in bullish structure (price ${lastPrice.toFixed(5)} below swing high ${highestRecent.toFixed(5)}, no CHoCH) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
       };
     }
     // Price at or above highs — not retracing, structure intact
     return {
       retracing: false,
       chochAgainst: false,
-      reason: `4H bullish structure intact (price ${lastPrice.toFixed(5)} at/above highs) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
+      reason: `${tfLabel} bullish structure intact (price ${lastPrice.toFixed(5)} at/above highs) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
     };
   } else {
     const recentLows = swings.filter(s => s.type === "low").slice(-3);
@@ -417,13 +433,13 @@ function is4HRetracing(
       return {
         retracing: true,
         chochAgainst: false,
-        reason: `4H retracing in bearish structure (price ${lastPrice.toFixed(5)} above swing low ${lowestRecent.toFixed(5)}, no CHoCH) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
+        reason: `${tfLabel} retracing in bearish structure (price ${lastPrice.toFixed(5)} above swing low ${lowestRecent.toFixed(5)}, no CHoCH) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
       };
     }
     return {
       retracing: false,
       chochAgainst: false,
-      reason: `4H bearish structure intact (price ${lastPrice.toFixed(5)} at/below lows) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
+      reason: `${tfLabel} bearish structure intact (price ${lastPrice.toFixed(5)} at/below lows) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
     };
   }
 }
@@ -877,7 +893,8 @@ export function determineDirectionStyleAware(
 
   const priceAware = config?.priceAwareStructureBlocks ?? DEFAULTS.priceAwareStructureBlocks;
   const structStructure = analyzeMarketStructure(structureCandles);
-  const structCheck = is4HRetracing(structStructure, bias!, structureCandles, chochLookback, priceAware);
+  const latestDecides = config?.structureLatestChochDecides ?? DEFAULTS.structureLatestChochDecides;
+  const structCheck = is4HRetracing(structStructure, bias!, structureCandles, chochLookback, priceAware, latestDecides, structureTF);
 
   // ── Hard block: structure TF CHoCH against bias ──
   if (structCheck.chochAgainst) {

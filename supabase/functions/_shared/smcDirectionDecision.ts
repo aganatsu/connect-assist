@@ -49,6 +49,7 @@ export interface DirectionConfig {
   fibFactor: number;
   trendSwingLookback: number;
   priceAwareStructureBlocks: boolean;
+  structureLatestChochDecides: boolean;
 }
 
 /**
@@ -68,6 +69,8 @@ export function buildDirectionConfig(pairConfig: Record<string, unknown>): Direc
     // Default false — current behaviour. When true the two structural hard
     // blocks respect price instead of candle count.
     priceAwareStructureBlocks: pairConfig.priceAwareStructureBlocks === true,
+    // Default true (fixed 2026-11-11); only an explicit false restores the old rule.
+    structureLatestChochDecides: pairConfig.structureLatestChochDecides !== false,
   };
 }
 
