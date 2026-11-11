@@ -73,7 +73,8 @@ Deno.test("both direction paths honour the flag", () => {
   // The style-aware path is what scalper uses; the legacy path is the fallback.
   // A fix applied to only one would behave differently depending on style.
   assert(
-    /is4HRetracing\(structStructure, bias!, structureCandles, chochLookback, priceAware\)/.test(engine),
+    // (later arguments: latestDecides and the timeframe label, LATEST_CHOCH 2026-11-11)
+    /is4HRetracing\(structStructure, bias!, structureCandles, chochLookback, priceAware[,)]/.test(engine),
     "style-aware path must pass the flag into is4HRetracing",
   );
   assert(

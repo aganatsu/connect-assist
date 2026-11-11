@@ -78,6 +78,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Structure CHoCH Lookback", keywords: ["choch", "lookback", "structure", "h4"] },
   { tab: "strategy", label: "Confirmation BOS Lookback", keywords: ["bos", "lookback", "confirmation", "h1"] },
   { tab: "strategy", label: "Let Pullbacks Through", keywords: ["pullback", "price aware", "retracement", "block"] },
+  { tab: "strategy", label: "Latest CHoCH Decides", keywords: ["choch", "latest", "recent", "direction", "veto", "block", "structure"] },
   { tab: "strategy", label: "Thesis Check", keywords: ["thesis", "cancel", "invalidation", "pre-check"] },
   { tab: "strategy", label: "Thesis Check: Direction Flip", keywords: ["thesis", "direction", "flip", "cancel"] },
   { tab: "strategy", label: "Thesis Check Uses My Style's Engine", keywords: ["thesis", "style", "aware", "engine"] },
@@ -922,6 +923,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                             </FieldGroup>
                           </div>
                           <ToggleField label="Let Pullbacks Through" description={`Off: when the ${tf.structure} trend turns against the ${tf.bias} bias, even in a pullback, there is no direction. On: healthy pullbacks pass (price-aware structure blocks). Tested 2026-10-30: On gave more trades but worse results in both test periods.`} checked={st.priceAwareStructureBlocks ?? false} onChange={v => updateField('strategy', 'priceAwareStructureBlocks', v)} />
+                          <ToggleField label="Latest CHoCH Decides" description={`On (default): a ${tf.structure} CHoCH against the ${tf.bias} bias blocks direction only while it is the most recent ${tf.structure} CHoCH — a newer one back with the bias (the usual entry signal after a pullback) lifts the block. Off: the old rule, any opposing ${tf.structure} CHoCH in the lookback blocks even after price turned back. Replay of 889 trades: no harm (results unchanged, 3 trades differ).`} checked={st.structureLatestChochDecides !== false} onChange={v => updateField('strategy', 'structureLatestChochDecides', v)} />
                           <div>
                             <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Thesis Check</p>
                             <p className="text-[10px] text-muted-foreground">Cancels pending orders whose thesis broke, and skips any entry it would cancel on arrival.</p>

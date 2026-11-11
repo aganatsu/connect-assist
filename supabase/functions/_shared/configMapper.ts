@@ -168,6 +168,8 @@ export const RUNTIME_DEFAULTS = {
   // regardless of price reclaiming it, and the trend block uses the last-2-swings
   // read that confirmedTrend exists to replace. See directionEngine.
   priceAwareStructureBlocks: false,
+  /** Latest structure-TF CHoCH decides the direction veto (default true since 2026-11-11). */
+  structureLatestChochDecides: true,
   // Anchor the stop beyond the zone edge instead of at a swing inside it, and
   // skip the setup when that stop exceeds the override cap. OFF = current
   // behaviour. See the block in bot-scanner for why.
@@ -484,6 +486,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? RUNTIME_DEFAULTS.simpleDirectionH1BosLookback,
     useConfirmedTrend: strategy.useConfirmedTrend ?? raw.useConfirmedTrend ?? RUNTIME_DEFAULTS.useConfirmedTrend,
     priceAwareStructureBlocks: strategy.priceAwareStructureBlocks ?? raw.priceAwareStructureBlocks ?? RUNTIME_DEFAULTS.priceAwareStructureBlocks,
+    structureLatestChochDecides: strategy.structureLatestChochDecides ?? raw.structureLatestChochDecides ?? RUNTIME_DEFAULTS.structureLatestChochDecides,
     zoneAnchoredStop: strategy.zoneAnchoredStop ?? raw.zoneAnchoredStop ?? RUNTIME_DEFAULTS.zoneAnchoredStop,
     zoneExitDirectionAware: strategy.zoneExitDirectionAware ?? raw.zoneExitDirectionAware ?? RUNTIME_DEFAULTS.zoneExitDirectionAware,
     zoneChaseMaxZoneWidths: strategy.zoneChaseMaxZoneWidths ?? raw.zoneChaseMaxZoneWidths ?? RUNTIME_DEFAULTS.zoneChaseMaxZoneWidths,

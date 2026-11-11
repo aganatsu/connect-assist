@@ -5474,6 +5474,9 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           // rather than the last-2-swings read, and it is skipped entirely
           // while the structure timeframe is retracing. See directionEngine.
           priceAwareStructureBlocks: pairConfig.priceAwareStructureBlocks === true,
+          // Default true (fixed 2026-11-11): a newer structure-TF CHoCH with the bias lifts
+          // the CHoCH block. Bot Config can set false to restore the old rule.
+          structureLatestChochDecides: (pairConfig as any).structureLatestChochDecides !== false,
         };
 
         cap.style = resolvedStyle;
