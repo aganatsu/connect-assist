@@ -48,3 +48,15 @@ Deno.test("the reason names the timeframe actually checked (15m on the scalper p
   // the legacy day-trader path keeps its real 4H label
   assertEquals(is4HRetracing(s, "bullish", bars, 10).reason.startsWith("4H CHoCH against"), true);
 });
+
+Deno.test("when a newer CHoCH overrides opposing ones, the reason says so instead of 'no CHoCH'", () => {
+  const s = ({
+    choch: [{ index: 22, type: "bearish", price: 1.0990 }, { index: 26, type: "bullish", price: 1.1010 }],
+    bos: [], trend: "bullish",
+    swingPoints: [{ type: "high", price: 1.1020, index: 20 }, { type: "low", price: 1.0980, index: 23 }],
+  }) as never;
+  const r = is4HRetracing(s, "bullish", bars, 10, false, true, "15m");
+  assertEquals(r.chochAgainst, false);
+  assertEquals(r.reason.includes("1 opposing CHoCH superseded by a newer bullish CHoCH"), true);
+  assertEquals(r.reason.includes("no CHoCH"), false);
+});

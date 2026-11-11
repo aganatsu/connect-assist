@@ -101,7 +101,7 @@ import { bosCloseGate, resolveMinBosClose } from "../_shared/bosCloseGate.ts";
 import { applyLoggedOnlyGates, effectiveRiskPercent, gateKeyOf, hardOrOff, orderEffectiveRR, resolveSimplification, unifiedVsImpulse, V3_LOGGED_ONLY_GATE_IDS } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
-import { buildAttribution } from "../_shared/attribution.ts";
+import { buildAttribution, marketFillSection } from "../_shared/attribution.ts";
 import { placeRoute2Order } from "../_shared/route2Placement.ts";
 import { splitByLevel } from "../_shared/route2SameLevel.ts";
 import { route2StopFromLimit } from "../_shared/route2StopGeometry.ts";
@@ -4378,7 +4378,10 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
           // ONE canonical record — see route2Confirmation.ts. Pending row,
           // position snapshot, signal_reason and Telegram all read this.
-          const confirmationRecord = buildConfirmationRecord(confirmationSignal, confirmTF);
+          const confirmationRecord = buildConfirmationRecord(confirmationSignal, confirmTF, {
+            candleTime: confirmCandles[confirmationSignal.candleIndex]?.datetime ?? null,
+            zoneTouchTime: pending.zone_touch_time ?? null,
+          });
           const route2Provenance = buildRoute2Provenance(pending as Record<string, unknown>);
           // Step 9: size at the ACTUAL fill — fill price, the order's stop, the
           // balance now, one fixed risk %. If it cannot be computed exactly
@@ -8829,6 +8832,66 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             signalSource: (detail as any).signalSource ?? null,
           }),
         });
+        // ── Attribution for the market entry — TRACKING ONLY, never blocks the trade ──
+        // Route 2 orders get their trade_attribution row from route2_place_order and its
+        // triggers; market entries never had one, so their trades had no signal_id and no
+        // intended risk. Same builder, the market route, and the fill section written at
+        // once (a market entry fills when decided). Unlike Route 2 this fails OPEN: if the
+        // row cannot be built or written, the position still opens, unattributed, as before.
+        let marketSignalId: string | null = null;
+        {
+          const mConfigVersion = (config as any).__configVersion as string | null;
+          if (typeof mConfigVersion === "string" && /^[0-9a-f]{32}$/.test(mConfigVersion)) {
+            try {
+              const sid = crypto.randomUUID();
+              const mEntrySource = (detail as any).signalSource === "unified" ? "unified"
+                : izData?.bestZone?.refinedEntry ? "refinedEntry" : "zoneMid";
+              const mAttribution = {
+                ...buildAttribution({
+                  signalId: sid, decisionId: cap.id as string, scanCycleId, userId, botId: BOT_ID,
+                  symbol: pair, direction: analysis.direction as "long" | "short", dryRun: dryRunActive,
+                  decisionAt: nowStr, strategyBarTime: candles[candles.length - 1]?.datetime ?? null,
+                  configVersion: mConfigVersion, strategyVersion: String((r1Telemetry as any).strategy_version ?? "unknown"),
+                  switches: simp, legacyRiskPercent: pairConfig.riskPerTrade,
+                  management: { breakEvenEnabled: pairConfig.breakEvenEnabled, trailingStopEnabled: pairConfig.trailingStopEnabled,
+                    partialTPEnabled: pairConfig.partialTPEnabled, maxHoldEnabled: pairConfig.maxHoldEnabled, maxHoldHours: pairConfig.maxHoldHours },
+                  caps: resolvePositionCaps((pairConfig as any).__rawConfigJson, "placement", pairConfig),
+                  impulseSlCapMultiplier: pairConfig.impulseSlCapMultiplier,
+                  riskProfileVersion: propFirmGateResult.enabled ? (propFirmGateResult.profileVersion ?? null) : null,
+                  entrySource: mEntrySource as never, izGateMode,
+                  gamePlanEnabled: (config as any).gamePlanEnabled !== false,
+                  gamePlanContext: (pairConfig as any)._gamePlanContext ?? null,
+                  directionVerdict: (detail as any).directionVerdict ?? null,
+                  impulse: izData ? { hasZone: !!izData.hasZone, selectedTF: izData.selectedTF ?? null, impulse: izData.impulse ?? null, bestZone: izData.bestZone ?? null } : null,
+                  unifiedDetected: (detail as any).unifiedDetected ?? null,
+                  unifiedComparison: (detail as any).unifiedComparison ?? null,
+                  factors: analysis.factors ?? null,
+                  gates: gates as any, ictFvgGate: (detail as any).ictFVGGate ?? null, orderRR: (detail as any).orderRR ?? null,
+                  loggedOnlyWouldBlock: (detail as any).loggedOnlyGates ?? [],
+                  tpSmallGate: (detail as any).tpTooSmall ?? null,
+                  riskGate: propFirmGateResult.enabled
+                    ? { enabled: true, allowed: propFirmGateResult.allowed, reason: propFirmGateResult.reason }
+                    : { enabled: false, allowed: true, reason: "no active risk profile" },
+                  limitPrice: marketEntryPrice, stopPrice: sl, targetPrice: tp, pipSize: spec.pipSize,
+                  balance, expiresAt: null,
+                  route: useMarketFillAtZone ? "market_fill_at_zone" : "route1_market",
+                }),
+                ...marketFillSection({
+                  dryRun: dryRunActive, filledAt: nowStr, fillPrice: marketEntryPrice, stop: sl, target: tp ?? null,
+                  pipSize: spec.pipSize, lots: size, riskUsd: (frozenDecision as any).risk?.riskDollars ?? null,
+                  riskPercent: pairRiskPercent ?? null, positionId,
+                }),
+              };
+              const { error: mAttrErr } = await supabase.from("trade_attribution").insert(mAttribution);
+              if (mAttrErr) console.warn(`[attribution] ${pair} market entry — not attributed: ${mAttrErr.message}`);
+              else { marketSignalId = sid; cap.signal_id = sid; }
+            } catch (e: any) {
+              console.warn(`[attribution] ${pair} market entry — build failed, not attributed: ${e?.message ?? e}`);
+            }
+          } else {
+            console.warn(`[attribution] ${pair} market entry — canonical config hash unavailable, not attributed`);
+          }
+        }
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
@@ -8837,6 +8900,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
           size: size.toString(),
           entry_price: marketEntryPrice.toString(),
           ...r1Telemetry,
+          signal_id: marketSignalId,   // after the spread so telemetry can never overwrite it
           frozen_strategy_context: frozenDecision,
           current_price: analysis.lastPrice.toString(),
           stop_loss: sl.toString(),

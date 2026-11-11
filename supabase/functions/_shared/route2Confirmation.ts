@@ -42,6 +42,16 @@ export interface ConfirmationRecord {
   significance: string | null;
   closeBased: boolean | null;
   supportingSignals: string[];
+  /** Open time of the candle that confirmed (ISO), when the caller knows it. */
+  candleTime: string | null;
+  /** The order's zone_touch_time at acceptance. */
+  zoneTouchTime: string | null;
+  /**
+   * The confirming candle opened BEFORE the zone touch. detectZoneConfirmation's
+   * primary path looks back 10 candles and ignores the touch, so this happens;
+   * recorded so its effect on results can be measured. null = not computable.
+   */
+  beforeTouch: boolean | null;
 }
 
 const finite = (n: unknown): number | null =>
@@ -56,7 +66,11 @@ const finite = (n: unknown): number | null =>
  */
 export function buildConfirmationRecord(
   s: ConfirmationSignalLike, timeframe: string | null,
+  timing?: { candleTime?: string | null; zoneTouchTime?: string | null },
 ): ConfirmationRecord {
+  const candleTime = timing?.candleTime ?? null;
+  const zoneTouchTime = timing?.zoneTouchTime ?? null;
+  const ct = candleTime ? Date.parse(candleTime) : NaN, zt = zoneTouchTime ? Date.parse(zoneTouchTime) : NaN;
   return {
     contract: "route2-confirmation.v1",
     type: String(s.type),
@@ -67,6 +81,9 @@ export function buildConfirmationRecord(
     significance: s.significance ?? null,
     closeBased: typeof s.closeBased === "boolean" ? s.closeBased : null,
     supportingSignals: Array.isArray(s.supportingSignals) ? s.supportingSignals.map(String) : [],
+    candleTime,
+    zoneTouchTime,
+    beforeTouch: Number.isFinite(ct) && Number.isFinite(zt) ? ct < zt : null,
   };
 }
 
