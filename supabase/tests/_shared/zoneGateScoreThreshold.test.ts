@@ -105,5 +105,6 @@ Deno.test("the threshold comes from config, not a literal", () => {
       `left on its own default: ${r.replace(/\s+/g, " ").slice(0, 90)}`,
     );
   }
-  assert(/minZoneScore = 4 \}: Props/.test(panel), "with a default matching the mapper");
+  // (later destructured props may follow, e.g. zoneGateBypassed — #695)
+  assert(/minZoneScore = 4[,\s][^)]*\}: Props/.test(panel), "with a default matching the mapper");
 });
