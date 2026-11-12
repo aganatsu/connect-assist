@@ -158,6 +158,12 @@ interface Props {
    * passing 4.5 while being rejected. Defaults to the config default.
    */
   minZoneScore?: number;
+  /**
+   * The setup came through the Unified path. bot-scanner skips the Zone Score Gate
+   * then ("Unified gate passed — bypassing impulse zone gate"), so a score below the
+   * minimum did NOT reject it and the badge must not say so.
+   */
+  zoneGateBypassed?: boolean;
   /** When true, live-action badges ("Hunting 5m CHoCH") are shown. */
   isLiveContext?: boolean;
   /** Trading symbol (e.g. "EUR/USD", "ETH/USD") — used for asset-aware pip/$/pts labels. */
@@ -224,7 +230,7 @@ function sameDay(a?: string | null, b?: string | null): boolean {
   return !!a && !!b && a.slice(0, 10) === b.slice(0, 10);
 }
 
-export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol, minZoneScore = 4 }: Props) {
+export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol, minZoneScore = 4, zoneGateBypassed = false }: Props) {
   if (!unifiedData) return null;
 
   // Asset-aware formatter — falls back to plain "X pips" if no symbol provided
@@ -501,18 +507,20 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   <span
                     className={`text-[10px] font-mono px-1 py-0.5 rounded ${
                       gateData.bestZone.totalScore < minZoneScore
-                        ? "bg-red-500/15 text-destructive"
+                        ? (zoneGateBypassed ? "bg-muted/40 text-muted-foreground" : "bg-red-500/15 text-destructive")
                         : gateData.bestZone.totalScore >= minZoneScore + 1
                         ? "bg-green-500/15 text-success"
                         : "bg-cyan-500/15 text-cyan-400"
                     }`}
                     title={gateData.bestZone.totalScore < minZoneScore
-                      ? `Below the Zone Score Gate minimum of ${minZoneScore}/9 — this zone is rejected before any entry is considered, whatever the confluence score says.`
+                      ? (zoneGateBypassed
+                        ? `Below the Zone Score Gate minimum of ${minZoneScore}/9, but this setup came through the Unified path, which skips that gate — the score did not reject it.`
+                        : `Below the Zone Score Gate minimum of ${minZoneScore}/9 — this zone is rejected before any entry is considered, whatever the confluence score says.`)
                       : `Zone Score Gate minimum is ${minZoneScore}/9. Score is fibScore + HTF confluence + S/R confirmation (+1) + LTF refinement (+1).`}
                   >
                     Gate Score {gateData.bestZone.totalScore.toFixed(1)}/9
                     {gateData.bestZone.totalScore < minZoneScore
-                      ? ` — below min ${minZoneScore}, REJECTED`
+                      ? (zoneGateBypassed ? ` — below min ${minZoneScore}, bypassed (Unified path)` : ` — below min ${minZoneScore}, REJECTED`)
                       : ` (min ${minZoneScore})`}
                   </span>
                   {gateData.bestZone.ltfRefined && (

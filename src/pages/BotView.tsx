@@ -1767,7 +1767,7 @@ function ScanSignalDetail({ signal: d, minZoneScore = 4 }: { signal: any; minZon
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
           {/* Zone Story — consolidated impulse + unified zone narrative */}
-          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
+          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} zoneGateBypassed={d.signalSource === "unified"} />
           <V3StoryPanel symbol={d.pair} />
           <BreakerStoryPanel symbol={d.pair} />
           {/* Direction Verdict */}
@@ -1946,7 +1946,7 @@ function ScanDetailInline({ signal: d, minZoneScore = 4 }: { signal: any; minZon
       )}
 
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
-      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} />
+      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} minZoneScore={minZoneScore} zoneGateBypassed={d.signalSource === "unified"} />
       <V3StoryPanel symbol={d.pair} />
       <BreakerStoryPanel symbol={d.pair} />
       {/* V2 structural order blocks — SHADOW MODE, numbers only */}
