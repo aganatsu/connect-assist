@@ -30,7 +30,7 @@ import {
   settlePaperPartial,
   settlePaperPosition,
 } from "../../functions/_shared/paperSettlement.ts";
-import { buildAttribution } from "../../functions/_shared/attribution.ts";
+import { buildAttribution, marketFillSection } from "../../functions/_shared/attribution.ts";
 import { ACTIVE_ORDER_STATUSES, exposureFromRows, resetRefusal } from "../../functions/_shared/accountResetGuard.ts";
 import { baseScope as shadowScope, runShadowHook } from "./shadowHookSandbox.ts";
 
@@ -2059,5 +2059,48 @@ Deno.test("Baseline A report SQL: Baseline A and historical dry-run rows land in
   const dry = get("historical_dry_run", "overall", "all");
   assertEquals([Number(dry.orders), Number(dry.closed), Number(dry.win_rate), Number(dry.avg_r_gross), Number(dry.realized_pnl_usd)], [1, 1, 0, -1, -499.3]);
   assert(get("baseline_a", "entry_source", "zoneMid") && get("historical_dry_run", "entry_source", "refinedEntry") && get("baseline_a", "pair", "GBP/USD"));
+  await db.close();
+});
+
+// ─── market entries (route1_market / market_fill_at_zone) ─────────────────────
+/** Insert exactly the keys bot-scanner writes for a market entry (typed by jsonb_populate_record). */
+async function insertMarketAttribution(db: Db, dryRun: boolean): Promise<string> {
+  const sig = crypto.randomUUID();
+  const row = {
+    ...attrPayload({ signalId: sig, symbol: "USD/JPY", dryRun, route: "market_fill_at_zone", expiresAt: null,
+      limitPrice: 154.9, stopPrice: 154.65, targetPrice: 155.175, pipSize: 0.01, route2Stop: null, zoneId: null, entryDepth: null }),
+    ...marketFillSection({ dryRun, filledAt: "2026-11-11T16:35:09Z", fillPrice: 154.9, stop: 154.65, target: 155.175,
+      pipSize: 0.01, lots: 2, riskUsd: 500, riskPercent: 0.5, positionId: "0e76555c" }),
+  };
+  const cols = Object.keys(row).join(",");
+  await db.query(`insert into public.trade_attribution (${cols}) select ${cols} from jsonb_populate_record(null::public.trade_attribution, $1::jsonb)`,
+    [JSON.stringify(row)]);
+  return sig;
+}
+
+Deno.test("market entry attribution: the schema accepts it, the position links, settlement records the close", async () => {
+  const db = await freshDb();
+  const sig = await insertMarketAttribution(db, false);
+  const a = await attr(db, sig);
+  assertEquals([a.route, a.terminal_status, a.terminal_reason, a.fill_kind, Number(a.fill_price), Number(a.intended_risk_usd) > 0],
+    ["market_fill_at_zone", "filled", "FILLED_MARKET", "real", 154.9, true]);
+  const rowId = await openPosition(db, { signal_id: sig, entry_price: 154.9, stop_loss: 154.65, take_profit: 155.175 });
+  assertEquals((await attr(db, sig)).position_row_id, rowId, "the position-link trigger connects the market entry");
+  assert((await evTypes(db, sig)).includes("position_opened"));
+  const r = await settle(db, rowId, { exit_price: 155.175, pnl: 547.6, pnl_pips: 27.5, close_reason: "tp_hit" });
+  assertEquals(r.outcome, "settled");
+  const c = await attr(db, sig);
+  assertEquals([c.outcome_kind, c.exit_reason], ["real", "target"]);
+  assert(c.closed_at && c.history_id && c.ledger_id);
+  const h = (await db.query<any>(`select signal_id from public.paper_trade_history where position_id = '0e76555c'`)).rows[0];
+  assertEquals(h.signal_id, sig, "the closed trade carries the signal_id, so its intended risk is joinable");
+  await db.close();
+});
+
+Deno.test("market entry attribution in dry run: a hypothetical fill, as the Route 2 fill trigger writes it", async () => {
+  const db = await freshDb();
+  const sig = await insertMarketAttribution(db, true);
+  const a = await attr(db, sig);
+  assertEquals([a.dry_run, a.terminal_status, a.fill_kind], [true, "hypothetical_fill", "hypothetical"]);
   await db.close();
 });

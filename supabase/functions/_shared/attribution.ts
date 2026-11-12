@@ -132,6 +132,8 @@ export interface AttributionInput {
   plannedSizing?: { lots?: number; uncappedLots?: number; riskPercentTarget?: number; riskUsdTarget?: number } | null;
   balance: number;
   expiresAt?: string | null;
+  /** Default route2_pending_confirmation. Market entries pass their own route (trade_attribution allows both). */
+  route?: "route2_pending_confirmation" | "route1_market" | "market_fill_at_zone";
 }
 
 /** The trade_attribution insert payload for route2_place_order. */
@@ -187,7 +189,7 @@ export function buildAttribution(i: AttributionInput): Record<string, unknown> {
       : `mgmt_v1;be=${!!i.management.breakEvenEnabled};trail=${!!i.management.trailingStopEnabled};partial=${!!i.management.partialTPEnabled};maxHold=${i.management.maxHoldEnabled ? i.management.maxHoldHours ?? 0 : "off"}`,
     risk_profile_version: i.riskProfileVersion ?? null,
     caps_version: `${i.caps.mode}_${i.caps.maxOpenPositions}_${i.caps.maxPerSymbol}`,
-    route: "route2_pending_confirmation",
+    route: i.route ?? "route2_pending_confirmation",
     // B
     primary_engine: pe,
     primary_engine_rule: PRIMARY_ENGINE_RULE,
@@ -242,5 +244,31 @@ export function buildAttribution(i: AttributionInput): Record<string, unknown> {
     planned_uncapped_lots: num(i.plannedSizing?.uncappedLots),
     planned_lots: num(i.plannedSizing?.lots),
     expires_at: i.expiresAt ?? null,
+  };
+}
+
+/**
+ * The write-once lifecycle columns (E, F) for an entry that fills the moment it is decided — a
+ * market entry has no order to arm, touch or confirm. Same fill_kind / terminal_status rule the
+ * pending_orders_attribution trigger applies to a Route 2 fill: dry run → hypothetical.
+ */
+export function marketFillSection(i: {
+  dryRun: boolean; filledAt: string; fillPrice: number; stop: number; target: number | null;
+  pipSize: number; lots: number; riskUsd: number | null; riskPercent: number | null; positionId: string;
+}): Record<string, unknown> {
+  return {
+    terminal_status: i.dryRun ? "hypothetical_fill" : "filled",
+    terminal_reason: "FILLED_MARKET",
+    terminal_at: i.filledAt,
+    fill_kind: i.dryRun ? "hypothetical" : "real",
+    filled_at: i.filledAt,
+    fill_price: i.fillPrice,
+    fill_stop_price: i.stop,
+    fill_target_price: i.target,
+    fill_stop_distance_pips: i.pipSize > 0 ? Math.round((Math.abs(i.fillPrice - i.stop) / i.pipSize) * 10) / 10 : null,
+    fill_lots: i.lots,
+    fill_risk_usd: i.riskUsd,
+    fill_risk_pct: i.riskPercent,
+    position_id: i.positionId,
   };
 }

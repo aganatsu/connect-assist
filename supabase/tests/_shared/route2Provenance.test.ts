@@ -150,6 +150,16 @@ Deno.test("the confirmation record keeps every field, with null instead of undef
   assert("timeframe" in round, "timeframe must be recorded");
 });
 
+Deno.test("the record keeps the confirming candle's time and whether it came before the zone touch", () => {
+  const before = buildConfirmationRecord(SIGNAL, "5m", { candleTime: "2026-11-11T16:05:00.000Z", zoneTouchTime: "2026-11-11T16:20:00.000Z" });
+  assertEquals([before.candleTime, before.zoneTouchTime, before.beforeTouch], ["2026-11-11T16:05:00.000Z", "2026-11-11T16:20:00.000Z", true]);
+  const after = buildConfirmationRecord(SIGNAL, "5m", { candleTime: "2026-11-11T16:25:00.000Z", zoneTouchTime: "2026-11-11T16:20:00.000Z" });
+  assertEquals(after.beforeTouch, false);
+  const unknown = buildConfirmationRecord(SIGNAL, "5m");
+  assertEquals([unknown.candleTime, unknown.zoneTouchTime, unknown.beforeTouch], [null, null, null]);
+  assert("beforeTouch" in JSON.parse(JSON.stringify(unknown)), "beforeTouch must survive serialisation as null");
+});
+
 Deno.test("the record tolerates a malformed signal without inventing values", () => {
   const r = buildConfirmationRecord({
     type: "bullish_choch", tier: 1, price: NaN, displacement: Infinity,
@@ -169,7 +179,8 @@ Deno.test("Telegram labels come from the stored record via the canonical module"
   // may format the raw signal type into the message any more.
   for (const [name, src] of [["bot-scanner", SCANNER], ["zone-confirm", ZCS]] as const) {
     assert(/from "\.\.\/_shared\/route2Confirmation\.ts"/.test(src), `${name} must import the canonical module`);
-    assert(/const confirmationRecord = buildConfirmationRecord\(confirmationSignal, confirmTF\)/.test(src),
+    // (third argument: the confirming candle's time and the zone touch time)
+    assert(/const confirmationRecord = buildConfirmationRecord\(confirmationSignal, confirmTF[,)]/.test(src),
       `${name} must build ONE record from the signal`);
     assert(/tierLabel\(confirmationRecord\.tier\)/.test(src), `${name}: Telegram tier from the record`);
     assert(/typeLabel\(confirmationRecord\.type\)/.test(src), `${name}: Telegram type from the record`);

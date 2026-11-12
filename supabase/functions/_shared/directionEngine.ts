@@ -389,6 +389,10 @@ export function is4HRetracing(
   const latest = recentChoch.reduce<typeof recentChoch[number] | null>((a, b) => (!a || b.index > a.index ? b : a), null);
   const supersededByLatest = latestDecides && latest !== null && latest.type !== oppositeType;
   const chochAgainst = live.length > 0 && !supersededByLatest;
+  // When opposing CHoCHs were overridden by a newer one with the bias, say so instead of "no CHoCH".
+  const chochNote = supersededByLatest && live.length > 0
+    ? `${live.length} opposing CHoCH superseded by a newer ${bias} CHoCH`
+    : "no CHoCH";
 
   if (chochAgainst) {
     const chochPrices = live.map(c => c.price.toFixed(5)).join(", ");
@@ -414,7 +418,7 @@ export function is4HRetracing(
       return {
         retracing: true,
         chochAgainst: false,
-        reason: `${tfLabel} retracing in bullish structure (price ${lastPrice.toFixed(5)} below swing high ${highestRecent.toFixed(5)}, no CHoCH) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
+        reason: `${tfLabel} retracing in bullish structure (price ${lastPrice.toFixed(5)} below swing high ${highestRecent.toFixed(5)}, ${chochNote}) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
       };
     }
     // Price at or above highs — not retracing, structure intact
@@ -433,7 +437,7 @@ export function is4HRetracing(
       return {
         retracing: true,
         chochAgainst: false,
-        reason: `${tfLabel} retracing in bearish structure (price ${lastPrice.toFixed(5)} above swing low ${lowestRecent.toFixed(5)}, no CHoCH) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
+        reason: `${tfLabel} retracing in bearish structure (price ${lastPrice.toFixed(5)} above swing low ${lowestRecent.toFixed(5)}, ${chochNote}) [${tfLabel} highs: ${highPrices}] [${tfLabel} lows: ${lowPrices}]`,
       };
     }
     return {
@@ -451,6 +455,8 @@ function is1HConfirmed(
   bias: "bullish" | "bearish",
   h1Candles: Candle[],
   bosLookback: number,
+  /** Timeframe named in the reasons. The legacy day-trader path really is 1H; the style-aware path passes its own. */
+  tfLabel = "1H",
 ): { confirmed: boolean; reason: string } {
   const recentBos = recentBreaks(h1Structure.bos, h1Candles.length, bosLookback);
 
@@ -463,7 +469,7 @@ function is1HConfirmed(
     const recency = h1Candles.length - 1 - latest.index;
     return {
       confirmed: true,
-      reason: `1H ${biasType} BOS confirmed (${confirmingBos.length} recent, latest ${recency} candles ago at ${latest.price.toFixed(5)})`,
+      reason: `${tfLabel} ${biasType} BOS confirmed (${confirmingBos.length} recent, latest ${recency} candles ago at ${latest.price.toFixed(5)})`,
     };
   }
 
@@ -476,13 +482,13 @@ function is1HConfirmed(
     const recency = h1Candles.length - 1 - latest.index;
     return {
       confirmed: true,
-      reason: `1H ${biasType} CHoCH confirmed turn (${recency} candles ago at ${latest.price.toFixed(5)})`,
+      reason: `${tfLabel} ${biasType} CHoCH confirmed turn (${recency} candles ago at ${latest.price.toFixed(5)})`,
     };
   }
 
   return {
     confirmed: false,
-    reason: `1H has no recent ${biasType} BOS or CHoCH (checked last ${bosLookback} candles)`,
+    reason: `${tfLabel} has no recent ${biasType} BOS or CHoCH (checked last ${bosLookback} candles)`,
   };
 }
 
@@ -879,7 +885,7 @@ export function determineDirectionStyleAware(
     }
     // Have confirm TF but no structure TF
     const confirmStructure = analyzeMarketStructure(confirmCandles);
-    const confirmCheck = is1HConfirmed(confirmStructure, bias!, confirmCandles, bosLookback);
+    const confirmCheck = is1HConfirmed(confirmStructure, bias!, confirmCandles, bosLookback, confirmTF);
     return {
       direction: confirmCheck.confirmed ? direction : null,
       bias: bias!, biasSource: biasSource!,
@@ -939,7 +945,7 @@ export function determineDirectionStyleAware(
   }
 
   const confirmStructure = analyzeMarketStructure(confirmCandles);
-  const confirmCheck = is1HConfirmed(confirmStructure, bias!, confirmCandles, bosLookback);
+  const confirmCheck = is1HConfirmed(confirmStructure, bias!, confirmCandles, bosLookback, confirmTF);
 
   // ── Final decision ──
   if (structCheck.retracing && confirmCheck.confirmed) {

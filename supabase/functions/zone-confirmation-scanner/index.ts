@@ -640,7 +640,10 @@ Deno.serve(async (req) => {
         // the pending row, the position's immutable decision snapshot and
         // signal_reason, and it is what the Telegram message is built from —
         // so none of them can describe the confirmation differently.
-        const confirmationRecord = buildConfirmationRecord(confirmationSignal, confirmTF);
+        const confirmationRecord = buildConfirmationRecord(confirmationSignal, confirmTF, {
+          candleTime: confirmCandles[confirmationSignal.candleIndex]?.datetime ?? null,
+          zoneTouchTime: pending.zone_touch_time ?? null,
+        });
         const route2Provenance = buildRoute2Provenance(pending as Record<string, unknown>);
         const signalReason = {
           ...parsedSignalReason,
