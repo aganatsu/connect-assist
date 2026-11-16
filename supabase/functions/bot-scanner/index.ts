@@ -7442,7 +7442,13 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
             const maxImpulseSlPips = Math.max(floorCapPips, legCapPips);
             const impulseSlPips = impulseSlDistance / spec.pipSize;
             impulseStopCandidate = { sl: impulseSL, capPips: maxImpulseSlPips };
-            if (impulseSlDistance > actualSlDistance && impulseSlPips <= maxImpulseSlPips) {
+            // Compare against the stop AFTER the floor, not actualSlDistance (captured
+            // before the floor widened it). USD/CAD 2026-11-13 21:25: structure stop
+            // 6.7p, floor widened it to 18p, then a 8.6p impulse stop "beat" the stale
+            // 6.7p and replaced the 18p floor — the position opened below its own
+            // minimum (slAtEntry.belowFloor = true).
+            const currentSlDistance = Math.abs(analysis.lastPrice - sl);
+            if (impulseSlDistance > currentSlDistance && impulseSlPips <= maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${impulseSlPips.toFixed(1)}p (impulse origin at ${impulseSL.toFixed(5)})`);
               sl = impulseSL;
               // Recalculate TP based on impulse SL for proper R:R
@@ -7465,8 +7471,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
               };
             } else if (impulseSlPips > maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping structure SL.`);
-            } else if (impulseSlDistance <= actualSlDistance) {
-              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than current (${impulseSlPips.toFixed(1)}p < ${(actualSlDistance / spec.pipSize).toFixed(1)}p). Keeping wider SL for safety.`);
+            } else if (impulseSlDistance <= currentSlDistance) {
+              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than current (${impulseSlPips.toFixed(1)}p < ${(currentSlDistance / spec.pipSize).toFixed(1)}p). Keeping wider SL for safety.`);
             }
           }
         }
