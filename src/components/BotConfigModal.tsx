@@ -1402,8 +1402,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     <SectionHeader title="Entry & Exit Rules" description="Configure trade entry timing and exit strategies" />
                     <div className="space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Entry</p>
-                      <FieldGroup label="Cooldown Between Trades (minutes)" description="Minimum wait time between consecutive trades">
-                        <Input type="number" value={config.entry?.cooldownMinutes ?? 30} onChange={e => updateField('entry', 'cooldownMinutes', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
+                      <FieldGroup label="Cooldown Between Trades (minutes)" description="After a trade on a pair closes (win or loss), wait this long before opening another on the same pair. 0 = off (the bot's default).">
+                        <Input type="number" value={config.entry?.cooldownMinutes ?? 0} onChange={e => updateField('entry', 'cooldownMinutes', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
                       </FieldGroup>
                       <FieldGroup label="SL Buffer (pips)" description="Extra pips added beyond structure/OB for stop loss placement">
                         <Input type="number" value={config.entry?.slBufferPips ?? 2} onChange={e => updateField('entry', 'slBufferPips', parseFloat(e.target.value) || 0)} step={0.5} min={0} max={20} className="h-9 text-sm" />
@@ -1929,6 +1929,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     </div>
                     <ToggleField label="Kill Zone Only Trading" description="Only trade during high-volume kill zone windows (London 02-05 ET, NY 08:30-11 ET)" checked={config.sessions?.killZoneOnly ?? false} onChange={v => updateField('sessions', 'killZoneOnly', v)} />
                     <ToggleField label="Trade Crypto on Weekends" description="When FX is closed (Fri 17:00 ET → Sun 17:00 ET), keep scanning BTC/USD and ETH/USD only" checked={config.sessions?.weekendCryptoEnabled ?? true} onChange={v => updateField('sessions', 'weekendCryptoEnabled', v)} />
+                    <FieldGroup label="No New Trades Before Friday Close (minutes)" description="Blocks new FX and metal trades in the last N minutes before the weekly close (Fri 17:00 ET). Crypto is never blocked. 0 = off.">
+                      <Input type="number" value={config.sessions?.fridayCutoffMinutes ?? 0} onChange={e => updateField('sessions', 'fridayCutoffMinutes', Math.max(0, Math.round(parseFloat(e.target.value) || 0)))} min={0} max={600} step={15} className="h-9 text-sm" />
+                    </FieldGroup>
                     {/* ── News Event Filter ── */}
                     <div className="border-t border-border pt-4 mt-4">
                       <SectionHeader title="News Event Filter" description="Pause trading around high-impact economic events (NFP, FOMC, CPI, etc.)" />

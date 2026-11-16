@@ -98,6 +98,7 @@ import {
 import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.ts";
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
 import { bosCloseGate, resolveMinBosClose } from "../_shared/bosCloseGate.ts";
+import { fridayCutoffGate, resolveFridayCutoffMinutes } from "../_shared/fridayCutoff.ts";
 import { applyLoggedOnlyGates, effectiveRiskPercent, gateKeyOf, hardOrOff, orderEffectiveRR, resolveSimplification, unifiedVsImpulse, V3_LOGGED_ONLY_GATE_IDS } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
@@ -270,6 +271,7 @@ const DEFAULTS = {
   // ── Sessions ──
   killZoneOnly: false,
   weekendCryptoEnabled: true,
+  fridayCutoffMinutes: 0,       // No new FX/metal trades in the last N minutes before Friday's close (0 = off)
   // ── Protection ──
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
@@ -1248,6 +1250,7 @@ function _legacyLoadConfigMapping(_raw: any) {
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
     weekendCryptoEnabled: sessions.weekendCryptoEnabled ?? raw.weekendCryptoEnabled ?? true,
+    fridayCutoffMinutes: sessions.fridayCutoffMinutes ?? raw.fridayCutoffMinutes ?? 0,
     // Sessions block no longer passed through — detectSession() uses fixed DEFAULT_SESSION_WINDOWS.
     // The UI only toggles sessions on/off via the filter array.
 
@@ -1734,6 +1737,16 @@ export async function runSafetyGates(
       }
     } else {
       gates.push({ gateKey: "cooldown", passed: true, reason: "No recent trades — cooldown OK" });
+    }
+  }
+
+  // Gate 13b: Friday pre-close cutoff (Bot Config "No new trades before Friday close", 0 = off).
+  // FX/metals only — crypto trades through the weekend. See _shared/fridayCutoff.ts.
+  {
+    const fridayCutoff = resolveFridayCutoffMinutes((config as any).fridayCutoffMinutes);
+    if (fridayCutoff > 0) {
+      const v = fridayCutoffGate(Date.now(), fridayCutoff, SPECS[symbol]?.type === "crypto");
+      gates.push({ gateKey: "friday_cutoff", passed: v.pass, reason: v.reason });
     }
   }
 

@@ -50,6 +50,7 @@ const GATE_PATTERNS: [RegExp, string][] = [
   [/^Daily loss/, "daily_loss"],
   [/^Drawdown/, "drawdown"],
   [/[Cc]ooldown/, "cooldown"],
+  [/Friday cutoff/, "friday_cutoff"],
   [/consecutive loss/i, "consecutive_losses"],
   [/^Daily net P&L/, "daily_dollar_loss"],
   [/FOTSI/, "fotsi"],

@@ -17,7 +17,7 @@ Deno.test("gates: every gates.push carries a key (gateKey, or the pre-existing g
 });
 
 Deno.test("gates: the owner's split — account / risk rules stay enforcing under V3; the legacy strategy filters only record", () => {
-  for (const id of ["max_positions", "per_symbol", "portfolio_heat", "daily_loss", "drawdown", "consecutive_losses", "daily_dollar_loss", "correlation", "cooldown", "instrument_enabled"]) {
+  for (const id of ["max_positions", "per_symbol", "portfolio_heat", "daily_loss", "drawdown", "consecutive_losses", "daily_dollar_loss", "correlation", "cooldown", "friday_cutoff", "instrument_enabled"]) {
     assertEquals(GATE_CLASS[id as keyof typeof GATE_CLASS], "risk", id);
     assert(!V3_LOGGED_ONLY_GATE_IDS.has(id), id);
   }
