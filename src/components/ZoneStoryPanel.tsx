@@ -12,6 +12,7 @@
  */
 
 import { formatPipDisplay } from "@/lib/pipDisplay";
+import { closeScaleHint, describeClose, type CloseTone } from "@/lib/candleCloseText";
 
 interface ZoneStoryData {
   hasZone: boolean;
@@ -426,29 +427,31 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               {/* How the two defining candles closed. A BOS candle that pushed
                   through and closed back near its open is, on the timeframe
                   below, a break that already failed. */}
-              {unifiedData.impulse.candleQuality && (
-                <div className="text-zinc-300 mt-0.5">
-                  Closes:{" "}
-                  <span className="text-muted-foreground">origin</span>{" "}
-                  <span className={unifiedData.impulse.candleQuality.originCloseStrength >= 0.6
-                    ? "text-success" : unifiedData.impulse.candleQuality.originCloseStrength >= 0.4
-                      ? "text-yellow-400" : "text-destructive"}>
-                    {(unifiedData.impulse.candleQuality.originCloseStrength * 100).toFixed(0)}%
-                  </span>
-                  {" · "}
-                  <span className="text-muted-foreground">BOS</span>{" "}
-                  <span className={unifiedData.impulse.candleQuality.bosCloseStrength >= 0.6
-                    ? "text-success" : unifiedData.impulse.candleQuality.bosCloseStrength >= 0.4
-                      ? "text-yellow-400" : "text-destructive"}>
-                    {(unifiedData.impulse.candleQuality.bosCloseStrength * 100).toFixed(0)}%
-                  </span>
-                  {unifiedData.impulse.candleQuality.bosRejectionWick >= 0.3 && (
-                    <span className="text-destructive ml-2">
-                      ⚠ {(unifiedData.impulse.candleQuality.bosRejectionWick * 100).toFixed(0)}% rejection wick
-                    </span>
-                  )}
-                </div>
-              )}
+              {unifiedData.impulse.candleQuality && (() => {
+                const q = unifiedData.impulse.candleQuality;
+                const dir = unifiedData.impulse.direction === "bullish" ? "bullish" : "bearish";
+                const toneClass = (t: CloseTone) => t === "strong" ? "text-success" : t === "mixed" ? "text-yellow-400" : "text-destructive";
+                const bos = describeClose(q.bosCloseStrength, dir);
+                const origin = describeClose(q.originCloseStrength, dir);
+                return (
+                  <div className="text-zinc-300 mt-0.5" title={closeScaleHint(dir)}>
+                    <div>
+                      <span className="text-muted-foreground">Break candle (BOS):</span>{" "}
+                      <span className={toneClass(bos.tone)}>{bos.text}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Start candle (origin):</span>{" "}
+                      <span className={toneClass(origin.tone)}>{origin.text}</span>
+                    </div>
+                    {q.bosRejectionWick >= 0.3 && (
+                      <div className="text-destructive">
+                        ⚠ {(q.bosRejectionWick * 100).toFixed(0)}% of the break candle is wick past its close — price went further but did not stay
+                      </div>
+                    )}
+                    <div className="text-muted-foreground text-[10px]">{closeScaleHint(dir)}</div>
+                  </div>
+                );
+              })()}
               {unifiedData.impulse.fibLevels && unifiedData.impulse.fibLevels.length > 0 && (
                 <div className="text-muted-foreground mt-0.5 font-mono text-[10px] leading-relaxed">
                   {unifiedData.impulse.fibLevels.map(f => (

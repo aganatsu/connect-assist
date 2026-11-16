@@ -852,7 +852,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         Zone score = fibDepth + S/R confirmed + LTF refined + HTF confluence. Set to 0 to disable this gate.
                       </p>
                     </FieldGroup>
-                    <FieldGroup label="Min BOS Close Strength" description="Skip setups whose break-of-structure candle closed weakly. This is the Zone Story's &quot;Closes: BOS n%&quot; — how far the break candle closed toward the move (100% = at its extreme, 50% = halfway back). 0 = off.">
+                    <FieldGroup label="Min BOS Close Strength" description="Skip setups whose break-of-structure candle closed weakly. This is the Zone Story's &quot;Break candle (BOS)&quot; percentage — how far the break candle closed toward the move (100% = at its extreme, 50% = halfway back). 0 = off.">
                       <div className="flex items-center gap-4">
                         <Slider value={[config.strategy?.minBosCloseStrength ?? 0]} onValueChange={v => updateField('strategy', 'minBosCloseStrength', v[0])} min={0} max={100} step={5} className="flex-1" />
                         <span className="text-sm font-mono font-bold text-primary w-14 text-right">{(config.strategy?.minBosCloseStrength ?? 0) > 0 ? `${config.strategy?.minBosCloseStrength}%` : 'Off'}</span>
