@@ -9,12 +9,14 @@ import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
 import { FactorBreakdown } from "./FactorBreakdown";
 import { TradeOverrideEditor } from "./TradeOverrideEditor";
+import { PositionEntryEvidence } from "./PositionEntryEvidence";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
 interface ExpandedPositionCardProps {
   position: any;
   onSaved: () => void;
+  minZoneScore?: number;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -136,7 +138,7 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
 
 // ─── Main Component ─────────────────────────────────────────────────
 
-export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionCardProps) {
+export function ExpandedPositionCard({ position: p, onSaved, minZoneScore = 4 }: ExpandedPositionCardProps) {
   // Parse signal reason
   let sr: any = {};
   try { sr = JSON.parse(p.signalReason || "{}"); } catch { /* ignore */ }
@@ -499,6 +501,9 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
           </div>
         );
       })()}
+
+      {/* The exact decision and zone evidence captured when this trade opened. */}
+      <PositionEntryEvidence position={p} minZoneScore={minZoneScore} />
 
       {/* ═══ ROW 2: Live Trade Management Status (3 cards) ═══ */}
       {hasManagement && (

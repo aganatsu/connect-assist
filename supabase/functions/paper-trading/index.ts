@@ -1405,6 +1405,28 @@ if (import.meta.main) Deno.serve(async (req) => {
       if (account?.ledger_reset_at) historyQ = historyQ.gte("closed_at", account.ledger_reset_at);
       const { data: history } = await historyQ.order("created_at", { ascending: false }).limit(50);
 
+      // Route-2 positions retain a durable link to the pending order that
+      // captured the Zone Story at creation/touch/confirmation/fill. Bring
+      // that immutable evidence into the status payload so expanding a trade
+      // can show what the bot saw when it entered, without recomputing from
+      // today's candles. A missing/deleted source row is handled as legacy.
+      const sourcePendingIds = [...new Set((positions || [])
+        .map((p: any) => p.source_pending_order_id)
+        .filter((id: unknown): id is string => typeof id === "string" && id.length > 0))];
+      let sourcePendingById = new Map<string, any>();
+      if (sourcePendingIds.length > 0) {
+        const { data: sourcePendingRows, error: sourcePendingError } = await supabase
+          .from("pending_orders")
+          .select("id,zone_story_at_creation,zone_story_at_confirmation,zone_story_at_fill,entry_confirmation")
+          .eq("user_id", user.id)
+          .in("id", sourcePendingIds);
+        if (sourcePendingError) {
+          console.warn("[status] Could not load pending-order entry evidence:", sourcePendingError.message);
+        } else {
+          sourcePendingById = new Map((sourcePendingRows || []).map((row: any) => [row.id, row]));
+        }
+      }
+
       const balance = parseFloat(account?.balance || "10000");
       const peakBalance = parseFloat(account?.peak_balance || "10000");
       const execMode = account?.execution_mode || "paper";
@@ -1416,6 +1438,9 @@ if (import.meta.main) Deno.serve(async (req) => {
         // so future SL/TP/reverse-close will NOT fan out to the broker).
         const mirrorStatus: "mirrored" | "orphan" | null =
           execMode === "live" ? (mirroredIds.length > 0 ? "mirrored" : "orphan") : null;
+        const sourcePending = p.source_pending_order_id
+          ? sourcePendingById.get(p.source_pending_order_id)
+          : null;
         return {
           id: p.position_id, symbol: p.symbol, direction: p.direction,
           size: parseFloat(p.size), entryPrice: parseFloat(p.entry_price),
@@ -1433,6 +1458,40 @@ if (import.meta.main) Deno.serve(async (req) => {
           tradeOverrides: p.trade_overrides ?? null,
           mirroredConnectionIds: mirroredIds,
           mirrorStatus,
+          // Immutable entry evidence used by the expanded trade story.
+          candidateId: p.candidate_id ?? null,
+          originatingZone: p.originating_zone ?? null,
+          directionVerdict: p.direction_verdict ?? null,
+          thesisValidation: p.thesis_validation ?? null,
+          decisionContext: p.decision_context ?? null,
+          entryConfirmation: p.entry_confirmation ?? sourcePending?.entry_confirmation ?? null,
+          finalAuthorization: p.final_authorization ?? null,
+          frozenStrategyContext: p.frozen_strategy_context ?? null,
+          frozenStrategyHash: p.frozen_strategy_hash ?? null,
+          policyFrozenAt: p.policy_frozen_at ?? null,
+          canonicalDealingRange: p.canonical_dealing_range ?? null,
+          canonicalDealingRangeTimeframe: p.canonical_dealing_range_timeframe ?? null,
+          impulseEntryLifecycle: p.impulse_entry_lifecycle ?? null,
+          crossTfEntryAuthority: p.cross_tf_entry_authority ?? null,
+          gamePlanId: p.game_plan_id ?? null,
+          gamePlanVersion: p.game_plan_version ?? null,
+          stylePolicy: p.style_policy ?? null,
+          stylePolicyVersion: p.style_policy_version ?? null,
+          orderType: p.order_type ?? null,
+          signalScore: p.signal_score ?? null,
+          stagedSetupId: p.staged_setup_id ?? null,
+          sourcePendingOrderId: p.source_pending_order_id ?? null,
+          entryRoute: p.entry_route ?? null,
+          entryZoneTimeframe: p.entry_zone_timeframe ?? null,
+          entryDecisionSnapshot: p.entry_decision_snapshot ?? null,
+          entryConfigSnapshot: p.entry_config_snapshot ?? null,
+          tradingStyle: p.trading_style ?? null,
+          strategyVersion: p.strategy_version ?? null,
+          zoneStoryAtCreation: sourcePending?.zone_story_at_creation ?? null,
+          zoneStoryAtFill: sourcePending?.zone_story_at_fill
+            ?? sourcePending?.zone_story_at_confirmation
+            ?? sourcePending?.zone_story_at_creation
+            ?? null,
         };
       });
       const unrealizedPnl = posArr.reduce((s: number, p: any) => s + p.pnl, 0);

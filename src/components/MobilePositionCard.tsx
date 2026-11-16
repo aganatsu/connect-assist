@@ -2,6 +2,7 @@ import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { resolveExitSettings } from "@/lib/exitSettings";
 import { OverrideBadge } from "@/components/TradeOverrideEditor";
 import { ChevronRight } from "lucide-react";
+import { PositionEntryEvidence } from "@/components/PositionEntryEvidence";
 
 interface MobilePositionCardProps {
   position: any;
@@ -11,9 +12,10 @@ interface MobilePositionCardProps {
   /** Live bot config. Without it this card falls back to the entry-time
    *  snapshot and shows management as off after it has already fired. */
   botConfig?: any;
+  minZoneScore?: number;
 }
 
-export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose, botConfig }: MobilePositionCardProps) {
+export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose, botConfig, minZoneScore = 4 }: MobilePositionCardProps) {
   const inst = INSTRUMENTS.find((i: any) => i.symbol === p.symbol);
   const pipSize = inst?.pipSize || 0.0001;
   const entry = parseFloat(p.entryPrice);
@@ -102,6 +104,7 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose,
       {/* Expanded details */}
       {isExpanded && (
         <div className="px-3 pb-3 pt-0 space-y-2">
+          <PositionEntryEvidence position={p} minZoneScore={minZoneScore} />
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] font-mono pl-4 border-l-2 border-border">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Entry</span>
