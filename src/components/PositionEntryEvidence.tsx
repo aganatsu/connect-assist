@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
+import { ImpulseZonePanel } from "@/components/ImpulseZonePanel";
 import { formatPrice } from "@/lib/formatTime";
 import { getPositionEntryEvidence } from "@/lib/positionEvidence";
 
@@ -83,6 +84,14 @@ export function PositionEntryEvidence({ position, minZoneScore = 4 }: PositionEn
           minZoneScore={minZoneScore}
           zoneGateBypassed={signal.signalSource === "unified"}
         />
+      ) : impulseZone?.hasZone ? (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[9px] text-muted-foreground">Legacy entry evidence preserved by the older scanner.</p>
+            <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[8px] font-bold text-amber-300">PARTIAL HISTORICAL RECORD</span>
+          </div>
+          <ImpulseZonePanel data={impulseZone as never} isLiveContext={false} />
+        </div>
       ) : (
         <div className="rounded border border-border/60 bg-secondary/25 p-2 space-y-1">
           <div className="text-[10px] font-semibold text-foreground/80">Zone evidence</div>
