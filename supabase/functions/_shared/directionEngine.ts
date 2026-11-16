@@ -385,9 +385,24 @@ export function is4HRetracing(
   const opposing = recentChoch.filter(c => c.type === oppositeType);
   const live = priceAware ? opposing.filter(c => chochStillValid(c, lastClose)) : opposing;
   const reclaimed = opposing.length - live.length;
-  // latestDecides: a newer CHoCH with the bias supersedes any older opposing one.
+  // latestDecides: a newer CHoCH with the bias supersedes any older opposing one —
+  // but only while structure has not broken against the bias since. Swings confirm
+  // 3 bars late, so a candle that closes through the latest swing low (bullish bias)
+  // or high (bearish bias) is not yet a CHoCH in the list; without this check the
+  // stale CHoCH still counted as "latest" (EUR/JPY 2026-11-12 02:50: the 02:30 15m
+  // candle closed at 176.92, below the 176.975 swing low, and a long was taken; the
+  // old rule would have blocked it). A pullback that stays inside the latest swing —
+  // the normal entry into a zone — is not affected.
   const latest = recentChoch.reduce<typeof recentChoch[number] | null>((a, b) => (!a || b.index > a.index ? b : a), null);
-  const supersededByLatest = latestDecides && latest !== null && latest.type !== oppositeType;
+  const latestWithBias = latestDecides && latest !== null && latest.type !== oppositeType;
+  const guardSwing = latestWithBias
+    ? (h4Structure.swingPoints ?? []).filter(sp => sp.type === (bias === "bullish" ? "low" : "high")).at(-1) ?? null
+    : null;
+  const brokenSince = latestWithBias && latest && guardSwing
+    ? h4Candles.slice(latest.index + 1).some(c => bias === "bullish" ? c.close < guardSwing.price : c.close > guardSwing.price)
+    : false;
+  const supersededByLatest = latestWithBias && !brokenSince;
+  const latestUndone = latestWithBias && brokenSince;
   const chochAgainst = live.length > 0 && !supersededByLatest;
   // When opposing CHoCHs were overridden by a newer one with the bias, say so instead of "no CHoCH".
   const chochNote = supersededByLatest && live.length > 0
@@ -397,10 +412,13 @@ export function is4HRetracing(
   if (chochAgainst) {
     const chochPrices = live.map(c => c.price.toFixed(5)).join(", ");
     const reclaimedNote = reclaimed > 0 ? `, ${reclaimed} reclaimed by price` : "";
+    const undoneNote = latestUndone && guardSwing
+      ? `; newer ${bias} CHoCH not counted — a ${tfLabel} candle has since closed ${bias === "bullish" ? "below the latest swing low" : "above the latest swing high"} ${guardSwing.price.toFixed(5)}`
+      : "";
     return {
       retracing: false,
       chochAgainst: true,
-      reason: `${tfLabel} CHoCH against ${bias} bias (${live.length} recent ${oppositeType} CHoCH at ${chochPrices}${reclaimedNote})`,
+      reason: `${tfLabel} CHoCH against ${bias} bias (${live.length} recent ${oppositeType} CHoCH at ${chochPrices}${reclaimedNote}${undoneNote})`,
     };
   }
 
