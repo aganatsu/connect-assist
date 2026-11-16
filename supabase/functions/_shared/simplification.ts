@@ -114,7 +114,7 @@ export const GATE_CLASS = {
   news_alignment: "strategy", fotsi: "strategy", atr_range: "strategy", regime: "strategy", game_plan: "strategy",
   spread_info: "strategy",
   instrument_enabled: "risk", max_positions: "risk", per_symbol: "risk", portfolio_heat: "risk", daily_loss: "risk", drawdown: "risk",
-  cooldown: "risk", consecutive_losses: "risk", daily_dollar_loss: "risk", correlation: "risk",
+  cooldown: "risk", friday_cutoff: "risk", consecutive_losses: "risk", daily_dollar_loss: "risk", correlation: "risk",
 } as const satisfies Record<string, "strategy" | "risk">;
 export type AnyGateId = keyof typeof GATE_CLASS;
 /** Gate keys that only record (never block) when the V3 structure owns the trade. Read via gateKey ?? gateId. */

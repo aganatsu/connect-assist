@@ -104,6 +104,8 @@ export const RUNTIME_DEFAULTS = {
   killZoneOnly: false,
   /** When FX is closed (Fri 17:00 ET → Sun 17:00 ET), keep scanning crypto only. */
   weekendCryptoEnabled: true,
+  /** No new FX/metal trades in the last N minutes before Friday's 17:00 ET close. 0 = off. */
+  fridayCutoffMinutes: 0,
 
   // ── Instruments ──
   instruments: [
@@ -600,6 +602,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
     weekendCryptoEnabled: sessions.weekendCryptoEnabled ?? raw.weekendCryptoEnabled ?? RUNTIME_DEFAULTS.weekendCryptoEnabled,
+    fridayCutoffMinutes: sessions.fridayCutoffMinutes ?? raw.fridayCutoffMinutes ?? RUNTIME_DEFAULTS.fridayCutoffMinutes,
 
     // ── Active Days ──
     enabledDays: sessions.activeDays
