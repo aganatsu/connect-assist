@@ -1,17 +1,39 @@
 /** BotDecisionCard — the bot's latest decision for the pair, in plain words. */
 import type { BotView } from "@/lib/botView";
 
-interface Props { view: BotView | null; symbol: string; loading?: boolean }
+interface Props {
+  view: BotView | null;
+  symbol: string;
+  loading?: boolean;
+  /** Pairs on the bot's latest scan. */
+  scannedPairs?: string[];
+  onPickPair?: (pair: string) => void;
+}
+
+function PairChips({ pairs, current, onPick }: { pairs?: string[]; current: string; onPick?: (p: string) => void }) {
+  if (!pairs?.length || !onPick) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {pairs.map((p) => (
+        <button key={p} onClick={() => onPick(p)}
+          className={`px-2 py-0.5 rounded border text-[10px] font-mono ${p === current ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/40"}`}>
+          {p}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const minutesAgo = (iso: string) => Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
 
-export function BotDecisionCard({ view, symbol, loading }: Props) {
+export function BotDecisionCard({ view, symbol, loading, scannedPairs, onPickPair }: Props) {
   if (loading) return <div className="p-4 text-xs text-muted-foreground">Loading the bot's latest scan…</div>;
   if (!view) {
     return (
       <div className="p-4 space-y-2 text-xs">
         <p className="font-semibold text-foreground">The bot has not scanned {symbol} recently.</p>
-        <p className="text-muted-foreground">Bot View shows what the bot saw on its last scan. If {symbol} is not in your Bot Config instruments, it is not being scanned — pick one of your active pairs.</p>
+        <p className="text-muted-foreground">Bot View shows what the bot saw on its last scan. {symbol} is not on it{scannedPairs?.length ? " — pick a pair the bot scans:" : " — it is probably not in your Bot Config instruments."}</p>
+        <PairChips pairs={scannedPairs} current={symbol} onPick={onPickPair} />
       </div>
     );
   }
@@ -62,6 +84,13 @@ export function BotDecisionCard({ view, symbol, loading }: Props) {
         <section className="space-y-1">
           <h4 className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Waiting for</h4>
           <p className="text-zinc-300">{d.waitingFor}</p>
+        </section>
+      )}
+
+      {scannedPairs && scannedPairs.length > 1 && (
+        <section className="space-y-1 border-t border-border/50 pt-2">
+          <h4 className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Other pairs the bot scans</h4>
+          <PairChips pairs={scannedPairs} current={symbol} onPick={onPickPair} />
         </section>
       )}
 

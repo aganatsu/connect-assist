@@ -10,7 +10,8 @@ import {
   createChart, ColorType, CrosshairMode, LineStyle,
   type IChartApi, type ISeriesApi, type Time, type SeriesMarker, type CandlestickData,
 } from "lightweight-charts";
-import { analyzeMarketStructure } from "../../supabase/functions/_shared/smcAnalysis.ts";
+import { analyzeMarketStructure, SPECS } from "../../supabase/functions/_shared/smcAnalysis.ts";
+import { isFxClosedAt } from "../../supabase/functions/_shared/sessions.ts";
 import { labelSwings, type BotView } from "@/lib/botView";
 import { useTheme } from "@/contexts/ThemeContext";
 
@@ -22,6 +23,7 @@ interface Props {
 }
 
 const GREEN = "#22c55e", RED = "#ef4444", BLUE = "#3b82f6", AMBER = "#f59e0b", PURPLE = "#a78bfa";
+const CLOSED = "rgba(100,116,139,0.35)";
 const VISIBLE_BARS = 160;
 
 const toIso = (d: string) => (/[zZ]|[+-]\d\d:?\d\d$/.test(d) ? d : d.replace(" ", "T") + "Z");
@@ -47,6 +49,14 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
       .filter((b) => Number.isFinite(b.time as number) && !seen.has(b.time as number) && !!seen.add(b.time as number))
       .sort((a, b) => (a.time as number) - (b.time as number));
   }, [candles]);
+
+  // Weekend bars: the market is shut, but the data feed still sends them and the bot
+  // reads them (it does not drop them). Kept, so the structure matches the bot's; greyed.
+  const closesWeekends = (SPECS as any)[symbol]?.type !== "crypto";
+  const closedCount = useMemo(
+    () => (closesWeekends ? bars.filter((b) => isFxClosedAt((b.time as number) * 1000)).length : 0),
+    [bars, closesWeekends],
+  );
 
   // The bot's own structure read on these candles.
   const structure = useMemo(() => {
@@ -77,7 +87,9 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
       upColor: GREEN, downColor: RED, borderVisible: false, wickUpColor: GREEN, wickDownColor: RED,
       priceFormat: { type: "price", ...precisionFor(symbol) },
     });
-    series.setData(bars);
+    series.setData(closesWeekends
+      ? bars.map((b) => (isFxClosedAt((b.time as number) * 1000) ? { ...b, color: CLOSED, wickColor: CLOSED } : b))
+      : bars);
 
     const times = bars.map((b) => b.time as number);
     const snap = (iso: string | null | undefined): number | null => {
@@ -147,7 +159,15 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
 
     markers.sort((x, y) => (x.time as number) - (y.time as number));
     series.setMarkers(markers);
-    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - VISIBLE_BARS), to: bars.length + 6 });
+    // Show the latest bars. Set once the chart has a width — set at width 0 (autoSize
+    // before layout) it did not stick and the newest candles ended up off-screen.
+    let rangeSet = false;
+    const showLatest = () => {
+      if (rangeSet || el.clientWidth === 0) return;
+      rangeSet = true;
+      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - VISIBLE_BARS), to: bars.length + 6 });
+    };
+    const raf = requestAnimationFrame(showLatest);
 
     // ── Zone box (canvas overlay, follows scroll/zoom) ──
     const canvas = canvasRef.current;
@@ -183,19 +203,25 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
     };
     drawZone();
     chart.timeScale().subscribeVisibleLogicalRangeChange(drawZone);
-    const ro = new ResizeObserver(drawZone); ro.observe(el);
+    const ro = new ResizeObserver(() => { showLatest(); drawZone(); }); ro.observe(el);
 
     return () => {
+      cancelAnimationFrame(raf);
       ro.disconnect();
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(drawZone);
       chart.remove();
     };
-  }, [bars, structure, view, symbol, light]);
+  }, [bars, structure, view, symbol, light, closesWeekends]);
 
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="absolute inset-0" />
       <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" style={{ zIndex: 2 }} />
+      {closedCount > 0 && (
+        <div className="absolute top-2 left-2 z-[3] text-[10px] text-muted-foreground bg-background/70 rounded px-1.5 py-0.5 pointer-events-none">
+          Grey candles = market closed (weekend data the bot still reads)
+        </div>
+      )}
       {(loading || bars.length === 0) && (
         <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">Loading chart…</div>
       )}

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from "@/components/AppShell";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
@@ -30,6 +30,7 @@ function getRefreshInterval(tf: Timeframe): number {
 
 export default function Chart() {
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
+  const userPickedSymbol = useRef(false);  // set once the user (or the first Bot View load) picks a pair
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1h');
   // Bot View (default): only what the SMC bot saw on its latest scan. Analysis: the chart's own engine.
   const [viewMode, setViewMode] = useState<'bot' | 'analysis'>('bot');
@@ -72,7 +73,7 @@ export default function Chart() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.symbol) setSelectedSymbol(detail.symbol);
+      if (detail?.symbol) { userPickedSymbol.current = true; setSelectedSymbol(detail.symbol); }
     };
     window.addEventListener('smc-symbol-change', handler);
     return () => window.removeEventListener('smc-symbol-change', handler);
@@ -144,6 +145,33 @@ export default function Chart() {
     refetchInterval: 30000,
     staleTime: 25000,
   });
+
+  // Pairs on the SMC bot's latest scan — Bot View is only useful for these.
+  const { data: scannedPairs } = useQuery({
+    queryKey: ['chart-bot-pairs'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('scan_logs')
+        .select('details_json')
+        .eq('bot_id', 'smc')
+        .gte('scanned_at', new Date(Date.now() - 6 * 3600_000).toISOString())
+        .order('scanned_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      const details = Array.isArray(data?.details_json) ? (data.details_json as any[]) : [];
+      return [...new Set(details.map((d) => d?.pair).filter((p): p is string => typeof p === 'string'))];
+    },
+    staleTime: 300_000,
+  });
+
+  // First load in Bot View: open on a pair the bot actually scans, not the EUR/USD default.
+  const pickSymbol = useCallback((sym: string) => { userPickedSymbol.current = true; setSelectedSymbol(sym); }, []);
+  useEffect(() => {
+    if (userPickedSymbol.current || viewMode !== 'bot' || !scannedPairs?.length) return;
+    userPickedSymbol.current = true;
+    if (!scannedPairs.includes(selectedSymbol)) setSelectedSymbol(scannedPairs[0]);
+  }, [scannedPairs, viewMode, selectedSymbol]);
 
   const botView = useMemo(
     () => (botScanSignal?.signal ? buildBotView(botScanSignal.signal, botScanSignal.scannedAt) : null),
@@ -316,7 +344,7 @@ export default function Chart() {
         <div className="flex-1 flex flex-col min-w-0">
           {/* Top toolbar */}
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 flex-wrap">
-            <select value={selectedSymbol} onChange={(e) => setSelectedSymbol(e.target.value)}
+            <select value={selectedSymbol} onChange={(e) => pickSymbol(e.target.value)}
               className="bg-card border border-border rounded px-2 py-1 text-xs font-medium">
               {INSTRUMENTS.map(i => <option key={i.symbol} value={i.symbol}>{i.symbol}</option>)}
             </select>
@@ -380,7 +408,7 @@ export default function Chart() {
         {panelOpen && viewMode === 'bot' && (
           <div className="hidden lg:flex flex-col w-80 xl:w-96 border-l border-border/50 bg-card/50">
             <div className="px-3 py-2 border-b border-border/50 text-[10px] font-bold uppercase tracking-wider text-primary">Bot decision · {selectedSymbol}</div>
-            <BotDecisionCard view={botView} symbol={selectedSymbol} />
+            <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} />
           </div>
         )}
         {panelOpen && viewMode === 'analysis' && (
@@ -615,7 +643,7 @@ export default function Chart() {
                 <ChevronDown className="h-4 w-4" />
               </button>
             </div>
-            {viewMode === 'bot' ? <BotDecisionCard view={botView} symbol={selectedSymbol} /> : <ChartContextPanel
+            {viewMode === 'bot' ? <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} /> : <ChartContextPanel
               analysis={analysis}
               unified={unified}
               botScanSignal={botScanSignal}
