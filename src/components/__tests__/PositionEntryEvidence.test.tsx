@@ -60,6 +60,37 @@ describe("expanded trade evidence UI", () => {
     expect(screen.getByText(/full Zone Story was not frozen/i)).toBeInTheDocument();
     expect(screen.getByText(/predates entry-evidence capture/i)).toBeInTheDocument();
   });
+
+  it("renders every stored legacy Impulse Zone field instead of only its bounds", () => {
+    render(<PositionEntryEvidence position={{
+      symbol: "USD/CAD",
+      direction: "short",
+      signalReason: JSON.stringify({
+        impulseZone: {
+          hasZone: true,
+          selectedTF: "1H",
+          reason: "Valid bearish zone found",
+          impulse: { high: 1.42994, low: 1.42589, direction: "bearish" },
+          bestZone: {
+            type: "ob", high: 1.4268, low: 1.42589, fibLevel: 0.618,
+            fibDepth: 0.618, totalScore: 5.5, srConfirmed: true,
+            ltfRefined: true, ltfType: "fvg", refinedEntry: 1.4262,
+            refinedSL: 1.42881, priceAtZone: true, priceInsideZone: true,
+            priceAtZoneStrict: true, sideOk: true, distanceToZone: 0, distancePips: 0,
+          },
+          allZonesCount: 4, h1HasZone: true, h4HasZone: false, scoringEnabled: true,
+        },
+      }),
+    }} />);
+
+    expect(screen.getByText("PARTIAL HISTORICAL RECORD")).toBeInTheDocument();
+    expect(screen.getByText("Impulse Zone")).toBeInTheDocument();
+    expect(screen.getByText("Fib 61.8%")).toBeInTheDocument();
+    expect(screen.getByText("Score 5.5/11")).toBeInTheDocument();
+    expect(screen.getByText("S/R ✓")).toBeInTheDocument();
+    expect(screen.getByText(/LTF ✓ FVG/)).toBeInTheDocument();
+    expect(screen.getByText(/↓ 1\.42589 – 1\.42994/)).toBeInTheDocument();
+  });
 });
 
 describe("entry-route persistence contract", () => {
