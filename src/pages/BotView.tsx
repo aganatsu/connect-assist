@@ -689,6 +689,7 @@ export default function BotView() {
                     {botPositions.map((p: any) => (
                       <MobilePositionCard
                         botConfig={botConfig}
+                        minZoneScore={botConfig?.strategy?.minZoneScore ?? 4}
                         key={p.id}
                         position={p}
                         isExpanded={expandedPosition === p.id}
@@ -796,7 +797,11 @@ export default function BotView() {
                           {expandedPosition === p.id && (
                             <tr>
                               <td colSpan={15} className="border-b border-border p-2">
-                                <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
+                                <ExpandedPositionCard
+                                  position={p}
+                                  minZoneScore={botConfig?.strategy?.minZoneScore ?? 4}
+                                  onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })}
+                                />
                               </td>
                             </tr>
                           )}
