@@ -915,6 +915,32 @@ export interface StructureBreak {
   level: number;        // the swing level that was broken
   significance?: "internal" | "external";  // internal = broke a minor swing, external = broke a major structural swing
   derivedSR?: { price: number; type: "support" | "resistance"; broken: boolean };  // auto S/R from BOS (LuxAlgo-inspired)
+  /**
+   * Close-based breaks only: the candle where the leg that made this break peaked (bullish) or
+   * bottomed (bearish), before the next opposite swing. Impulse legs end here, not at the break
+   * candle, so the leg runs from its origin to the extreme as drawn by hand.
+   */
+  extremeIndex?: number;
+}
+
+// ── Break detection mode (CLOSE_BASED_BREAKS) ──
+// "close" (default): a BOS/CHoCH is the first candle that CLOSES beyond the latest confirmed,
+//   unbroken swing, recorded on that candle.
+// "legacy": the pre-2026-11-17 rule — each swing is compared with the previous swing of its type,
+//   and only the candle AT the new swing is tested for a close beyond. A peak candle that wicks back
+//   (common at a top) was recorded as a sweep even when earlier candles had closed well through the
+//   level, so legitimate breaks were missed (GBP/AUD 1H 2026-11-16 20:00 / 22:00, 2026-11-17 06:00)
+//   and the impulse stayed on an old leg.
+// Module-level so every consumer of analyzeMarketStructure (direction, impulse, HTF context,
+// confirmation, Bot View) uses one rule. bot-scanner / zone-confirmation-scanner set it from
+// Bot Config strategy.closeBasedBreaks each run; anything else uses the default.
+export type BreakDetectionMode = "close" | "legacy";
+let _breakMode: BreakDetectionMode = "close";
+export function setBreakDetectionMode(mode: BreakDetectionMode): void { _breakMode = mode; }
+export function getBreakDetectionMode(): BreakDetectionMode { return _breakMode; }
+/** Bot Config value → mode. Only an explicit false selects the legacy rule. */
+export function resolveBreakDetectionMode(closeBasedBreaks: unknown): BreakDetectionMode {
+  return closeBasedBreaks === false ? "legacy" : "close";
 }
 
 export interface LiquiditySweep {
@@ -973,6 +999,7 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   // ── Process all swing breaks chronologically to properly track trend transitions ──
   type SwingEvent = { swingType: "high" | "low"; prevLevel: number; index: number; prevSwingIdx: number; significance: "internal" | "external" };
   const events: SwingEvent[] = [];
+  if (_breakMode === "legacy") {
   for (let i = 1; i < highs.length; i++) {
     // The significance of the BOS is determined by the swing that was BROKEN (the previous one)
     events.push({
@@ -987,6 +1014,42 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     });
   }
   events.sort((a, b) => a.index - b.index);
+  } else {
+    // ── CLOSE_BASED_BREAKS: breaks come from the canonical engine (analyzeMarketStructureCanonical,
+    // built 2026-09-18 for exactly this defect and diffed in shadow since): a BOS/CHoCH is the first
+    // candle that CLOSES through a confirmed, unbroken swing — no lookahead (a pivot is usable only once
+    // confirmed), internal → external promotion, one event per direction per candle, external
+    // preferred. Swing points (and the HH/HL labels built on them) are unchanged: they are the merged
+    // list above. Sweeps keep the candle scan below.
+    const canon = analyzeMarketStructureCanonical(candles, { policy: "latest_confirmed", structureLookback });
+    /** Where the leg making a break at `j` peaks (bullish) / bottoms (bearish): before the next opposite swing. */
+    const legExtreme = (j: number, bullish: boolean): number => {
+      const stop = swings.find(sp => sp.type === (bullish ? "low" : "high") && sp.index > j)?.index ?? candles.length;
+      let best = j;
+      for (let x = j + 1; x < stop; x++) {
+        if (bullish ? candles[x].high > candles[best].high : candles[x].low < candles[best].low) best = x;
+      }
+      return best;
+    };
+    const enrich = (b: StructureBreak): StructureBreak => {
+      const bullish = b.type === "bullish";
+      const swingIdx = (b as any).swingIndex as number | undefined;
+      // Auto S/R, as the legacy rule: the extreme between the broken swing and the break candle.
+      let derivedSR: StructureBreak["derivedSR"] = undefined;
+      if (swingIdx !== undefined && b.index > swingIdx + 1) {
+        let ext = bullish ? Infinity : -Infinity;
+        for (let x = swingIdx + 1; x < b.index; x++) ext = bullish ? Math.min(ext, candles[x].low) : Math.max(ext, candles[x].high);
+        let broken = false;
+        for (let x = b.index + 1; x < candles.length; x++) {
+          if (bullish ? candles[x].close < ext : candles[x].close > ext) { broken = true; break; }
+        }
+        derivedSR = { price: ext, type: bullish ? "support" : "resistance", broken };
+      }
+      return { ...b, derivedSR, extremeIndex: legExtreme(b.index, bullish) };
+    };
+    bos.push(...canon.bos.map(enrich));
+    choch.push(...canon.choch.map(enrich));
+  }
 
   for (const evt of events) {
     const breakCandle = candles[evt.index];
