@@ -1,7 +1,10 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from "@/components/AppShell";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
+import BotViewChart from "@/components/BotViewChart";
+import { BotDecisionCard } from "@/components/BotDecisionCard";
+import { buildBotView, BOT_VIEW_TIMEFRAMES } from "@/lib/botView";
 import type { OverlayLayer as SMCOverlayLayer } from "@/components/SMCChart";
 import { ChartOverlayHUD, DEFAULT_VISIBILITY, type OverlayLayer, type OverlayVisibility } from "@/components/ChartOverlayHUD";
 import { ChartContextPanel } from "@/components/ChartContextPanel";
@@ -27,7 +30,14 @@ function getRefreshInterval(tf: Timeframe): number {
 
 export default function Chart() {
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
-  const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('4h');
+  const userPickedSymbol = useRef(false);  // set once the user (or the first Bot View load) picks a pair
+  const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1h');
+  // Bot View (default): only what the SMC bot saw on its latest scan. Analysis: the chart's own engine.
+  const [viewMode, setViewMode] = useState<'bot' | 'analysis'>('bot');
+  const switchMode = useCallback((m: 'bot' | 'analysis') => {
+    setViewMode(m);
+    if (m === 'bot' && !BOT_VIEW_TIMEFRAMES.some(t => t.value === selectedTimeframe)) setSelectedTimeframe('1h');
+  }, [selectedTimeframe]);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelMode, setPanelMode] = useState<'context' | 'detail'>('context');
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
@@ -63,7 +73,7 @@ export default function Chart() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.symbol) setSelectedSymbol(detail.symbol);
+      if (detail?.symbol) { userPickedSymbol.current = true; setSelectedSymbol(detail.symbol); }
     };
     window.addEventListener('smc-symbol-change', handler);
     return () => window.removeEventListener('smc-symbol-change', handler);
@@ -112,12 +122,18 @@ export default function Chart() {
   });
 
   // Latest bot scan signal for this symbol
-  const { data: botScanSignal } = useQuery({
+  const { data: botScanSignal, error: botScanError, isLoading: botScanLoading } = useQuery({
     queryKey: ['chart-bot-scan', selectedSymbol],
     queryFn: async () => {
+      // The latest SMC scan that included this pair. This took the newest row of any
+      // bot and gave up if the pair was not in it. Bounded to 6 h so an unscanned pair
+      // does not walk the whole table.
       const { data, error } = await supabase
         .from('scan_logs')
         .select('details_json, scanned_at')
+        .eq('bot_id', 'smc')
+        .gte('scanned_at', new Date(Date.now() - 6 * 3600_000).toISOString())
+        .contains('details_json', JSON.stringify([{ pair: selectedSymbol }]))  // a string: supabase-js turns a JS array into a Postgres array literal, which jsonb rejects
         .order('scanned_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -129,6 +145,38 @@ export default function Chart() {
     refetchInterval: 30000,
     staleTime: 25000,
   });
+
+  // Pairs on the SMC bot's latest scan — Bot View is only useful for these.
+  const { data: scannedPairs } = useQuery({
+    queryKey: ['chart-bot-pairs'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('scan_logs')
+        .select('details_json')
+        .eq('bot_id', 'smc')
+        .gte('scanned_at', new Date(Date.now() - 6 * 3600_000).toISOString())
+        .order('scanned_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      const details = Array.isArray(data?.details_json) ? (data.details_json as any[]) : [];
+      return [...new Set(details.map((d) => d?.pair).filter((p): p is string => typeof p === 'string'))];
+    },
+    staleTime: 300_000,
+  });
+
+  // First load in Bot View: open on a pair the bot actually scans, not the EUR/USD default.
+  const pickSymbol = useCallback((sym: string) => { userPickedSymbol.current = true; setSelectedSymbol(sym); }, []);
+  useEffect(() => {
+    if (userPickedSymbol.current || viewMode !== 'bot' || !scannedPairs?.length) return;
+    userPickedSymbol.current = true;
+    if (!scannedPairs.includes(selectedSymbol)) setSelectedSymbol(scannedPairs[0]);
+  }, [scannedPairs, viewMode, selectedSymbol]);
+
+  const botView = useMemo(
+    () => (botScanSignal?.signal ? buildBotView(botScanSignal.signal, botScanSignal.scannedAt) : null),
+    [botScanSignal],
+  );
 
   const session = getCurrentSession();
   const kz = isInKillzone();
@@ -296,12 +344,16 @@ export default function Chart() {
         <div className="flex-1 flex flex-col min-w-0">
           {/* Top toolbar */}
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 flex-wrap">
-            <select value={selectedSymbol} onChange={(e) => setSelectedSymbol(e.target.value)}
+            <select value={selectedSymbol} onChange={(e) => pickSymbol(e.target.value)}
               className="bg-card border border-border rounded px-2 py-1 text-xs font-medium">
               {INSTRUMENTS.map(i => <option key={i.symbol} value={i.symbol}>{i.symbol}</option>)}
             </select>
+            <div className="flex rounded border border-border overflow-hidden text-[10px] font-semibold">
+              <button onClick={() => switchMode('bot')} className={`px-2 py-1 ${viewMode === 'bot' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'}`} title="Only what the bot saw on its latest scan">Bot View</button>
+              <button onClick={() => switchMode('analysis')} className={`px-2 py-1 border-l border-border ${viewMode === 'analysis' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'}`} title="The chart's own analysis (all layers)">Analysis</button>
+            </div>
             <div className="flex gap-0.5">
-              {TIMEFRAMES.map(tf => (
+              {(viewMode === 'bot' ? (BOT_VIEW_TIMEFRAMES as unknown as typeof TIMEFRAMES) : TIMEFRAMES).map(tf => (
                 <button key={tf.value} onClick={() => setSelectedTimeframe(tf.value)}
                   className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
                     selectedTimeframe === tf.value
@@ -329,6 +381,9 @@ export default function Chart() {
 
           {/* Chart with HUD overlay */}
           <div className="flex-1 min-h-[250px] relative">
+            {viewMode === 'bot' ? (
+              <BotViewChart candles={(candles as any[]) ?? []} symbol={selectedSymbol} view={botView} loading={!candles} />
+            ) : (<>
             <SMCChart
               candles={(candles as any[]) ?? []}
               symbol={selectedSymbol}
@@ -345,11 +400,18 @@ export default function Chart() {
               direction={unified?.direction === 'BUY' ? 'bullish' : unified?.direction === 'SELL' ? 'bearish' : 'neutral'}
               layerDetails={layerDetails}
             />
+            </>)}
           </div>
         </div>
 
         {/* ═══════ Right Panel (Desktop) ═══════ */}
-        {panelOpen && (
+        {panelOpen && viewMode === 'bot' && (
+          <div className="hidden lg:flex flex-col w-80 xl:w-96 border-l border-border/50 bg-card/50">
+            <div className="px-3 py-2 border-b border-border/50 text-[10px] font-bold uppercase tracking-wider text-primary">Bot decision · {selectedSymbol}</div>
+            <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} loading={botScanLoading} error={botScanError ? String((botScanError as any)?.message ?? botScanError) : null} />
+          </div>
+        )}
+        {panelOpen && viewMode === 'analysis' && (
           <div className="hidden lg:flex flex-col w-80 xl:w-96 border-l border-border/50 bg-card/50">
             {/* Panel mode toggle */}
             <div className="flex border-b border-border/50">
@@ -576,18 +638,18 @@ export default function Chart() {
         {mobileSheetOpen && (
           <div className="lg:hidden fixed inset-x-0 bottom-0 z-40 max-h-[60vh] bg-card border-t border-border rounded-t-xl shadow-2xl overflow-y-auto">
             <div className="sticky top-0 bg-card border-b border-border/50 px-4 py-2 flex items-center justify-between">
-              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Analysis</span>
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{viewMode === 'bot' ? 'Bot decision' : 'Analysis'}</span>
               <button onClick={() => setMobileSheetOpen(false)} className="text-muted-foreground hover:text-foreground">
                 <ChevronDown className="h-4 w-4" />
               </button>
             </div>
-            <ChartContextPanel
+            {viewMode === 'bot' ? <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} loading={botScanLoading} error={botScanError ? String((botScanError as any)?.message ?? botScanError) : null} /> : <ChartContextPanel
               analysis={analysis}
               unified={unified}
               botScanSignal={botScanSignal}
               currentPrice={quote?.price}
               onClose={() => setMobileSheetOpen(false)}
-            />
+            />}
           </div>
         )}
       </div>

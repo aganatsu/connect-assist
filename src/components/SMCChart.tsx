@@ -978,14 +978,21 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
 
     // Swing Point Markers
     if (visibleLayers.has("swingPoints") && overlays.swingPoints?.length && chartData.length > 0) {
-      for (const sp of overlays.swingPoints) {
+      // Label each swing against the previous swing of the same type. This read
+      // "HH" for every high and "LL" for every low regardless of structure.
+      let prevHigh: number | null = null, prevLow: number | null = null;
+      const ordered = [...overlays.swingPoints].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      for (const sp of ordered) {
         if (sp.index == null || sp.index < 0 || sp.index >= chartData.length) continue;
+        let text: string;
+        if (sp.type === "high") { text = prevHigh === null ? "H" : sp.price > prevHigh ? "HH" : "LH"; prevHigh = sp.price; }
+        else { text = prevLow === null ? "L" : sp.price > prevLow ? "HL" : "LL"; prevLow = sp.price; }
         markers.push({
           time: chartData[sp.index].time,
           position: sp.type === "high" ? "aboveBar" : "belowBar",
-          color: "#f59e0b",
+          color: text === "HH" || text === "HL" ? "#22c55e" : text === "LH" || text === "LL" ? "#ef4444" : "#f59e0b",
           shape: "diamond",
-          text: sp.type === "high" ? "HH" : "LL",
+          text,
         });
       }
     }
