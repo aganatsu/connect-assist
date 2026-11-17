@@ -46,7 +46,7 @@ Deno.test("bot-scanner wiring: default-off guard, awaited bounded call, result o
   assert(src.includes("const structureBarsCfg = liveWriterConfig();"));
   assert(src.includes("const structureBarsFetchStartedAt = structureBarsCfg.enabled ? Date.now() : 0;"));
   assert(src.includes(`    if (structureBarsCfg.enabled) {
-      const sb = await writeLiveStructureBars(supabase, pair, hourlyCandles, { cfg: structureBarsCfg, fetchStartedAtMs: structureBarsFetchStartedAt });
+      const sb = await writeLiveStructureBars(supabase, pair, rawHourly, { cfg: structureBarsCfg, fetchStartedAtMs: structureBarsFetchStartedAt });
       console.log(\`[structure-bars] \${pair} \${JSON.stringify(sb)}\`);
     }`), "the call site block is exactly the observational one");
   assertEquals(src.match(/\bsb\b/g)?.length, 2, "the writer result is used only by the log line");
@@ -58,7 +58,7 @@ Deno.test("bot-scanner wiring (5m writer, Impulse-on-V3 option A): default-off g
   assert(src.includes("const structureBars5mCfg = liveWriter5mConfig();"));
   assert(src.includes("const structureBars5mFetchStartedAt = structureBars5mCfg.enabled ? Date.now() : 0;"));
   assert(src.includes(`    if (structureBars5mCfg.enabled && entryInterval === "5m") {
-      const sb5 = await writeLiveStructureBars5m(supabase, pair, candles, { cfg: structureBars5mCfg, fetchStartedAtMs: structureBars5mFetchStartedAt });
+      const sb5 = await writeLiveStructureBars5m(supabase, pair, rawCandles, { cfg: structureBars5mCfg, fetchStartedAtMs: structureBars5mFetchStartedAt });
       console.log(\`[structure-bars-5m] \${pair} \${JSON.stringify(sb5)}\`);
     }`), "the call site block is exactly the observational one");
   assertEquals(src.match(/\bsb5\b/g)?.length, 2, "the writer result is used only by the log line");

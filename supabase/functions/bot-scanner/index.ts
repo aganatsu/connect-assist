@@ -99,6 +99,7 @@ import { claimRoute2Fill, describeClaimMiss } from "../_shared/route2FillClaim.t
 import { settlePaperPosition, describeSettlementMiss } from "../_shared/paperSettlement.ts";
 import { bosCloseGate, resolveMinBosClose } from "../_shared/bosCloseGate.ts";
 import { fridayCutoffGate, resolveFridayCutoffMinutes } from "../_shared/fridayCutoff.ts";
+import { fxRealBars, isForexSymbol, weekendAllowance } from "../_shared/fxWeekendBars.ts";
 import { applyLoggedOnlyGates, effectiveRiskPercent, gateKeyOf, hardOrOff, orderEffectiveRR, resolveSimplification, unifiedVsImpulse, V3_LOGGED_ONLY_GATE_IDS } from "../_shared/simplification.ts";
 import { fillTimeSize } from "../_shared/fillTimeSizing.ts";
 import { resolvePositionCaps } from "../_shared/positionCaps.ts";
@@ -271,6 +272,7 @@ const DEFAULTS = {
   // ── Sessions ──
   killZoneOnly: false,
   weekendCryptoEnabled: true,
+  dropFxWeekendBars: true,      // SMC analysis drops FX weekend bars (WEEKEND_BARS_PREREG_V1); false = old behaviour
   fridayCutoffMinutes: 0,       // No new FX/metal trades in the last N minutes before Friday's close (0 = off)
   // ── Protection ──
   maxConsecutiveLosses: 0,
@@ -820,16 +822,29 @@ const CANDLE_LIMITS: Record<string, number> = { "4h": 800 };
 const DEFAULT_CANDLE_LIMIT = 300;
 export const LEGACY_H4_WINDOW = 300;
 
+// WEEKEND_BARS_PREREG_V1: forex fetches go deeper so the weekend drop (fxRealBars,
+// _shared/fxWeekendBars.ts) still leaves the usual count of real bars.
+/** The deeper forex fetch, per symbol|interval, this scan. Read only by fxRealBars. */
+const _deepFxCandles = new Map<string, Candle[]>();
+
 async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Promise<Candle[]> {
+  const limit = CANDLE_LIMITS[interval] ?? DEFAULT_CANDLE_LIMIT;
+  const extra = isForexSymbol(symbol) ? weekendAllowance(interval, limit) : 0;
   const result = await fetchCandlesWithFallback({
     symbol,
     interval,
-    limit: CANDLE_LIMITS[interval] ?? DEFAULT_CANDLE_LIMIT,
+    limit: limit + extra,
     brokerConn: _scanBrokerConn,
     skipBroker: true,
   });
-  return result.candles;
+  if (extra > 0) _deepFxCandles.set(`${symbol}|${interval}`, result.candles);
+  // Every consumer still gets exactly what it got before: the last `limit` raw bars.
+  return result.candles.slice(-limit);
 }
+
+/** The SMC analysis series without FX weekend bars — see _shared/fxWeekendBars.ts. */
+const realBars = (symbol: string, interval: string, bars: Candle[], enabled: boolean): Candle[] =>
+  fxRealBars(symbol, bars, enabled, _deepFxCandles.get(`${symbol}|${interval}`));
 
 // FALLBACK_RATES, getQuoteToUSDRate, MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculatePositionSize
 // are now imported from ../_shared/smcAnalysis.ts (single source of truth)
@@ -1251,6 +1266,7 @@ function _legacyLoadConfigMapping(_raw: any) {
     killZoneOnly: sessions.killZoneOnly ?? false,
     weekendCryptoEnabled: sessions.weekendCryptoEnabled ?? raw.weekendCryptoEnabled ?? true,
     fridayCutoffMinutes: sessions.fridayCutoffMinutes ?? raw.fridayCutoffMinutes ?? 0,
+    dropFxWeekendBars: raw.dropFxWeekendBars !== false,
     // Sessions block no longer passed through — detectSession() uses fixed DEFAULT_SESSION_WINDOWS.
     // The UI only toggles sessions on/off via the filter array.
 
@@ -2534,6 +2550,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     .select("id, api_key, account_id, symbol_suffix, symbol_overrides, created_at")
     .eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true)
     .order("created_at", { ascending: false });
+  _deepFxCandles.clear();   // per-scan: fxRealBars reads only this scan's fetches
   if (brokerConns && brokerConns.length > 0) {
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const picked = (brokerConns.find((r: any) => uuidRe.test(r.account_id)) || brokerConns[0]) as any;
@@ -5335,29 +5352,35 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     // Fetch weekly candles for ICT HTF framework OR swing_trader bias (cached — same data reused across pairs)
     if (needsWeekly) fetchPromises.push(cachedFetch(pair, "1w", "1y"));
     const fetched = await Promise.all(fetchPromises);
-    const candles = fetched[0];
-    const dailyCandles = fetched[1];
+    // WEEKEND_BARS_PREREG_V1: forex analysis series without weekend bars (default on;
+    // Bot Config dropFxWeekendBars: false restores them). Weekly is stamped Monday and
+    // is untouched. The structure-bar recorders below keep the raw series.
+    const dropWk = (pairConfig as any).dropFxWeekendBars !== false;
+    const rawCandles = fetched[0];
+    const candles = realBars(pair, entryInterval, rawCandles, dropWk);
+    const dailyCandles = realBars(pair, "1d", fetched[1], dropWk);
     // Full 4H history (~6 months) — read ONLY by the V2 order-block engine.
-    const h4Full: Candle[] = multiTFRegimeEnabled ? fetched[2] : [];
+    const h4Full: Candle[] = multiTFRegimeEnabled ? realBars(pair, "4h", fetched[2], dropWk) : [];
     // The window every pre-existing consumer has always had. Slicing here keeps
     // swing/structure detection byte-identical, so deepening the fetch cannot
     // change which trades fire.
     const h4Candles: Candle[] = h4Full.slice(-LEGACY_H4_WINDOW);
     const h4Offset = multiTFRegimeEnabled ? 1 : 0;
     // 1H candles always fetched (index = 2 + h4Offset)
-    const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
+    const rawHourly: Candle[] = fetched[2 + h4Offset] || [];
+    const hourlyCandles: Candle[] = realBars(pair, "1h", rawHourly, dropWk);
     if (structureBarsCfg.enabled) {
-      const sb = await writeLiveStructureBars(supabase, pair, hourlyCandles, { cfg: structureBarsCfg, fetchStartedAtMs: structureBarsFetchStartedAt });
+      const sb = await writeLiveStructureBars(supabase, pair, rawHourly, { cfg: structureBarsCfg, fetchStartedAtMs: structureBarsFetchStartedAt });
       console.log(`[structure-bars] ${pair} ${JSON.stringify(sb)}`);
     }
     if (structureBars5mCfg.enabled && entryInterval === "5m") {
-      const sb5 = await writeLiveStructureBars5m(supabase, pair, candles, { cfg: structureBars5mCfg, fetchStartedAtMs: structureBars5mFetchStartedAt });
+      const sb5 = await writeLiveStructureBars5m(supabase, pair, rawCandles, { cfg: structureBars5mCfg, fetchStartedAtMs: structureBars5mFetchStartedAt });
       console.log(`[structure-bars-5m] ${pair} ${JSON.stringify(sb5)}`);
     }
     // 15m candles for scalper structure TF (only fetched when needsM15)
     const m15Offset = needsM15 ? 1 : 0;
-    const m15Candles: Candle[] = needsM15 ? (fetched[3 + h4Offset] || []) : [];
-    const smtCandles = smtFlag ? fetched[3 + h4Offset + m15Offset] : null;
+    const m15Candles: Candle[] = needsM15 ? realBars(pair, "15m", fetched[3 + h4Offset] || [], dropWk) : [];
+    const smtCandles = smtFlag ? realBars(smtPair!, entryInterval, fetched[3 + h4Offset + m15Offset], dropWk) : null;
     // Weekly candles (last in fetch array when needed)
     const weeklyCandles: Candle[] | null = needsWeekly ? (fetched[fetched.length - 1] || null) : null;
     // Legacy alias for ICT HTF active check (used downstream)
