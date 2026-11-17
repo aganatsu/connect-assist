@@ -122,7 +122,7 @@ export default function Chart() {
   });
 
   // Latest bot scan signal for this symbol
-  const { data: botScanSignal } = useQuery({
+  const { data: botScanSignal, error: botScanError, isLoading: botScanLoading } = useQuery({
     queryKey: ['chart-bot-scan', selectedSymbol],
     queryFn: async () => {
       // The latest SMC scan that included this pair. This took the newest row of any
@@ -133,7 +133,7 @@ export default function Chart() {
         .select('details_json, scanned_at')
         .eq('bot_id', 'smc')
         .gte('scanned_at', new Date(Date.now() - 6 * 3600_000).toISOString())
-        .contains('details_json', [{ pair: selectedSymbol }])
+        .contains('details_json', JSON.stringify([{ pair: selectedSymbol }]))  // a string: supabase-js turns a JS array into a Postgres array literal, which jsonb rejects
         .order('scanned_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -408,7 +408,7 @@ export default function Chart() {
         {panelOpen && viewMode === 'bot' && (
           <div className="hidden lg:flex flex-col w-80 xl:w-96 border-l border-border/50 bg-card/50">
             <div className="px-3 py-2 border-b border-border/50 text-[10px] font-bold uppercase tracking-wider text-primary">Bot decision · {selectedSymbol}</div>
-            <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} />
+            <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} loading={botScanLoading} error={botScanError ? String((botScanError as any)?.message ?? botScanError) : null} />
           </div>
         )}
         {panelOpen && viewMode === 'analysis' && (
@@ -643,7 +643,7 @@ export default function Chart() {
                 <ChevronDown className="h-4 w-4" />
               </button>
             </div>
-            {viewMode === 'bot' ? <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} /> : <ChartContextPanel
+            {viewMode === 'bot' ? <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} loading={botScanLoading} error={botScanError ? String((botScanError as any)?.message ?? botScanError) : null} /> : <ChartContextPanel
               analysis={analysis}
               unified={unified}
               botScanSignal={botScanSignal}

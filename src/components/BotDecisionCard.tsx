@@ -5,6 +5,8 @@ interface Props {
   view: BotView | null;
   symbol: string;
   loading?: boolean;
+  /** The scan lookup failed — say so instead of claiming the pair was not scanned. */
+  error?: string | null;
   /** Pairs on the bot's latest scan. */
   scannedPairs?: string[];
   onPickPair?: (pair: string) => void;
@@ -26,8 +28,16 @@ function PairChips({ pairs, current, onPick }: { pairs?: string[]; current: stri
 
 const minutesAgo = (iso: string) => Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
 
-export function BotDecisionCard({ view, symbol, loading, scannedPairs, onPickPair }: Props) {
+export function BotDecisionCard({ view, symbol, loading, error, scannedPairs, onPickPair }: Props) {
   if (loading) return <div className="p-4 text-xs text-muted-foreground">Loading the bot's latest scan…</div>;
+  if (!view && error) {
+    return (
+      <div className="p-4 space-y-2 text-xs">
+        <p className="font-semibold text-destructive">Could not load the bot's latest scan of {symbol}.</p>
+        <p className="text-muted-foreground font-mono break-words">{error}</p>
+      </div>
+    );
+  }
   if (!view) {
     return (
       <div className="p-4 space-y-2 text-xs">
