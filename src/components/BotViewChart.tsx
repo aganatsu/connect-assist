@@ -42,17 +42,21 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
   const { resolvedTheme } = useTheme();
   const light = resolvedTheme === "light";
 
+  // Forex: the bot drops weekend bars (WEEKEND_BARS_PREREG_V1, Bot Config dropFxWeekendBars,
+  // default on), so they are dropped here too and the structure matches the bot's.
+  const isForex = (SPECS as any)[symbol]?.type === "forex";
   const bars: CandlestickData<Time>[] = useMemo(() => {
     const seen = new Set<number>();
     return (candles ?? [])
       .map((c) => ({ time: toSec(c.datetime) as Time, open: c.open, high: c.high, low: c.low, close: c.close }))
       .filter((b) => Number.isFinite(b.time as number) && !seen.has(b.time as number) && !!seen.add(b.time as number))
+      .filter((b) => !isForex || !isFxClosedAt((b.time as number) * 1000))
       .sort((a, b) => (a.time as number) - (b.time as number));
-  }, [candles]);
+  }, [candles, isForex]);
 
-  // Weekend bars: the market is shut, but the data feed still sends them and the bot
-  // reads them (it does not drop them). Kept, so the structure matches the bot's; greyed.
-  const closesWeekends = (SPECS as any)[symbol]?.type !== "crypto";
+  // Other weekend-closed markets (gold): the feed still sends weekend bars and the bot
+  // reads them. Kept, so the structure matches the bot's; greyed.
+  const closesWeekends = !isForex && (SPECS as any)[symbol]?.type !== "crypto";
   const closedCount = useMemo(
     () => (closesWeekends ? bars.filter((b) => isFxClosedAt((b.time as number) * 1000)).length : 0),
     [bars, closesWeekends],
