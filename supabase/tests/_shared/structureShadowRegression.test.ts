@@ -2,6 +2,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import {
   analyzeMarketStructure,
   analyzeMarketStructureCanonical,
+  setBreakDetectionMode,
 } from "../../functions/_shared/smcAnalysis.ts";
 import {
   buildStructureShadowDiff,
@@ -9,6 +10,11 @@ import {
   SHADOW_POLICY,
 } from "../../functions/_shared/structureShadow.ts";
 import type { Candle } from "../../functions/_shared/smcAnalysis.ts";
+
+// This file reproduces STORED telemetry written by the pre-2026-11-17 break rule, so it pins that
+// rule ("legacy"). Since CLOSE_BASED_BREAKS the default is "close" — breaks from the canonical
+// engine — and the last test below checks that the default now agrees with canonical here.
+setBreakDetectionMode("legacy");
 
 /**
  * Two real production disagreements, frozen as regression fixtures.
@@ -243,4 +249,20 @@ Deno.test("[BTC/USD] canonical fires 4 bars earlier on the same move", () => {
   const can = latest([...canSt.bos, ...canSt.choch])!;
   assertEquals(live.index - can.index, 4, "live reports the break four 5m bars later");
   assertEquals(live.type, can.type, "same direction — this is timing, not disagreement on direction");
+});
+
+Deno.test("[BTC/USD] default (close) break rule fires on the canonical bar, not 4 bars later", () => {
+  setBreakDetectionMode("close");
+  try {
+    const w = load(CASES[0].file);
+    const st = analyzeMarketStructure(w);
+    const live = latest([...st.bos, ...st.choch])!;
+    const can = latest([...analyzeMarketStructureCanonical(w, { policy: "latest_confirmed" }).bos,
+      ...analyzeMarketStructureCanonical(w, { policy: "latest_confirmed" }).choch])!;
+    assertEquals(live.index, can.index, "same candle as the canonical engine");
+    assertEquals(live.type, can.type);
+    assertEquals(live.level, can.level);
+  } finally {
+    setBreakDetectionMode("legacy");
+  }
 });

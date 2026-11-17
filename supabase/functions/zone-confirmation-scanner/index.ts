@@ -43,6 +43,7 @@ import {
   SPECS,
   analyzeMarketStructure,
   normalizeSymKey,
+  setBreakDetectionMode, resolveBreakDetectionMode,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
 import {
@@ -354,6 +355,8 @@ Deno.serve(async (req) => {
 
         const { telegramChatIds, brokerConnections, openPositions, account, config } = userData;
         const strategyConfig = config.strategy || {};
+        // CLOSE_BASED_BREAKS: the 5m CHoCH confirmation uses the owner's break rule (default on).
+        setBreakDetectionMode(resolveBreakDetectionMode(strategyConfig.closeBasedBreaks));
 
         // Confirm on the timeframe this style enters on, not always 5m. A swing
         // setup drawn from a weekly bias was previously confirmed — or thrown

@@ -55,7 +55,9 @@ function risingThenCrash(crashBars: number): Candle[] {
 Deno.test("later price action used to delete zones that already existed", () => {
   // The bug in one comparison. Same chart, one with a selloff appended.
   const quiet = enumerateImpulseLegs(risingThenCrash(0), "D");
-  const afterCrash = enumerateImpulseLegs(risingThenCrash(14), "D");
+  // Bullish only: the selloff itself is a valid BEARISH leg under the close-based break rule
+  // (it closes through the last swing low; the old peak-candle rule never registered it).
+  const afterCrash = enumerateImpulseLegs(risingThenCrash(14), "D").filter(l => l.direction === "bullish");
   assert(quiet.length >= 3, `the staircase produces legs (${quiet.length})`);
   assertEquals(afterCrash.length, 0,
     "on the default path a selloff erases every historical leg — and its zones");
@@ -72,7 +74,8 @@ Deno.test("the live finder is unchanged — it never returns a dead leg", () => 
 
 Deno.test("opting in keeps the leg, flagged rather than discarded", () => {
   const candles = risingThenCrash(14);
-  const withBroken = enumerateImpulseLegs(candles, "D", { includeBrokenOrigin: true });
+  const withBroken = enumerateImpulseLegs(candles, "D", { includeBrokenOrigin: true })
+    .filter(l => l.direction === "bullish");   // the staircase legs; the selloff is a live bearish leg
   assert(withBroken.length >= 4, `legs survive the crash (${withBroken.length})`);
   const broken = withBroken.filter(l => l.originBroken);
   assertEquals(broken.length, withBroken.length, "all are flagged, not silently kept");

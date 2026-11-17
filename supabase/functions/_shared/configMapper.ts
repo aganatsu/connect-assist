@@ -173,6 +173,8 @@ export const RUNTIME_DEFAULTS = {
   priceAwareStructureBlocks: false,
   /** Latest structure-TF CHoCH decides the direction veto (default true since 2026-11-11). */
   structureLatestChochDecides: true,
+  /** BOS/CHoCH = first candle CLOSE beyond the latest confirmed swing (default true since 2026-11-17). false = legacy peak-candle rule. */
+  closeBasedBreaks: true,
   // Anchor the stop beyond the zone edge instead of at a swing inside it, and
   // skip the setup when that stop exceeds the override cap. OFF = current
   // behaviour. See the block in bot-scanner for why.
@@ -490,6 +492,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     useConfirmedTrend: strategy.useConfirmedTrend ?? raw.useConfirmedTrend ?? RUNTIME_DEFAULTS.useConfirmedTrend,
     priceAwareStructureBlocks: strategy.priceAwareStructureBlocks ?? raw.priceAwareStructureBlocks ?? RUNTIME_DEFAULTS.priceAwareStructureBlocks,
     structureLatestChochDecides: strategy.structureLatestChochDecides ?? raw.structureLatestChochDecides ?? RUNTIME_DEFAULTS.structureLatestChochDecides,
+    closeBasedBreaks: strategy.closeBasedBreaks ?? raw.closeBasedBreaks ?? RUNTIME_DEFAULTS.closeBasedBreaks,
     zoneAnchoredStop: strategy.zoneAnchoredStop ?? raw.zoneAnchoredStop ?? RUNTIME_DEFAULTS.zoneAnchoredStop,
     zoneExitDirectionAware: strategy.zoneExitDirectionAware ?? raw.zoneExitDirectionAware ?? RUNTIME_DEFAULTS.zoneExitDirectionAware,
     zoneChaseMaxZoneWidths: strategy.zoneChaseMaxZoneWidths ?? raw.zoneChaseMaxZoneWidths ?? RUNTIME_DEFAULTS.zoneChaseMaxZoneWidths,

@@ -2,6 +2,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import {
   analyzeMarketStructure,
   analyzeMarketStructureCanonical,
+  setBreakDetectionMode,
 } from "../../functions/_shared/smcAnalysis.ts";
 import {
   buildStructureShadowDiff,
@@ -109,6 +110,9 @@ Deno.test("the live engine's output is byte-identical whether the shadow runs or
 });
 
 Deno.test("shadow enabled detects the GBP/CAD external CHoCH the live engine misses", () => {
+  // Documents the pre-2026-11-17 rule, so pin it: since CLOSE_BASED_BREAKS the default finds it.
+  setBreakDetectionMode("legacy");
+  try {
   const candles = closeThroughExternalLow();
   const current = analyzeMarketStructure(candles);
 
@@ -129,6 +133,9 @@ Deno.test("shadow enabled detects the GBP/CAD external CHoCH the live engine mis
     assertEquals(diff!.latestEvent.canonical?.significance, "external");
     assert(Math.abs((diff!.latestEvent.canonical?.level ?? NaN) - 1.84018) < 1e-9);
   });
+  } finally {
+    setBreakDetectionMode("close");
+  }
 });
 
 Deno.test("a level older than the cap stays in the ledger but cannot emit", () => {
@@ -393,4 +400,13 @@ Deno.test("geometricTrendFromSwings returns ranging when there is too little str
     "ranging",
     "one high and one low is not enough to establish a sequence",
   );
+});
+
+Deno.test("CLOSE_BASED_BREAKS (default): the live engine now reports the GBP/CAD external close-through", () => {
+  const candles = closeThroughExternalLow();
+  const st = analyzeMarketStructure(candles);
+  const hit = [...st.bos, ...st.choch].filter(b =>
+    b.type === "bearish" && Math.abs((b.level ?? NaN) - 1.84018) < 1e-9);
+  assertEquals(hit.length, 1, "the close through 1.84018 is a break under the default rule");
+  assertEquals(hit[0].closeBased, true);
 });

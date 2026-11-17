@@ -575,7 +575,9 @@ function validateImpulseFromBOS(
   // Try each candidate swing as the impulse origin
   for (const origin of candidates.slice(0, 5)) { // Check up to 5 candidates
     const startIdx = origin.index;
-    const endIdx = bosIdx;
+    // Close-based breaks carry where the leg peaked after breaking; the leg runs to there.
+    // Legacy breaks are recorded at the peak candle already and carry no extremeIndex.
+    const endIdx = Math.max(bosIdx, bos.extremeIndex ?? bosIdx);
 
     if (endIdx - startIdx < 3) continue; // Too short to be meaningful
 
