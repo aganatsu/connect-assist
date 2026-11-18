@@ -97,13 +97,19 @@ export const TRADE_TIMEFRAMES = [
   { value: "1h", label: "1H" }, { value: "4h", label: "4H" },
 ] as const;
 
+/** Where the trade's story starts: the impulse it was built on, else the entry. */
+export function tradeStoryStart(t: ChartTrade): string {
+  const imp = t.impulse?.fromTime ? Date.parse(t.impulse.fromTime) : NaN;
+  return Number.isFinite(imp) && imp < Date.parse(t.openTime) ? t.impulse!.fromTime! : t.openTime;
+}
+
 /**
  * The smallest timeframe whose `bars`-candle window still reaches back to a little before
- * the entry. The chart fetches the latest `bars` candles only, so an old trade needs a
- * coarser timeframe to be on screen at all.
+ * the impulse the trade was built on (else the entry). The chart fetches the latest `bars`
+ * candles only, so an old trade needs a coarser timeframe to be on screen at all.
  */
 export function timeframeForTrade(t: ChartTrade, nowMs = Date.now(), bars = 500): string {
-  const ageMin = (nowMs - Date.parse(t.openTime)) / 60_000;
+  const ageMin = (nowMs - Date.parse(tradeStoryStart(t))) / 60_000;
   for (const tf of ["5min", "15min", "1h", "4h"]) {
     if (ageMin / TF_MINUTES[tf] + 60 <= bars) return tf;   // 60 bars of context before the entry
   }

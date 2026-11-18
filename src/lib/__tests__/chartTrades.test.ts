@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeReasonLabel, rMultiple, timeframeForTrade, toChartTrades, tradeExcursion } from "@/lib/chartTrades";
+import { closeReasonLabel, rMultiple, timeframeForTrade, toChartTrades, tradeExcursion, tradeStoryStart } from "@/lib/chartTrades";
 
 // The owner's BTC short, 2026-11-17 22:52 → 2026-11-18 14:40, target hit (+$989.76).
 const btcSignal = JSON.stringify({
@@ -73,6 +73,16 @@ describe("timeframeForTrade", () => {
     expect(timeframeForTrade(at(40), now)).toBe("15min");    // 480 5m bars too many; 160 15m bars
     expect(timeframeForTrade(at(200), now)).toBe("1h");
     expect(timeframeForTrade(at(2000), now)).toBe("4h");
+  });
+  it("reaches back to the impulse the trade was built on, not just the entry", () => {
+    // Entered 2h ago on a 1H impulse that started 40h ago: 5M (504 bars) can't show both.
+    const t = { ...at(2), impulse: { ...at(2).impulse!, fromTime: new Date(now - 40 * 3_600_000).toISOString() } };
+    expect(tradeStoryStart(t)).toBe(t.impulse.fromTime);
+    expect(timeframeForTrade(t, now)).toBe("15min");
+    // No impulse times recorded → the entry decides.
+    const bare = { ...at(2), impulse: null };
+    expect(tradeStoryStart(bare)).toBe(bare.openTime);
+    expect(timeframeForTrade(bare, now)).toBe("5min");
   });
 });
 
