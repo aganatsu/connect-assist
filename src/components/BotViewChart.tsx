@@ -13,6 +13,7 @@ import {
 import { analyzeMarketStructure, SPECS } from "../../supabase/functions/_shared/smcAnalysis.ts";
 import { isFxClosedAt } from "../../supabase/functions/_shared/sessions.ts";
 import { labelSwings, type BotView } from "@/lib/botView";
+import { closeReasonLabel, type ChartTrade, type Excursion } from "@/lib/chartTrades";
 import { useTheme } from "@/contexts/ThemeContext";
 
 interface Props {
@@ -20,9 +21,15 @@ interface Props {
   symbol: string;
   view: BotView | null;
   loading?: boolean;
+  /** Open positions on this symbol: entry / stop / target lines that stay until the trade closes. */
+  openTrades?: ChartTrade[];
+  /** Trades tab: the trade under review — entry/exit markers, its levels over its lifetime, and the excursion band. */
+  focusTrade?: ChartTrade | null;
+  excursion?: Excursion | null;
 }
 
-const GREEN = "#22c55e", RED = "#ef4444", BLUE = "#3b82f6", AMBER = "#f59e0b", PURPLE = "#a78bfa";
+const GREEN = "#22c55e", RED = "#ef4444", BLUE = "#3b82f6", AMBER = "#f59e0b", PURPLE = "#a78bfa", CYAN = "#06b6d4";
+const fmtR = (r: number | null) => (r == null ? "" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`);
 const CLOSED = "rgba(100,116,139,0.35)";
 const VISIBLE_BARS = 160;
 
@@ -36,7 +43,7 @@ function precisionFor(sym: string): { precision: number; minMove: number } {
   return { precision: 5, minMove: 0.00001 };
 }
 
-export default function BotViewChart({ candles, symbol, view, loading }: Props) {
+export default function BotViewChart({ candles, symbol, view, loading, openTrades, focusTrade, excursion }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { resolvedTheme } = useTheme();
@@ -161,6 +168,44 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
     if (L?.sl != null) series.createPriceLine({ price: L.sl, color: RED, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "stop" });
     if (L?.tp != null) series.createPriceLine({ price: L.tp, color: GREEN, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "target" });
 
+    // ── Open positions on this symbol ──
+    for (const t of openTrades ?? []) {
+      const long = t.direction === "long";
+      series.createPriceLine({ price: t.entryPrice, color: CYAN, lineWidth: 2, lineStyle: LineStyle.Solid, axisLabelVisible: true, title: `${long ? "BUY" : "SELL"} open ${fmtR(t.r)}`.trim() });
+      if (t.sl != null) series.createPriceLine({ price: t.sl, color: RED, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "SL" });
+      if (t.tp != null) series.createPriceLine({ price: t.tp, color: GREEN, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "TP" });
+      const et = snap(t.openTime);
+      if (et != null) markers.push({ time: et as Time, position: long ? "belowBar" : "aboveBar", color: CYAN, shape: long ? "arrowUp" : "arrowDown", text: long ? "BUY" : "SELL" });
+    }
+
+    // ── The trade under review (Trades tab) ──
+    const ft = focusTrade ?? null;
+    const ftEntryT = ft ? snap(ft.openTime) : null;
+    const ftEndT = ft ? (ft.closeTime ? snap(ft.closeTime) : times[times.length - 1]) : null;
+    if (ft && ftEntryT != null && ftEndT != null) {
+      const long = ft.direction === "long";
+      const seg = (price: number | null, color: string, style: LineStyle, width: 1 | 2) => {
+        if (price == null) return;
+        const ls = chart.addLineSeries({ color, lineWidth: width, lineStyle: style, ...quiet });
+        ls.setData(ftEndT > ftEntryT
+          ? [{ time: ftEntryT as Time, value: price }, { time: ftEndT as Time, value: price }]
+          : [{ time: ftEntryT as Time, value: price }]);
+      };
+      seg(ft.entryPrice, CYAN, LineStyle.Solid, 2);
+      seg(ft.sl, RED, LineStyle.Dashed, 1);
+      seg(ft.tp, GREEN, LineStyle.Dashed, 1);
+      // Axis labels without full-width lines, so the levels read off the scale.
+      series.createPriceLine({ price: ft.entryPrice, color: CYAN, lineVisible: false, axisLabelVisible: true, title: long ? "BUY" : "SELL" } as never);
+      if (ft.sl != null) series.createPriceLine({ price: ft.sl, color: RED, lineVisible: false, axisLabelVisible: true, title: "SL" } as never);
+      if (ft.tp != null) series.createPriceLine({ price: ft.tp, color: GREEN, lineVisible: false, axisLabelVisible: true, title: "TP" } as never);
+      markers.push({ time: ftEntryT as Time, position: long ? "belowBar" : "aboveBar", color: CYAN,
+        shape: long ? "arrowUp" : "arrowDown", text: `${long ? "BUY" : "SELL"} ${ft.entryPrice}` });
+      if (ft.status === "closed" && ft.closeTime) {
+        markers.push({ time: ftEndT as Time, position: long ? "aboveBar" : "belowBar", color: (ft.r ?? 0) > 0 ? GREEN : RED,
+          shape: "circle", text: `${closeReasonLabel(ft.closeReason)} ${fmtR(ft.r)}`.trim() });
+      }
+    }
+
     markers.sort((x, y) => (x.time as number) - (y.time as number));
     series.setMarkers(markers);
     // Show the latest bars. Set once the chart has a width — set at width 0 (autoSize
@@ -169,6 +214,12 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
     const showLatest = () => {
       if (rangeSet || el.clientWidth === 0) return;
       rangeSet = true;
+      if (ftEntryT != null && ftEndT != null) {
+        const a = times.indexOf(ftEntryT), b = times.indexOf(ftEndT);
+        const pad = Math.max(20, Math.round((b - a) * 0.5));
+        chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, a - Math.max(pad, 40)), to: Math.min(bars.length + 6, b + pad) });
+        return;
+      }
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - VISIBLE_BARS), to: bars.length + 6 });
     };
     const raf = requestAnimationFrame(showLatest);
@@ -185,6 +236,18 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
       const ctx = canvas.getContext("2d"); if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, r.width, r.height);
+      // How far price went for (green) and against (red) the trade while it was open.
+      if (ft && excursion && ftEntryT != null && ftEndT != null) {
+        const x0 = chart.timeScale().timeToCoordinate(ftEntryT as Time);
+        const x1 = chart.timeScale().timeToCoordinate(ftEndT as Time);
+        const yE = series.priceToCoordinate(ft.entryPrice);
+        const yB = series.priceToCoordinate(excursion.best), yW = series.priceToCoordinate(excursion.worst);
+        if (x0 != null && x1 != null && yE != null && yB != null && yW != null) {
+          const w = Math.max(2, x1 - x0);
+          ctx.fillStyle = "rgba(34,197,94,0.10)"; ctx.fillRect(x0, Math.min(yE, yB), w, Math.abs(yB - yE));
+          ctx.fillStyle = "rgba(239,68,68,0.10)"; ctx.fillRect(x0, Math.min(yE, yW), w, Math.abs(yW - yE));
+        }
+      }
       if (!zone) return;
       const yTop = series.priceToCoordinate(zone.high), yBot = series.priceToCoordinate(zone.low);
       if (yTop == null || yBot == null) return;
@@ -215,7 +278,7 @@ export default function BotViewChart({ candles, symbol, view, loading }: Props) 
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(drawZone);
       chart.remove();
     };
-  }, [bars, structure, view, symbol, light, closesWeekends]);
+  }, [bars, structure, view, symbol, light, closesWeekends, openTrades, focusTrade, excursion]);
 
   return (
     <div className="relative w-full h-full">

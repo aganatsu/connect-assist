@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -19,7 +19,6 @@ import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
 import AuthCallback from "./pages/AuthCallback";
 import NotFound from "./pages/NotFound";
-import TradeReplay from "./pages/TradeReplay";
 import Fundamentals from "./pages/Fundamentals";
 import GamePlan from "./pages/GamePlan";
 import PropFirm from "./pages/PropFirm";
@@ -54,7 +53,8 @@ const App = () => (
                 <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
                 <Route path="/backtest" element={<ProtectedRoute><ErrorBoundary><Backtest /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
-                <Route path="/trade-replay" element={<ProtectedRoute><ErrorBoundary><TradeReplay /></ErrorBoundary></ProtectedRoute>} />
+                {/* Trade Replay moved into the Chart page (Trades tab). Old links and bookmarks land there. */}
+                <Route path="/trade-replay" element={<Navigate to="/chart?view=trades" replace />} />
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="/prop-firm" element={<ProtectedRoute><PropFirm /></ProtectedRoute>} />
                 <Route path="/system" element={<ProtectedRoute><ErrorBoundary><SystemHealth /></ErrorBoundary></ProtectedRoute>} />

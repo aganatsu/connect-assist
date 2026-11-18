@@ -1,10 +1,13 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { AppShell } from "@/components/AppShell";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
 import BotViewChart from "@/components/BotViewChart";
 import { BotDecisionCard } from "@/components/BotDecisionCard";
-import { buildBotView, BOT_VIEW_TIMEFRAMES } from "@/lib/botView";
+import { buildBotView, BOT_VIEW_TIMEFRAMES, type BotView } from "@/lib/botView";
+import { toChartTrades, timeframeForTrade, tradeExcursion, TRADE_TIMEFRAMES } from "@/lib/chartTrades";
+import { TradesPanel } from "@/components/TradesPanel";
 import type { OverlayLayer as SMCOverlayLayer } from "@/components/SMCChart";
 import { ChartOverlayHUD, DEFAULT_VISIBILITY, type OverlayLayer, type OverlayVisibility } from "@/components/ChartOverlayHUD";
 import { ChartContextPanel } from "@/components/ChartContextPanel";
@@ -33,10 +36,17 @@ export default function Chart() {
   const userPickedSymbol = useRef(false);  // set once the user (or the first Bot View load) picks a pair
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1h');
   // Bot View (default): only what the SMC bot saw on its latest scan. Analysis: the chart's own engine.
-  const [viewMode, setViewMode] = useState<'bot' | 'analysis'>('bot');
-  const switchMode = useCallback((m: 'bot' | 'analysis') => {
+  // Trades: open and recent closed trades, each with the bot's record at entry (?view=trades&trade=<id>).
+  const [searchParams] = useSearchParams();
+  const [viewMode, setViewMode] = useState<'bot' | 'analysis' | 'trades'>(searchParams.get('view') === 'trades' ? 'trades' : 'bot');
+  const [selectedTradeId, setSelectedTradeId] = useState<string | null>(searchParams.get('trade'));
+  // The "Trades" nav item links to /chart?view=trades; follow it when the page is already open.
+  const viewParam = searchParams.get('view');
+  useEffect(() => { if (viewParam === 'trades') setViewMode('trades'); }, [viewParam]);
+  const switchMode = useCallback((m: 'bot' | 'analysis' | 'trades') => {
     setViewMode(m);
     if (m === 'bot' && !BOT_VIEW_TIMEFRAMES.some(t => t.value === selectedTimeframe)) setSelectedTimeframe('1h');
+    if (m === 'trades' && !TRADE_TIMEFRAMES.some(t => t.value === selectedTimeframe)) setSelectedTimeframe('1h');
   }, [selectedTimeframe]);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelMode, setPanelMode] = useState<'context' | 'detail'>('context');
@@ -115,11 +125,37 @@ export default function Chart() {
     refetchInterval: refreshInterval,
   });
 
-  const { data: paperStatus } = useQuery({
+  const { data: paperStatus, isLoading: paperLoading } = useQuery({
     queryKey: ['paper-status'],
     queryFn: () => paperApi.status(),
-    staleTime: 30000,
+    staleTime: 10000,
+    refetchInterval: 15000,   // open trades on the chart follow the position
   });
+
+  // ── Trades on the chart ──
+  const chartTrades = useMemo(() => toChartTrades(paperStatus), [paperStatus]);
+  const openTradesHere = useMemo(
+    () => chartTrades.filter(t => t.status === 'open' && t.symbol === selectedSymbol),
+    [chartTrades, selectedSymbol],
+  );
+  const selectedTrade = useMemo(
+    () => chartTrades.find(t => t.id === selectedTradeId) ?? null,
+    [chartTrades, selectedTradeId],
+  );
+  // Trades tab with nothing chosen: the newest trade (open first).
+  useEffect(() => {
+    if (viewMode === 'trades' && !selectedTrade && chartTrades.length) setSelectedTradeId(chartTrades[0].id);
+  }, [viewMode, selectedTrade, chartTrades]);
+  // Choosing a trade moves the chart to its pair, on a timeframe whose window reaches the entry.
+  const lastFocused = useRef<string | null>(null);
+  useEffect(() => {
+    if (viewMode !== 'trades' || !selectedTrade || lastFocused.current === selectedTrade.id) return;
+    lastFocused.current = selectedTrade.id;
+    userPickedSymbol.current = true;
+    setSelectedSymbol(selectedTrade.symbol);
+    setSelectedTimeframe(timeframeForTrade(selectedTrade) as Timeframe);
+  }, [viewMode, selectedTrade]);
+  const focusTrade = viewMode === 'trades' && selectedTrade?.symbol === selectedSymbol ? selectedTrade : null;
 
   // Latest bot scan signal for this symbol
   const { data: botScanSignal, error: botScanError, isLoading: botScanLoading } = useQuery({
@@ -176,6 +212,18 @@ export default function Chart() {
   const botView = useMemo(
     () => (botScanSignal?.signal ? buildBotView(botScanSignal.signal, botScanSignal.scannedAt) : null),
     [botScanSignal],
+  );
+
+  // Trades tab: the chart shows the bot's impulse and zone as recorded at entry.
+  const tradeView = useMemo<BotView | null>(() => focusTrade ? {
+    scannedAt: focusTrade.openTime, status: 'trade_placed',
+    decision: { headline: '', tone: 'go', direction: focusTrade.direction, directionLines: [], zoneLine: null, breakLine: null, waitingFor: null },
+    zone: focusTrade.zone, impulse: focusTrade.impulse,
+    levels: { entry: null, sl: null, tp: null, source: 'none' },
+  } : null, [focusTrade]);
+  const excursion = useMemo(
+    () => (focusTrade && Array.isArray(candles) ? tradeExcursion(focusTrade, candles as any[]) : null),
+    [focusTrade, candles],
   );
 
   const session = getCurrentSession();
@@ -318,8 +366,9 @@ export default function Chart() {
         index: d.index, direction: d.direction, bodyRatio: d.bodyRatio, rangeMultiple: d.rangeMultiple,
       })) : [],
       judasSwing: overlayVisibility.judas ? (analysis.judasSwing ?? null) : null,
+      trades: openTradesHere.map(t => ({ entryPrice: t.entryPrice, stopLoss: t.sl, takeProfit: t.tp, direction: t.direction, label: 'open' })),
     };
-  }, [analysis, botScanSignal, overlayVisibility, candles]);
+  }, [analysis, botScanSignal, overlayVisibility, candles, openTradesHere]);
 
   // Layer detail tooltips
   const layerDetails = useMemo(() => ({
@@ -351,9 +400,13 @@ export default function Chart() {
             <div className="flex rounded border border-border overflow-hidden text-[10px] font-semibold">
               <button onClick={() => switchMode('bot')} className={`px-2 py-1 ${viewMode === 'bot' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'}`} title="Only what the bot saw on its latest scan">Bot View</button>
               <button onClick={() => switchMode('analysis')} className={`px-2 py-1 border-l border-border ${viewMode === 'analysis' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'}`} title="The chart's own analysis (all layers)">Analysis</button>
+              <button onClick={() => switchMode('trades')} className={`px-2 py-1 border-l border-border ${viewMode === 'trades' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:text-foreground'}`} title="Your open and recent trades, with what the bot saw at entry">
+                Trades{chartTrades.some(t => t.status === 'open') ? ` · ${chartTrades.filter(t => t.status === 'open').length} open` : ''}
+              </button>
             </div>
             <div className="flex gap-0.5">
-              {(viewMode === 'bot' ? (BOT_VIEW_TIMEFRAMES as unknown as typeof TIMEFRAMES) : TIMEFRAMES).map(tf => (
+              {(viewMode === 'bot' ? (BOT_VIEW_TIMEFRAMES as unknown as typeof TIMEFRAMES)
+                : viewMode === 'trades' ? (TRADE_TIMEFRAMES as unknown as typeof TIMEFRAMES) : TIMEFRAMES).map(tf => (
                 <button key={tf.value} onClick={() => setSelectedTimeframe(tf.value)}
                   className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
                     selectedTimeframe === tf.value
@@ -382,7 +435,17 @@ export default function Chart() {
           {/* Chart with HUD overlay */}
           <div className="flex-1 min-h-[250px] relative">
             {viewMode === 'bot' ? (
-              <BotViewChart candles={(candles as any[]) ?? []} symbol={selectedSymbol} view={botView} loading={!candles} />
+              <BotViewChart candles={(candles as any[]) ?? []} symbol={selectedSymbol} view={botView} loading={!candles} openTrades={openTradesHere} />
+            ) : viewMode === 'trades' ? (
+              <>
+                <BotViewChart candles={(candles as any[]) ?? []} symbol={selectedSymbol} view={tradeView} loading={!candles}
+                  focusTrade={focusTrade} excursion={excursion} openTrades={focusTrade?.status === 'open' ? [] : openTradesHere} />
+                {selectedTrade && !focusTrade && (
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 z-[3] text-[11px] bg-background/90 border border-border rounded px-2 py-1">
+                    Viewing {selectedSymbol}. <button className="text-primary underline" onClick={() => pickSymbol(selectedTrade.symbol)}>Back to the {selectedTrade.symbol} trade</button>
+                  </div>
+                )}
+              </>
             ) : (<>
             <SMCChart
               candles={(candles as any[]) ?? []}
@@ -409,6 +472,12 @@ export default function Chart() {
           <div className="hidden lg:flex flex-col w-80 xl:w-96 border-l border-border/50 bg-card/50">
             <div className="px-3 py-2 border-b border-border/50 text-[10px] font-bold uppercase tracking-wider text-primary">Bot decision · {selectedSymbol}</div>
             <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} loading={botScanLoading} error={botScanError ? String((botScanError as any)?.message ?? botScanError) : null} />
+          </div>
+        )}
+        {panelOpen && viewMode === 'trades' && (
+          <div className="hidden lg:flex flex-col w-80 xl:w-96 border-l border-border/50 bg-card/50">
+            <div className="px-3 py-2 border-b border-border/50 text-[10px] font-bold uppercase tracking-wider text-primary">Trades</div>
+            <TradesPanel trades={chartTrades} selectedId={selectedTradeId} onSelect={setSelectedTradeId} excursion={excursion} loading={paperLoading} />
           </div>
         )}
         {panelOpen && viewMode === 'analysis' && (
@@ -638,12 +707,13 @@ export default function Chart() {
         {mobileSheetOpen && (
           <div className="lg:hidden fixed inset-x-0 bottom-0 z-40 max-h-[60vh] bg-card border-t border-border rounded-t-xl shadow-2xl overflow-y-auto">
             <div className="sticky top-0 bg-card border-b border-border/50 px-4 py-2 flex items-center justify-between">
-              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{viewMode === 'bot' ? 'Bot decision' : 'Analysis'}</span>
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{viewMode === 'bot' ? 'Bot decision' : viewMode === 'trades' ? 'Trades' : 'Analysis'}</span>
               <button onClick={() => setMobileSheetOpen(false)} className="text-muted-foreground hover:text-foreground">
                 <ChevronDown className="h-4 w-4" />
               </button>
             </div>
-            {viewMode === 'bot' ? <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} loading={botScanLoading} error={botScanError ? String((botScanError as any)?.message ?? botScanError) : null} /> : <ChartContextPanel
+            {viewMode === 'trades' ? <TradesPanel trades={chartTrades} selectedId={selectedTradeId} onSelect={setSelectedTradeId} excursion={excursion} loading={paperLoading} />
+            : viewMode === 'bot' ? <BotDecisionCard view={botView} symbol={selectedSymbol} scannedPairs={scannedPairs} onPickPair={pickSymbol} loading={botScanLoading} error={botScanError ? String((botScanError as any)?.message ?? botScanError) : null} /> : <ChartContextPanel
               analysis={analysis}
               unified={unified}
               botScanSignal={botScanSignal}
