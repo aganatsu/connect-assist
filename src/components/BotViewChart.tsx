@@ -215,9 +215,12 @@ export default function BotViewChart({ candles, symbol, view, loading, openTrade
       if (rangeSet || el.clientWidth === 0) return;
       rangeSet = true;
       if (ftEntryT != null && ftEndT != null) {
-        const a = times.indexOf(ftEntryT), b = times.indexOf(ftEndT);
-        const pad = Math.max(20, Math.round((b - a) * 0.5));
-        chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, a - Math.max(pad, 40)), to: Math.min(bars.length + 6, b + pad) });
+        // From the start of the impulse the trade was built on (when loaded), so the purple
+        // leg and its zone are on screen, not just the trade.
+        const impT = snap(imp?.fromTime ?? null);
+        const a = Math.min(times.indexOf(ftEntryT), impT != null ? times.indexOf(impT) : Infinity), b = times.indexOf(ftEndT);
+        const pad = Math.max(20, Math.round((b - a) * 0.2));
+        chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, a - pad), to: Math.min(bars.length + 6, b + pad) });
         return;
       }
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - VISIBLE_BARS), to: bars.length + 6 });

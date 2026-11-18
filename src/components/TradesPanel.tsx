@@ -19,7 +19,8 @@ interface Props {
 
 const fmtR = (r: number | null) => (r == null ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`);
 const fmtMoney = (v: number | null) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}`);
-const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+/** UTC, like the chart's time axis, so a trade's time here matches where its marker sits. */
+const fmtTime = (iso: string | null) => (iso ? `${new Date(iso).toLocaleString("en-GB", { timeZone: "UTC", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })} UTC` : "—");
 function held(t: ChartTrade): string {
   const ms = (t.closeTime ? Date.parse(t.closeTime) : Date.now()) - Date.parse(t.openTime);
   if (!Number.isFinite(ms) || ms < 0) return "—";

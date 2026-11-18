@@ -24,6 +24,12 @@ describe("TradesPanel", () => {
     expect(screen.getByText("66100.00 → 64500.00")).toBeTruthy();   // impulse at entry
   });
 
+  it("shows times in UTC, like the chart axis, whatever the browser's timezone", () => {
+    render(<TradesPanel trades={trades} selectedId="btc-1" onSelect={() => {}} excursion={null} />);
+    expect(screen.getAllByText(/18 Nov, 14:40 UTC/).length).toBeGreaterThan(0);   // closedAt 14:40:02Z
+    expect(screen.getAllByText(/17 Nov, 22:52 UTC/).length).toBeGreaterThan(0);   // openTime 22:52:02Z
+  });
+
   it("lists open trades above closed ones and selects on click", () => {
     const onSelect = vi.fn();
     render(<TradesPanel trades={trades} selectedId={null} onSelect={onSelect} excursion={null} />);
