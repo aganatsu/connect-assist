@@ -18,7 +18,7 @@ const MORE_ITEMS = [
   { title: "Journal", url: "/journal", icon: BookOpen },
   { title: "Backtest", url: "/backtest", icon: FlaskConical },
   { title: "Brokers", url: "/brokers", icon: Server },
-  { title: "Trade Replay", url: "/trade-replay", icon: Play },
+  { title: "Trades", url: "/chart?view=trades", icon: Play },
   { title: "Prop Firm", url: "/prop-firm", icon: Shield },
   { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
   { title: "Settings", url: "/settings", icon: Settings },

@@ -14,7 +14,7 @@ const TITLES: Record<string, string> = {
   "/journal": "Journal",
   "/backtest": "Backtest",
   "/brokers": "Brokers",
-  "/trade-replay": "Trade Replay",
+  "/trade-replay": "Trades",
   "/prop-firm": "Prop Firm",
   "/settings": "Settings",
 };

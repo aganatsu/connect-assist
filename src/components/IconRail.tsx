@@ -17,7 +17,7 @@ const NAV_ITEMS = [
   { title: "Journal", url: "/journal", icon: BookOpen, shortcut: "6" },
   { title: "Backtest", url: "/backtest", icon: FlaskConical, shortcut: "7" },
   { title: "Brokers", url: "/brokers", icon: Server, shortcut: "8" },
-  { title: "Trade Replay", url: "/trade-replay", icon: Play, shortcut: "0" },
+  { title: "Trades", url: "/chart?view=trades", icon: Play, shortcut: "0" },
   { title: "Prop Firm", url: "/prop-firm", icon: Shield },
   { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
   { title: "Scheduled Tasks", url: "/scheduled-tasks", icon: Clock },
