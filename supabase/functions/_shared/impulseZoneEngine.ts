@@ -282,6 +282,19 @@ const PRICE_AT_ZONE_ATR_MULT = 1.5;
 /** Proximity threshold for "price at zone" — STRICT (market fill decisions) */
 const PRICE_AT_ZONE_STRICT_ATR_MULT = 0.3;
 
+// ─── Origin fallback (IMPULSE_STRETCH_PREREG_V1) ─────────────────────────────
+// When the nearest origin of the latest break has been closed through, the leg is rejected and
+// today's code reaches back to older swings (up to 5) and older breaks until one still holds —
+// stretching the "impulse" over several pushes (GBP/NZD 1H, 2026-11-18: 2.39019 → 2.40693 over
+// 39 h instead of 2.3973 → 2.40693). Off = strict: a closed-through origin means no leg in that
+// direction. IMPULSE_STRETCH_PREREG_V1 passed (docs/); owner chose strict ON (2026-11-19).
+// Bot Config strategy.strictImpulseOrigin = false restores the reaching-back behaviour.
+let _originFallback = false;
+export function setImpulseOriginFallback(on: boolean): void { _originFallback = on; }
+export function getImpulseOriginFallback(): boolean { return _originFallback; }
+/** strategy.strictImpulseOrigin → fallback flag. Only an explicit false re-enables the fallback. */
+export function resolveImpulseOriginFallback(strictImpulseOrigin: unknown): boolean { return strictImpulseOrigin === false; }
+
 // ─── 1. findImpulseLeg ────────────────────────────────────────────────────────
 
 /**
@@ -322,6 +335,8 @@ export function findImpulseLeg(
   let rejectedBefore = 0;
   for (const [attempt, bos] of allBreaks.entries()) {
     const impulse = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
+    // Strict: the latest push's origin was closed through — no leg, no reaching further back.
+    if (!_originFallback && impulse?.originBroken) return null;
     if (!impulse || !impulse.isValid) { rejectedBefore++; continue; }
     if (impulse && impulse.isValid) {
       // ── Sequence: what preceded this leg ──────────────────────────────
@@ -615,7 +630,8 @@ function validateImpulseFromBOS(
     // An OB dies when price accepts through the OB, not when its parent leg is
     // invalidated. Callers that want the live-setup question keep the default;
     // the order-block engine opts in and reads originBroken as metadata.
-    if (!originBroken || opts?.allowBrokenOrigin) {
+    // Strict mode returns the broken leg so findImpulseLeg can stop (isValid stays false).
+    if (!originBroken || opts?.allowBrokenOrigin || !_originFallback) {
       return {
         high: impulseHigh,
         low: impulseLow,

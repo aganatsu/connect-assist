@@ -175,6 +175,8 @@ export const RUNTIME_DEFAULTS = {
   structureLatestChochDecides: true,
   /** BOS/CHoCH = first candle CLOSE beyond the latest confirmed swing (default true since 2026-11-17). false = legacy peak-candle rule. */
   closeBasedBreaks: true,
+  /** Impulse = the latest push; once its origin is closed through there is no leg (no reaching back). Default true since 2026-11-19. */
+  strictImpulseOrigin: true,
   // Anchor the stop beyond the zone edge instead of at a swing inside it, and
   // skip the setup when that stop exceeds the override cap. OFF = current
   // behaviour. See the block in bot-scanner for why.
@@ -493,6 +495,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     priceAwareStructureBlocks: strategy.priceAwareStructureBlocks ?? raw.priceAwareStructureBlocks ?? RUNTIME_DEFAULTS.priceAwareStructureBlocks,
     structureLatestChochDecides: strategy.structureLatestChochDecides ?? raw.structureLatestChochDecides ?? RUNTIME_DEFAULTS.structureLatestChochDecides,
     closeBasedBreaks: strategy.closeBasedBreaks ?? raw.closeBasedBreaks ?? RUNTIME_DEFAULTS.closeBasedBreaks,
+    strictImpulseOrigin: strategy.strictImpulseOrigin ?? raw.strictImpulseOrigin ?? RUNTIME_DEFAULTS.strictImpulseOrigin,
     zoneAnchoredStop: strategy.zoneAnchoredStop ?? raw.zoneAnchoredStop ?? RUNTIME_DEFAULTS.zoneAnchoredStop,
     zoneExitDirectionAware: strategy.zoneExitDirectionAware ?? raw.zoneExitDirectionAware ?? RUNTIME_DEFAULTS.zoneExitDirectionAware,
     zoneChaseMaxZoneWidths: strategy.zoneChaseMaxZoneWidths ?? raw.zoneChaseMaxZoneWidths ?? RUNTIME_DEFAULTS.zoneChaseMaxZoneWidths,
