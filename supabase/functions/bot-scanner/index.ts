@@ -78,7 +78,7 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
+import { type HTFConfluenceData, type TFSlotLabels, setImpulseOriginFallback, resolveImpulseOriginFallback } from "../_shared/impulseZoneEngine.ts";
 import { buildSnapshot, buildContext, type SnapshotInput } from "../_shared/smcScanSnapshot.ts";
 import {
   buildEntryTelemetry, entryConfigSnapshot, entryDecisionSnapshot, carryToHistory,
@@ -276,6 +276,7 @@ const DEFAULTS = {
   weekendCryptoEnabled: true,
   dropFxWeekendBars: true,      // SMC analysis drops FX weekend bars (WEEKEND_BARS_PREREG_V1); false = old behaviour
   closeBasedBreaks: true,       // BOS/CHoCH = first candle close beyond the latest swing (smcAnalysis); false = legacy peak-candle rule
+  strictImpulseOrigin: true,    // impulse origin closed through = no leg (IMPULSE_STRETCH_PREREG_V1); false = reach back to older swings
   fridayCutoffMinutes: 0,       // No new FX/metal trades in the last N minutes before Friday's close (0 = off)
   // ── Protection ──
   maxConsecutiveLosses: 0,
@@ -2296,6 +2297,8 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
   // CLOSE_BASED_BREAKS: set the break rule before ANY structure read this scan (management,
   // pending-order confirmation, thesis checks run before the pair loop). Re-set per pair below.
   setBreakDetectionMode(resolveBreakDetectionMode((config as any).closeBasedBreaks));
+  // IMPULSE_STRETCH: strict impulse origin (default on). Re-set per pair below.
+  setImpulseOriginFallback(resolveImpulseOriginFallback((config as any).strictImpulseOrigin));
   const styleOverridesMode = resolveSimplification((config as any).__rawConfigJson).styleOverridesMode;
   const _intervalStyle = config.tradingStyle?.mode || "day_trader";
   const intervalMinutes = styleOverridesMode === "off"
@@ -5331,6 +5334,7 @@ export async function runScanForUser(supabase: any, userId: string, opts?: { isM
     applyPairOverrides(pairConfig, pair);
     // CLOSE_BASED_BREAKS: one break rule for every structure read of this pair (default on).
     setBreakDetectionMode(resolveBreakDetectionMode((pairConfig as any).closeBasedBreaks));
+    setImpulseOriginFallback(resolveImpulseOriginFallback((pairConfig as any).strictImpulseOrigin));
 
     // Determine entry TF based on style
     const entryInterval = getEntryInterval(pairConfig.entryTimeframe);
