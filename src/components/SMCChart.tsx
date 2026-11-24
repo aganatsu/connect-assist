@@ -21,6 +21,7 @@ import {
   type Time,
 } from "lightweight-charts";
 import { useTheme } from "@/contexts/ThemeContext";
+import { barSpacingSec } from "@/lib/chartRange";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -536,12 +537,18 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     } catch {}
   }, [themedBg, themedText, themedGrid, themedBorder]);
 
-  // Update candle data
+  // Update candle data. Fit the view only for a new pair / timeframe: refitting on every
+  // refetch threw away the user's zoom (src/lib/chartRange.ts).
+  const fittedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!candleSeriesRef.current || !chartData.length) return;
     candleSeriesRef.current.setData(chartData);
-    chartRef.current?.timeScale().fitContent();
-  }, [chartData]);
+    const key = `${symbol ?? ""}|${barSpacingSec(chartData.map((c: any) => Number(c.time)))}`;
+    if (fittedFor.current !== key) {
+      fittedFor.current = key;
+      chartRef.current?.timeScale().fitContent();
+    }
+  }, [chartData, symbol]);
 
   // Update overlays (price lines + markers)
   useEffect(() => {

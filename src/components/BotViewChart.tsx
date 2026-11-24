@@ -8,13 +8,14 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
   createChart, ColorType, CrosshairMode, LineStyle,
-  type IChartApi, type ISeriesApi, type Time, type SeriesMarker, type CandlestickData,
+  type IChartApi, type ISeriesApi, type IPriceLine, type Time, type SeriesMarker, type CandlestickData,
 } from "lightweight-charts";
 import { analyzeMarketStructure, SPECS } from "../../supabase/functions/_shared/smcAnalysis.ts";
 import { isFxClosedAt } from "../../supabase/functions/_shared/sessions.ts";
 import { labelSwings, type BotView } from "@/lib/botView";
 import { closeReasonLabel, type ChartTrade, type Excursion } from "@/lib/chartTrades";
 import { useTheme } from "@/contexts/ThemeContext";
+import { saveRange, restoreRange, barSpacingSec, tradeShapeKey, type SavedRange } from "@/lib/chartRange";
 
 interface Props {
   candles: Array<{ datetime: string; open: number; high: number; low: number; close: number; volume?: number }>;
@@ -36,6 +37,15 @@ const VISIBLE_BARS = 160;
 const toIso = (d: string) => (/[zZ]|[+-]\d\d:?\d\d$/.test(d) ? d : d.replace(" ", "T") + "Z");
 const toSec = (d: string) => Math.floor(Date.parse(toIso(d)) / 1000);
 
+/** Same content → same reference, so a refetch that changes nothing on screen doesn't rebuild the chart. */
+function useStable<T>(value: T, key: string): T {
+  const ref = useRef<{ key: string; value: T } | null>(null);
+  if (!ref.current || ref.current.key !== key) ref.current = { key, value };
+  return ref.current.value;
+}
+
+const openTitle = (t: ChartTrade) => `${t.direction === "long" ? "BUY" : "SELL"} open ${fmtR(t.r)}`.trim();
+
 function precisionFor(sym: string): { precision: number; minMove: number } {
   const s = sym.toUpperCase();
   if (s.includes("JPY")) return { precision: 3, minMove: 0.001 };
@@ -43,7 +53,17 @@ function precisionFor(sym: string): { precision: number; minMove: number } {
   return { precision: 5, minMove: 0.00001 };
 }
 
-export default function BotViewChart({ candles, symbol, view, loading, openTrades, focusTrade, excursion }: Props) {
+export default function BotViewChart({ candles, symbol, view: viewProp, loading, openTrades: openProp, focusTrade: focusProp, excursion: excProp }: Props) {
+  const view = useStable(viewProp, JSON.stringify(viewProp ?? null));
+  const openTrades = useStable(openProp, (openProp ?? []).map(tradeShapeKey).join("|"));
+  const focusTrade = useStable(focusProp, focusProp ? tradeShapeKey(focusProp) : "");
+  const excursion = useStable(excProp, JSON.stringify(excProp ?? null));
+  // Running R on open positions changes every refetch: it updates the line titles in place.
+  const latestOpen = useRef(openProp);
+  latestOpen.current = openProp;
+  const openLines = useRef(new Map<string, IPriceLine>());
+  // The user's zoom/scroll, kept across rebuilds (src/lib/chartRange.ts).
+  const savedRange = useRef<SavedRange | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { resolvedTheme } = useTheme();
@@ -169,9 +189,11 @@ export default function BotViewChart({ candles, symbol, view, loading, openTrade
     if (L?.tp != null) series.createPriceLine({ price: L.tp, color: GREEN, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "target" });
 
     // ── Open positions on this symbol ──
+    openLines.current.clear();
     for (const t of openTrades ?? []) {
       const long = t.direction === "long";
-      series.createPriceLine({ price: t.entryPrice, color: CYAN, lineWidth: 2, lineStyle: LineStyle.Solid, axisLabelVisible: true, title: `${long ? "BUY" : "SELL"} open ${fmtR(t.r)}`.trim() });
+      const live = latestOpen.current?.find((x) => x.id === t.id) ?? t;
+      openLines.current.set(t.id, series.createPriceLine({ price: t.entryPrice, color: CYAN, lineWidth: 2, lineStyle: LineStyle.Solid, axisLabelVisible: true, title: openTitle(live) }));
       if (t.sl != null) series.createPriceLine({ price: t.sl, color: RED, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "SL" });
       if (t.tp != null) series.createPriceLine({ price: t.tp, color: GREEN, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "TP" });
       const et = snap(t.openTime);
@@ -210,10 +232,14 @@ export default function BotViewChart({ candles, symbol, view, loading, openTrade
     series.setMarkers(markers);
     // Show the latest bars. Set once the chart has a width — set at width 0 (autoSize
     // before layout) it did not stick and the newest candles ended up off-screen.
+    // A rebuild of the same pair / timeframe / trade keeps where the user had zoomed to.
+    const rangeKey = `${symbol}|${barSpacingSec(times)}|${ft?.id ?? ""}`;
     let rangeSet = false;
     const showLatest = () => {
       if (rangeSet || el.clientWidth === 0) return;
       rangeSet = true;
+      const kept = restoreRange(savedRange.current, rangeKey, bars.length);
+      if (kept) { chart.timeScale().setVisibleLogicalRange(kept); return; }
       if (ftEntryT != null && ftEndT != null) {
         // From the start of the impulse the trade was built on (when loaded), so the purple
         // leg and its zone are on screen, not just the trade.
@@ -273,15 +299,25 @@ export default function BotViewChart({ candles, symbol, view, loading, openTrade
     };
     drawZone();
     chart.timeScale().subscribeVisibleLogicalRangeChange(drawZone);
+    const keepRange = (r: { from: number; to: number } | null) => {
+      if (rangeSet && r) savedRange.current = saveRange(rangeKey, bars.length, r);
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(keepRange);
     const ro = new ResizeObserver(() => { showLatest(); drawZone(); }); ro.observe(el);
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(drawZone);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(keepRange);
+      openLines.current.clear();
       chart.remove();
     };
   }, [bars, structure, view, symbol, light, closesWeekends, openTrades, focusTrade, excursion]);
+
+  useEffect(() => {
+    for (const t of openProp ?? []) openLines.current.get(t.id)?.applyOptions({ title: openTitle(t) });
+  }, [openProp]);
 
   return (
     <div className="relative w-full h-full">
